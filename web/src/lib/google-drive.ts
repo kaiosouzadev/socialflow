@@ -21,10 +21,12 @@ function loadServiceAccount(): ServiceAccount {
 
   let raw: string | undefined;
 
-  // 1) Inline JSON (produção / Vercel)
-  const inlineJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  // 1) Inline JSON (produção / Vercel) — aceita JSON puro OU base64 do JSON
+  const inlineJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
   if (inlineJson) {
-    raw = inlineJson;
+    raw = inlineJson.startsWith("{")
+      ? inlineJson
+      : Buffer.from(inlineJson, "base64").toString("utf8");
   }
 
   // 2) Arquivo local (dev) — totalmente oculto do Turbopack via eval
@@ -48,7 +50,12 @@ function loadServiceAccount(): ServiceAccount {
   if (!json.client_email || !json.private_key) {
     throw new Error("JSON da service account inválido");
   }
-  cachedSA = { client_email: json.client_email, private_key: json.private_key };
+  // normaliza quebras de linha escapadas (\n literais) na chave privada —
+  // pitfall comum ao colar a chave em variável de ambiente na Vercel
+  cachedSA = {
+    client_email: json.client_email,
+    private_key: String(json.private_key).replace(/\\n/g, "\n"),
+  };
   return cachedSA;
 }
 

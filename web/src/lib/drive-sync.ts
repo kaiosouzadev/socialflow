@@ -47,7 +47,8 @@ export async function syncMedia(opts?: {
 
   const eligible = await prisma.post.findMany({
     where: {
-      status: "scheduled",
+      // rascunhos (gerados pelo calendário IA) e agendados ainda sem arte
+      status: { in: ["draft", "scheduled"] },
       OR: [{ mediaUrl: null }, { mediaUrl: "" }],
       scheduledAt: { gte: lo, lt: hi },
       ...(opts?.clientId ? { clientId: opts.clientId } : {}),

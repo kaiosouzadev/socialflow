@@ -4,7 +4,19 @@
  * de ativos; a publicação fica no n8n (WF-01).
  */
 
+import { createHmac } from "crypto";
+
 const GRAPH = "https://graph.facebook.com/v21.0";
+
+/**
+ * Quando o App tem "Exigir proof de segredo do app" ligado, toda chamada
+ * precisa do appsecret_proof = HMAC-SHA256(token, app_secret).
+ */
+function appSecretProof(token: string): string | null {
+  const secret = process.env.META_APP_SECRET;
+  if (!secret) return null;
+  return createHmac("sha256", secret).update(token).digest("hex");
+}
 
 export type MetaAsset = {
   pageId: string;
@@ -22,6 +34,8 @@ async function graph<T = unknown>(
   const url = new URL(`${GRAPH}${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   url.searchParams.set("access_token", token);
+  const proof = appSecretProof(token);
+  if (proof) url.searchParams.set("appsecret_proof", proof);
 
   const res = await fetch(url, { cache: "no-store" });
   const data = await res.json().catch(() => null);
