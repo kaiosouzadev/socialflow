@@ -44,13 +44,29 @@ model SocialAccount {
   tokenExpiresAt DateTime? @map("token_expires_at") @db.Timestamptz(6)
   dailyPostLimit Int       @default(25) @map("daily_post_limit")
   status         String    @default("active")
+  // de qual conexão Meta esta conta foi importada (se aplicável)
+  metaConnectionId String? @map("meta_connection_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  metaConnection MetaConnection? @relation(fields: [metaConnectionId], references: [id], onDelete: SetNull)
 
   @@index([clientId], map: "idx_accounts_client")
   @@index([tokenExpiresAt], map: "idx_tokens_expiring")
   @@map("social_accounts")
+}
+
+model MetaConnection {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String
+  businessId     String?  @map("business_id")
+  accessTokenEnc String   @map("access_token_enc") // System User token (criptografado)
+  status         String   @default("active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  socialAccounts SocialAccount[]
+
+  @@map("meta_connections")
 }
 
 model Schedule {

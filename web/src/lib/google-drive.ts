@@ -1,11 +1,13 @@
 import { createSign } from "crypto";
-import { readFileSync } from "fs";
-import path from "path";
 
 /**
  * Cliente mínimo da Google Drive API v3 usando uma service account.
  * Assina o JWT com node:crypto (RS256) e troca por um access token — sem
  * depender do SDK googleapis. Apenas leitura (drive.readonly).
+ *
+ * A service account pode ser fornecida de duas formas (a primeira encontrada vence):
+ *   1. GOOGLE_SERVICE_ACCOUNT_JSON — JSON completo inline (recomendado para Vercel/produção)
+ *   2. GOOGLE_SERVICE_ACCOUNT_FILE — caminho relativo ao cwd para um arquivo .json (dev local)
  */
 
 type ServiceAccount = { client_email: string; private_key: string };
@@ -16,10 +18,32 @@ let cachedToken: { value: string; expiresAt: number } | null = null;
 
 function loadServiceAccount(): ServiceAccount {
   if (cachedSA) return cachedSA;
-  const rel = process.env.GOOGLE_SERVICE_ACCOUNT_FILE;
-  if (!rel) throw new Error("GOOGLE_SERVICE_ACCOUNT_FILE não configurado");
-  const file = path.resolve(process.cwd(), rel);
-  const raw = readFileSync(file, "utf8");
+
+  let raw: string | undefined;
+
+  // 1) Inline JSON (produção / Vercel)
+  const inlineJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (inlineJson) {
+    raw = inlineJson;
+  }
+
+  // 2) Arquivo local (dev) — totalmente oculto do Turbopack via eval
+  if (!raw) {
+    const rel = process.env.GOOGLE_SERVICE_ACCOUNT_FILE;
+    if (!rel) {
+      throw new Error(
+        "Nenhuma service account configurada. " +
+        "Defina GOOGLE_SERVICE_ACCOUNT_JSON (produção) ou GOOGLE_SERVICE_ACCOUNT_FILE (dev)."
+      );
+    }
+    // eslint-disable-next-line no-eval
+    const _require = eval("require") as NodeRequire;
+    const nodePath: typeof import("path") = _require("path");
+    const nodeFs: typeof import("fs") = _require("fs");
+    const file = nodePath.resolve(process.cwd(), rel);
+    raw = nodeFs.readFileSync(file, "utf8");
+  }
+
   const json = JSON.parse(raw);
   if (!json.client_email || !json.private_key) {
     throw new Error("JSON da service account inválido");
@@ -153,5 +177,6 @@ export async function downloadFile(
 }
 
 export function driveConfigured(): boolean {
-  return !!process.env.GOOGLE_SERVICE_ACCOUNT_FILE && !!process.env.DRIVE_ROOT_FOLDER_ID;
+  const hasSA = !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON || !!process.env.GOOGLE_SERVICE_ACCOUNT_FILE;
+  return hasSA && !!process.env.DRIVE_ROOT_FOLDER_ID;
 }

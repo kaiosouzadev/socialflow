@@ -19,14 +19,21 @@ export default async function ClientDetailPage({
 }) {
   const { id } = await params;
 
-  const client = await prisma.client.findUnique({
-    where: { id },
-    include: {
-      socialAccounts: { orderBy: { platform: "asc" } },
-      posts: { take: 5, orderBy: { scheduledAt: "desc" } },
-      _count: { select: { posts: true } },
-    },
-  });
+  const [client, metaConnections] = await Promise.all([
+    prisma.client.findUnique({
+      where: { id },
+      include: {
+        socialAccounts: { orderBy: { platform: "asc" } },
+        posts: { take: 5, orderBy: { scheduledAt: "desc" } },
+        _count: { select: { posts: true } },
+      },
+    }),
+    prisma.metaConnection.findMany({
+      where: { status: "active" },
+      select: { id: true, name: true },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
 
   if (!client) notFound();
 
@@ -92,7 +99,11 @@ export default async function ClientDetailPage({
           </div>
         </div>
 
-        <AccountsManager clientId={client.id} accounts={accounts} />
+        <AccountsManager
+          clientId={client.id}
+          accounts={accounts}
+          metaConnections={metaConnections}
+        />
 
         <div className="card overflow-hidden">
           <div className="px-5 py-4 border-b border-[var(--color-border)] flex items-center justify-between">

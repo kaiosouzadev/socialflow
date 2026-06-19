@@ -58,7 +58,11 @@
       "Bash(git -C web status --short)",
       "Bash(git rm *)",
       "Bash(rm -rf web/.git)",
-      "Bash(grep -Ei '\\(\\\\.env|secret|service-account|\\\\.pem$|\\\\.key$|credentials|gen-lang|node_modules|\\\\.next/|generated/prisma\\)')"
+      "Bash(grep -Ei '\\(\\\\.env|secret|service-account|\\\\.pem$|\\\\.key$|credentials|gen-lang|node_modules|\\\\.next/|generated/prisma\\)')",
+      "Bash(grep -E '\\(^web/\\\\.env$|^\\\\.env$|^secrets/\\)')",
+      "Bash(git config *)",
+      "Bash(git branch *)",
+      "Bash(git commit *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\kaiod\\Downloads\\antigravity\\socialflow\\web\\src\\app\\api\\auth\\[...nextauth",

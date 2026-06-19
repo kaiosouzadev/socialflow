@@ -7,6 +7,7 @@ import { Icon } from "@/components/Icons";
 import { StatusBadge } from "@/components/ui";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
 import { formatDate } from "@/lib/format-date";
+import ImportMetaButton from "./ImportMetaButton";
 
 type Account = {
   id: string;
@@ -232,21 +233,26 @@ function AccountRow({ account }: { account: Account }) {
 export default function AccountsManager({
   clientId,
   accounts,
+  metaConnections = [],
 }: {
   clientId: string;
   accounts: Account[];
+  metaConnections?: { id: string; name: string }[];
 }) {
   return (
     <div className="card overflow-hidden">
-      <div className="px-5 py-4 border-b border-[var(--color-border)] flex items-center justify-between">
+      <div className="px-5 py-4 border-b border-[var(--color-border)] flex items-center justify-between gap-2">
         <h2 className="font-semibold">Contas sociais</h2>
-        <Link
-          href={`/clients/${clientId}/accounts/new`}
-          className="text-sm text-[var(--color-accent)] hover:underline flex items-center gap-1"
-        >
-          <Icon.plus className="w-4 h-4" />
-          Adicionar
-        </Link>
+        <div className="flex items-center gap-3">
+          <ImportMetaButton clientId={clientId} connections={metaConnections} />
+          <Link
+            href={`/clients/${clientId}/accounts/new`}
+            className="text-sm text-[var(--color-accent)] hover:underline flex items-center gap-1"
+          >
+            <Icon.plus className="w-4 h-4" />
+            Manual
+          </Link>
+        </div>
       </div>
 
       {accounts.length === 0 ? (
