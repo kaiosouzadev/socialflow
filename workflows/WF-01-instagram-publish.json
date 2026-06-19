@@ -1,0 +1,202 @@
+{
+  "name": "WF-01 Instagram Publish (base do video, corrigido)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "When clicking Test workflow",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-100, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "ig_user_id",
+              "value": "={{ $json.ig_user_id || 'COLOQUE_O_IG_USER_ID_DE_TESTE' }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "media_url",
+              "value": "={{ $json.media_url || 'https://exemplo.com/imagem-publica.jpg' }}",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "caption",
+              "value": "={{ $json.caption || 'Legenda de teste #socialflow' }}",
+              "type": "string"
+            },
+            {
+              "id": "a4",
+              "name": "access_token",
+              "value": "={{ $json.access_token || $env.IG_TEST_TOKEN }}",
+              "type": "string"
+            },
+            {
+              "id": "a5",
+              "name": "media_type",
+              "value": "IMAGE",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "inputs",
+      "name": "inputs",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [120, 300],
+      "notes": "Em producao, troque por um node Postgres que le a tabela posts. Para video, media_type=REELS e troque image_url por video_url no node Container."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://graph.facebook.com/v21.0/{{ $json.ig_user_id }}/content_publishing_limit",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "fields", "value": "quota_usage,config" },
+            { "name": "access_token", "value": "={{ $json.access_token }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "rate-check",
+      "name": "Checa rate limit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [340, 300],
+      "notes": "Confere quota_usage antes de publicar. Se proximo do limite da conta, pular/reagendar."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('inputs').item.json.ig_user_id }}/media",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "image_url", "value": "={{ $('inputs').item.json.media_url }}" },
+            { "name": "caption", "value": "={{ $('inputs').item.json.caption }}" },
+            { "name": "access_token", "value": "={{ $('inputs').item.json.access_token }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "container",
+      "name": "Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 300],
+      "notes": "Cria o container de midia. Retorna { id }. Para REELS: trocar image_url por video_url e adicionar media_type=REELS."
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "id": "wait",
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [780, 300],
+      "webhookId": "wait-status"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('container').item.json.id }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "fields", "value": "status_code" },
+            { "name": "access_token", "value": "={{ $('inputs').item.json.access_token }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-status",
+      "name": "Checa status do container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 300],
+      "notes": "Polling. Para imagem fica FINISHED rapido; para video pode levar minutos."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.status_code }}",
+              "rightValue": "FINISHED",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-finished",
+      "name": "FINISHED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1220, 300],
+      "notes": "Se FINISHED -> publica. Senao -> volta para o Wait (loop de polling)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('inputs').item.json.ig_user_id }}/media_publish",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "creation_id", "value": "={{ $('container').item.json.id }}" },
+            { "name": "access_token", "value": "={{ $('inputs').item.json.access_token }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "publish",
+      "name": "Facebook Graph API (publish)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, 200],
+      "notes": "Publica o container processado. Retorna o id do post publicado."
+    }
+  ],
+  "connections": {
+    "When clicking Test workflow": {
+      "main": [[{ "node": "inputs", "type": "main", "index": 0 }]]
+    },
+    "inputs": {
+      "main": [[{ "node": "Checa rate limit", "type": "main", "index": 0 }]]
+    },
+    "Checa rate limit": {
+      "main": [[{ "node": "Container", "type": "main", "index": 0 }]]
+    },
+    "Container": {
+      "main": [[{ "node": "Wait", "type": "main", "index": 0 }]]
+    },
+    "Wait": {
+      "main": [[{ "node": "Checa status do container", "type": "main", "index": 0 }]]
+    },
+    "Checa status do container": {
+      "main": [[{ "node": "FINISHED?", "type": "main", "index": 0 }]]
+    },
+    "FINISHED?": {
+      "main": [
+        [{ "node": "Facebook Graph API (publish)", "type": "main", "index": 0 }],
+        [{ "node": "Wait", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

@@ -1,0 +1,139 @@
+{
+  "name": "WF-02 Refresh Token Meta",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 12 }] }
+      },
+      "id": "schedule",
+      "name": "Schedule (2x/dia)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 300],
+      "notes": "Roda 2x/dia para nao perder tokens que expiram entre verificacoes."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, client_id, platform, external_id FROM social_accounts WHERE status='active' AND platform IN ('instagram','facebook') AND (token_expires_at IS NULL OR token_expires_at < now() + interval '7 days');",
+        "options": {}
+      },
+      "id": "busca-vencendo",
+      "name": "Tokens vencendo (<7d)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [20, 300],
+      "notes": "Busca contas com token vencendo em menos de 7 dias. NAO busca access_token_enc — o token e obtido descriptografado via endpoint do sistema."
+    },
+    {
+      "parameters": {
+        "options": { "reset": false }
+      },
+      "id": "split",
+      "name": "Split in Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [240, 300],
+      "notes": "Processa 1 conta por vez para evitar sobrecarga na API da Meta."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SYSTEM_BASE_URL }}/api/internal/token/{{ $json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-internal-key", "value": "={{ $env.INTERNAL_API_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "busca-token",
+      "name": "Busca token atual",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "notes": "Obtem o token atual descriptografado via endpoint interno do sistema. Nunca armazena token em variaveis de ambiente do n8n."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.facebook.com/v21.0/oauth/access_token",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "grant_type", "value": "fb_exchange_token" },
+            { "name": "client_id", "value": "={{ $env.META_APP_ID }}" },
+            { "name": "client_secret", "value": "={{ $env.META_APP_SECRET }}" },
+            { "name": "fb_exchange_token", "value": "={{ $json.token }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "troca-token",
+      "name": "Troca por token longo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "notes": "Retorna { access_token, token_type, expires_in }. Token longo dura ~60 dias. NUNCA use query string para o token existente — so o novo token vai em query string aqui porque e o parametro exigido pela API da Meta."
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.SYSTEM_BASE_URL }}/api/internal/token/{{ $('Split in Batches').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-internal-key", "value": "={{ $env.INTERNAL_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"token\": \"{{ $json.access_token }}\", \"expiresIn\": {{ $json.expires_in }} }",
+        "options": {}
+      },
+      "id": "atualiza",
+      "name": "Atualiza token no sistema",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300],
+      "notes": "Envia o novo token para o sistema web que o criptografa e grava no banco. O n8n nunca manipula criptografia diretamente."
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "continua",
+      "name": "Proximo batch",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Schedule (2x/dia)": {
+      "main": [[{ "node": "Tokens vencendo (<7d)", "type": "main", "index": 0 }]]
+    },
+    "Tokens vencendo (<7d)": {
+      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
+    },
+    "Split in Batches": {
+      "main": [[{ "node": "Busca token atual", "type": "main", "index": 0 }]]
+    },
+    "Busca token atual": {
+      "main": [[{ "node": "Troca por token longo", "type": "main", "index": 0 }]]
+    },
+    "Troca por token longo": {
+      "main": [[{ "node": "Atualiza token no sistema", "type": "main", "index": 0 }]]
+    },
+    "Atualiza token no sistema": {
+      "main": [[{ "node": "Proximo batch", "type": "main", "index": 0 }]]
+    },
+    "Proximo batch": {
+      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

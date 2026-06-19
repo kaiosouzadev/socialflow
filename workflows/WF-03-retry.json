@@ -1,0 +1,95 @@
+{
+  "name": "WF-03 Retry de Falhas",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 15 }] }
+      },
+      "id": "schedule",
+      "name": "Schedule (15min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE posts SET status='scheduled', scheduled_at = now() + (CASE retry_count WHEN 0 THEN interval '5 minutes' WHEN 1 THEN interval '30 minutes' ELSE interval '2 hours' END), retry_count = retry_count + 1 WHERE status='failed' AND retry_count < 3 RETURNING id, client_id, retry_count, last_error;",
+        "options": {}
+      },
+      "id": "reagenda",
+      "name": "Reagenda falhas (backoff)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [20, 300],
+      "notes": "Backoff: 1a tentativa +5min, 2a +30min, 3a +2h. Apos 3 falhas (retry_count=3), status permanece 'failed'. O WF-01 vai reprocessar quando status voltar a 'scheduled'."
+    },
+    {
+      "parameters": {
+        "options": { "reset": false }
+      },
+      "id": "split",
+      "name": "Split in Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [240, 300],
+      "notes": "Itera sobre cada post reagendado para log individual."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "exists", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "tem-falha",
+      "name": "Houve reagendamento?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "content": "=Post {{ $json.id }} reagendado (tentativa {{ $json.retry_count }}/3). Ultimo erro: {{ $json.last_error }}",
+        "options": {}
+      },
+      "id": "log",
+      "name": "Log / notificacao",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [680, 200],
+      "notes": "Troque por Email / Slack / Telegram para alertas de falhas recorrentes."
+    }
+  ],
+  "connections": {
+    "Schedule (15min)": {
+      "main": [[{ "node": "Reagenda falhas (backoff)", "type": "main", "index": 0 }]]
+    },
+    "Reagenda falhas (backoff)": {
+      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
+    },
+    "Split in Batches": {
+      "main": [[{ "node": "Houve reagendamento?", "type": "main", "index": 0 }]]
+    },
+    "Houve reagendamento?": {
+      "main": [
+        [{ "node": "Log / notificacao", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Log / notificacao": {
+      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

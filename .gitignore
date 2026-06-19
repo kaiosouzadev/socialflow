@@ -1,0 +1,25 @@
+# ---- segredos (NUNCA commitar) ----
+.env
+.env.*
+!.env.example
+*.local
+
+# chaves / credenciais
+secrets/
+*.pem
+*.key
+*-service-account*.json
+gen-lang-client-*.json
+*credentials*.json
+
+# ---- dependências / build ----
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# ---- diversos ----
+__pycache__/
+.DS_Store
+*.log

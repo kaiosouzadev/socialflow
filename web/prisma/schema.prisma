@@ -1,0 +1,105 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("staff")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("users")
+}
+
+model Client {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String
+  email         String    @unique
+  plan          String    @default("sem_aprovacao")
+  toneOfVoice   String?   @map("tone_of_voice")
+  // override opcional: ID da pasta do cliente no Drive. Se vazio, busca pelo nome.
+  driveFolderId String?   @map("drive_folder_id")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  socialAccounts SocialAccount[]
+  schedules      Schedule[]
+  posts          Post[]
+
+  @@map("clients")
+}
+
+model SocialAccount {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId       String    @map("client_id") @db.Uuid
+  platform       String
+  externalId     String    @map("external_id")
+  accessTokenEnc String    @map("access_token_enc")
+  tokenExpiresAt DateTime? @map("token_expires_at") @db.Timestamptz(6)
+  dailyPostLimit Int       @default(25) @map("daily_post_limit")
+  status         String    @default("active")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId], map: "idx_accounts_client")
+  @@index([tokenExpiresAt], map: "idx_tokens_expiring")
+  @@map("social_accounts")
+}
+
+model Schedule {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId  String   @map("client_id") @db.Uuid
+  monthRef  DateTime @map("month_ref") @db.Date
+  status    String   @default("rascunho")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  posts  Post[]
+
+  @@map("schedules")
+}
+
+model Post {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  scheduleId  String?   @map("schedule_id") @db.Uuid
+  clientId    String    @map("client_id") @db.Uuid
+  theme       String?
+  caption     String?
+  captions    Json?     // legenda por rede: { instagram?, facebook?, linkedin? }
+  mediaUrl    String?   @map("media_url")
+  mediaDriveId String?  @map("media_drive_id") // ID do arquivo no Google Drive (origem da mídia)
+  scheduledAt DateTime  @map("scheduled_at") @db.Timestamptz(6)
+  targets     String[]
+  status      String    @default("scheduled")
+  retryCount  Int       @default(0) @map("retry_count")
+  lastError   String?   @map("last_error")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  client       Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  schedule     Schedule?     @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  publications Publication[]
+
+  @@index([scheduledAt], map: "idx_posts_due")
+  @@map("posts")
+}
+
+model Publication {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  postId         String    @map("post_id") @db.Uuid
+  platform       String
+  externalPostId String?   @map("external_post_id")
+  status         String    @default("pending")
+  error          String?
+  publishedAt    DateTime? @map("published_at") @db.Timestamptz(6)
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@map("publications")
+}
