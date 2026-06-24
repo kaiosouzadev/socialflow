@@ -5,6 +5,7 @@
 *.local
 
 # chaves / credenciais
+.mcp.json
 secrets/
 *.pem
 *.key

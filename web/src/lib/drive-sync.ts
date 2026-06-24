@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import { findFolder, findImageByBaseName, driveConfigured } from "@/lib/google-drive";
+import { findFolder, findImageByBaseName, downloadFile, driveConfigured } from "@/lib/google-drive";
 import { mediaUrlFor } from "@/lib/media-token";
+import { r2Configured, uploadToR2 } from "@/lib/r2";
 
 const TZ = "America/Sao_Paulo";
 
@@ -115,9 +116,23 @@ export async function syncMedia(opts?: {
       if (!idx) continue;
       const img = await findImageByBaseName(monthFolderId, String(idx));
       if (!img) continue;
+
+      // hospeda a mídia numa URL pública. Preferência: R2 (edge, sem passar pelo
+      // app a cada fetch da Meta); fallback: URL assinada servida por /api/media.
+      let mediaUrl: string;
+      if (r2Configured()) {
+        const { buffer, contentType } = await downloadFile(img.id);
+        const dot = img.name.lastIndexOf(".");
+        const ext = dot > 0 ? img.name.slice(dot + 1).toLowerCase() : "jpg";
+        const key = `${client.id}/${post.id}.${ext}`;
+        mediaUrl = await uploadToR2(key, buffer, contentType || img.mimeType || `image/${ext}`);
+      } else {
+        mediaUrl = mediaUrlFor(post.id);
+      }
+
       await prisma.post.update({
         where: { id: post.id },
-        data: { mediaDriveId: img.id, mediaUrl: mediaUrlFor(post.id) },
+        data: { mediaDriveId: img.id, mediaUrl },
       });
       result.attached++;
     }

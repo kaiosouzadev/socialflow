@@ -3,6 +3,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
+import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,9 @@ const pad = (n: number) => String(n).padStart(2, "0");
 export async function POST(req: NextRequest) {
   const denied = await requireAuth();
   if (denied) return denied;
+
+  const limited = enforceRateLimit(`calendar-commit:${clientIp(req)}`, 20, 5 * 60_000);
+  if (limited) return limited;
 
   const body = await req.json().catch(() => null);
   const parsed = schema.safeParse(body);
