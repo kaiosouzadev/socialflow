@@ -17,6 +17,7 @@ const updateSchema = z.object({
     })
     .optional(),
   mediaUrl: z.string().url().optional().or(z.literal("")),
+  format: z.enum(["feed", "story", "carrossel", "reels"]).optional(),
   scheduledAt: z.string().datetime().optional(),
   targets: z.array(z.enum(["instagram", "facebook", "linkedin"])).min(1).optional(),
   status: z.enum(["scheduled", "failed", "draft"]).optional(),

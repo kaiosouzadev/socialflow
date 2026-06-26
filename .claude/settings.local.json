@@ -101,14 +101,38 @@
       "Bash(grep -viE \"test|diag|//|error\\\\\\(\\\\\"|error\\\\\\('|msg|TOKEN_ENC\")",
       "Bash(grep -nEi \"\\(EAA[A-Za-z0-9]{20,}|AKIA|AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|[0-9a-f]{32,}\\)\" system/scripts/fb-delete-test.js system/scripts/ig-test-publish.js system/scripts/meta-test-publish.js system/scripts/r2-test.js)",
       "Bash(node --check system/db/seed-admin.js)",
-      "Bash(npx eslint *)"
+      "Bash(npx eslint *)",
+      "Bash(grep -niA3 -iE 'linkedin' docs/01-DADOS-E-TOKENS.md)",
+      "Bash(grep -niA2 -iE 'linkedin' docs/00-ARQUITETURA.md)",
+      "Bash(grep -niA2 -iE 'linkedin' docs/05-MULTI-REDE-E-ESCALA.md)",
+      "Bash(npx prisma *)",
+      "Bash(printf '\\\\n# LinkedIn \\(OAuth membro - fase 1.5\\)\\\\nLINKEDIN_CLIENT_ID=\"\"\\\\nLINKEDIN_CLIENT_SECRET=\"\"\\\\n')",
+      "Bash(printf '\\\\n# LinkedIn\\\\nLINKEDIN_CLIENT_ID=\\\\nLINKEDIN_CLIENT_SECRET=\\\\n')",
+      "Bash(printf '\\\\n# LinkedIn\\\\nLINKEDIN_CLIENT_ID=\"seu_client_id\"\\\\nLINKEDIN_CLIENT_SECRET=\"seu_client_secret\"\\\\n')",
+      "Bash(./node_modules/.bin/tsc --noEmit -p tsconfig.json)",
+      "Bash(mkdir -p \"c:/Users/kaiod/Downloads/antigravity/socialflow/web/src/app/api/internal/media/[postId]\"; echo done)",
+      "PowerShell($env:NODE_PATH = \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\web\\\\node_modules\"; node \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\system\\\\scripts\\\\diag-drive.js\" 2>&1 | Select-Object -Skip 1)",
+      "PowerShell($env:NODE_PATH = \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\web\\\\node_modules\"; node \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\system\\\\scripts\\\\inspect-db.js\" 2>&1 | Select-Object -Skip 1)",
+      "PowerShell($env:NODE_PATH = \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\web\\\\node_modules\"; node \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\system\\\\scripts\\\\create-test-posts.js\" 2>&1 | Select-Object -Skip 1)",
+      "PowerShell($env:NODE_PATH = \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\web\\\\node_modules\"; node \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\system\\\\scripts\\\\replica-sync.js\" 2>&1 | Select-Object -Skip 1)",
+      "Bash(NODE_PATH=./node_modules node -e ' *)",
+      "PowerShell($env:NODE_PATH = \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\web\\\\node_modules\"; node \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\system\\\\scripts\\\\publish-test.js\" 2>&1 | Select-Object -Skip 1)",
+      "PowerShell($env:NODE_PATH = \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\web\\\\node_modules\"; node \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\system\\\\scripts\\\\publish-fix.js\" 2>&1 | Select-Object -Skip 1)",
+      "Bash(mkdir -p \"c:/Users/kaiod/Downloads/antigravity/socialflow/web/src/app/api/internal/publish/[postId]\"; echo done)",
+      "PowerShell($env:NODE_PATH = \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\web\\\\node_modules\"; node \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\system\\\\scripts\\\\test-endpoint.js\" 2>&1 | Select-Object -Skip 1)",
+      "mcp__n8n__n8n_update_full_workflow",
+      "PowerShell($env:NODE_PATH = \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\web\\\\node_modules\"; node \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\system\\\\scripts\\\\fb-test.js\" 2>&1 | Select-Object -Skip 1)",
+      "PowerShell($env:NODE_PATH = \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\web\\\\node_modules\"; node \"c:\\\\Users\\\\kaiod\\\\Downloads\\\\antigravity\\\\socialflow\\\\system\\\\scripts\\\\fb-carousel-test.js\" 2>&1 | Select-Object -Skip 1)",
+      "Bash(grep -Ei '\\(\\\\.env$|\\\\.mcp\\\\.json|secrets/|service-account|gen-lang|\\\\.env\\\\.\\)')"
     ],
     "additionalDirectories": [
       "c:\\Users\\kaiod\\Downloads\\antigravity\\socialflow\\web\\src\\app\\api\\auth\\[...nextauth",
       "c:\\Users\\kaiod\\Downloads\\antigravity\\socialflow\\web\\src\\app\\(app)\\clients\\[id]\\accounts",
       "c:\\Users\\kaiod\\Downloads\\antigravity\\socialflow\\web\\src\\app\\api\\accounts",
       "c:\\Users\\kaiod\\Downloads\\antigravity\\socialflow\\web\\src\\app\\api\\users",
-      "c:\\Users\\kaiod\\Downloads\\antigravity\\socialflow\\web\\src\\app\\(app)\\posts\\[id]"
+      "c:\\Users\\kaiod\\Downloads\\antigravity\\socialflow\\web\\src\\app\\(app)\\posts\\[id]",
+      "c:\\Users\\kaiod\\Downloads\\antigravity\\socialflow\\web\\src\\app\\api\\internal\\media",
+      "c:\\Users\\kaiod\\Downloads\\antigravity\\socialflow\\web\\src\\app\\api\\internal\\publish"
     ]
   }
 }

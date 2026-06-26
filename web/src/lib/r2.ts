@@ -96,3 +96,49 @@ export async function uploadToR2(
   }
   return `${pub}/${key}`;
 }
+
+/** Deriva a key do objeto a partir da URL pública (R2_PUBLIC_BASE_URL/key). */
+export function r2KeyFromUrl(url: string): string | null {
+  const pub = process.env.R2_PUBLIC_BASE_URL;
+  if (!pub) return null;
+  const base = pub.replace(/\/$/, "") + "/";
+  return url.startsWith(base) ? url.slice(base.length) : null;
+}
+
+/** Apaga um objeto do R2 (SigV4 DELETE). Idempotente: 404 não é erro. */
+export async function deleteFromR2(key: string): Promise<void> {
+  const account = process.env.R2_ACCOUNT_ID!;
+  const ak = process.env.R2_ACCESS_KEY_ID!;
+  const sk = process.env.R2_SECRET_ACCESS_KEY!;
+  const bucket = process.env.R2_BUCKET!;
+  const host = `${account}.r2.cloudflarestorage.com`;
+
+  const now = amzDate();
+  const date = now.slice(0, 8);
+  const payloadHash = sha256hex(Buffer.from(""));
+  const canonicalUri = `/${bucket}/${key}`;
+  const canonicalHeaders =
+    `host:${host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${now}\n`;
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest = ["DELETE", canonicalUri, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+
+  const scope = `${date}/${REGION}/${SERVICE}/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", now, scope, sha256hex(Buffer.from(canonicalRequest))].join("\n");
+  const kSigning = hmac(hmac(hmac(hmac(`AWS4${sk}`, date), REGION), SERVICE), "aws4_request");
+  const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
+  const authorization =
+    `AWS4-HMAC-SHA256 Credential=${ak}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  const res = await fetch(`https://${host}${canonicalUri}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: authorization,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": now,
+    },
+  });
+  if (!res.ok && res.status !== 404) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`R2 delete falhou: ${res.status} ${detail.slice(0, 200)}`);
+  }
+}

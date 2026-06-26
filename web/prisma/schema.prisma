@@ -26,6 +26,18 @@ model Client {
   toneOfVoice   String?   @map("tone_of_voice")
   // override opcional: ID da pasta do cliente no Drive. Se vazio, busca pelo nome.
   driveFolderId String?   @map("drive_folder_id")
+  // --- dados de onboarding (substitui o doc por cliente) ---
+  tradeName     String?   @map("trade_name")     // nome fantasia
+  website       String?
+  city          String?                          // cidade - UF
+  phone         String?                          // fixo
+  whatsapp      String?
+  facebookUrl   String?   @map("facebook_url")
+  instagramUrl  String?   @map("instagram_url")
+  // diretrizes de conteúdo (temas, hashtags, restrições, texto obrigatório nas artes, etc.)
+  briefing      Json?
+  // credenciais por rede (login/senha) — JSON CRIPTOGRAFADO (AES-GCM). Nunca em texto plano.
+  credentialsEnc String?  @map("credentials_enc")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   socialAccounts SocialAccount[]
@@ -42,6 +54,9 @@ model SocialAccount {
   externalId     String    @map("external_id")
   accessTokenEnc String    @map("access_token_enc")
   tokenExpiresAt DateTime? @map("token_expires_at") @db.Timestamptz(6)
+  // refresh token (LinkedIn OAuth — Meta usa token de longa duração sem refresh)
+  refreshTokenEnc       String?   @map("refresh_token_enc")
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at") @db.Timestamptz(6)
   dailyPostLimit Int       @default(25) @map("daily_post_limit")
   status         String    @default("active")
   // de qual conexão Meta esta conta foi importada (se aplicável)
@@ -73,7 +88,11 @@ model Schedule {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   clientId  String   @map("client_id") @db.Uuid
   monthRef  DateTime @map("month_ref") @db.Date
+  // rascunho | aprovado_interno | enviado_cliente | em_revisao | aprovado_cliente
   status    String   @default("rascunho")
+  approvalToken String?   @unique @map("approval_token") // link público de aprovação
+  sentAt        DateTime? @map("sent_at") @db.Timestamptz(6)
+  approvedAt    DateTime? @map("approved_at") @db.Timestamptz(6)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -91,9 +110,13 @@ model Post {
   captions    Json?     // legenda por rede: { instagram?, facebook?, linkedin? }
   mediaUrl    String?   @map("media_url")
   mediaDriveId String?  @map("media_drive_id") // ID do arquivo no Google Drive (origem da mídia)
+  // itens do carrossel (ordenados): [{ url, driveId, type }]. Single fica em mediaUrl.
+  mediaItems  Json?     @map("media_items")
+  format      String    @default("feed") // feed | story | carrossel | reels
   scheduledAt DateTime  @map("scheduled_at") @db.Timestamptz(6)
   targets     String[]
   status      String    @default("scheduled")
+  aiEditsUsed Int       @default(0) @map("ai_edits_used") // regenerações IA na aprovação (máx 5)
   retryCount  Int       @default(0) @map("retry_count")
   lastError   String?   @map("last_error")
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -118,4 +141,16 @@ model Publication {
   post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@map("publications")
+}
+
+// Resumo diário gerado por IA para a dashboard (1 por dia, fuso SP).
+model DailySummary {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  day       String   @unique // "YYYY-MM-DD" no fuso America/Sao_Paulo
+  content   String
+  postCount Int      @default(0) @map("post_count")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("daily_summaries")
 }

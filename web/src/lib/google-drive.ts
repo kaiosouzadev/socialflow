@@ -164,6 +164,35 @@ export async function findImageByBaseName(
   return match ?? null;
 }
 
+function isMedia(f: DriveFile): boolean {
+  return f.mimeType.startsWith("image/") || f.mimeType.startsWith("video/");
+}
+
+function stemOf(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return (dot > 0 ? name.slice(0, dot) : name).trim();
+}
+
+/**
+ * Acha uma mídia (imagem OU vídeo) cujo nome sem extensão é exatamente
+ * `baseName` (ex.: "1", "1story"). Corrige o bug que ignorava vídeos.
+ */
+export async function findMediaByBaseName(
+  folderId: string,
+  baseName: string
+): Promise<DriveFile | null> {
+  const q = `'${escapeQ(folderId)}' in parents and trashed = false`;
+  const files = await driveList(q);
+  return files.find((f) => isMedia(f) && stemOf(f.name) === baseName) ?? null;
+}
+
+/** Lista todas as mídias de uma pasta, ordenadas por nome (natural: 1,2,10). */
+export async function listFolderMedia(folderId: string): Promise<DriveFile[]> {
+  const q = `'${escapeQ(folderId)}' in parents and trashed = false`;
+  const files = (await driveList(q)).filter(isMedia);
+  return files.sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true }));
+}
+
 /** Baixa os bytes de um arquivo do Drive. */
 export async function downloadFile(
   fileId: string

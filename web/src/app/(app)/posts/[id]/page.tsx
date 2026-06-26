@@ -35,6 +35,16 @@ export default async function PostDetailPage({
   const captionEntries = post.targets
     .map((t) => ({ platform: t, text: capMap[t] ?? "" }))
     .filter((e) => e.text.trim());
+
+  // mídia: carrossel (mediaItems) ou single (mediaUrl)
+  const rawItems = Array.isArray(post.mediaItems) ? (post.mediaItems as { url: string; type?: string }[]) : [];
+  const mediaList = rawItems.length
+    ? rawItems
+    : post.mediaUrl
+      ? [{ url: post.mediaUrl, type: undefined as string | undefined }]
+      : [];
+  const isVideo = (it: { url: string; type?: string }) =>
+    it.type === "video" || /\.(mp4|mov|webm|m4v)$/i.test(it.url);
   const when = new Intl.DateTimeFormat("pt-BR", {
     timeZone: TZ,
     dateStyle: "full",
@@ -45,6 +55,7 @@ export default async function PostDetailPage({
     <div className="p-8 max-w-6xl mx-auto animate-fade-up">
       <PageHeader
         title={post.theme || "Post"}
+        subtitle={`${(post.format ?? "feed").replace(/^\w/, (c) => c.toUpperCase())}${mediaList.length > 1 ? ` · ${mediaList.length} mídias` : ""}`}
         back="/posts"
         action={
           editable && (
@@ -65,21 +76,39 @@ export default async function PostDetailPage({
         {/* Media preview */}
         <div className="lg:col-span-3">
           <div className="card overflow-hidden">
-            <div className="aspect-square bg-black/40 flex items-center justify-center">
-              {post.mediaUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={post.mediaUrl}
-                  alt={post.theme ?? "Mídia do post"}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
+            {mediaList.length === 0 ? (
+              <div className="aspect-square bg-black/40 flex items-center justify-center">
                 <div className="text-center text-[var(--color-text-faint)] p-8">
                   <Icon.alert className="w-8 h-8 mx-auto mb-2" />
                   <p className="text-sm">Sem mídia definida</p>
                 </div>
-              )}
-            </div>
+              </div>
+            ) : mediaList.length === 1 ? (
+              <div className="aspect-square bg-black/40 flex items-center justify-center">
+                {isVideo(mediaList[0]) ? (
+                  <video src={mediaList[0].url} controls className="w-full h-full object-contain" />
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={mediaList[0].url} alt={post.theme ?? "Mídia"} className="w-full h-full object-cover" />
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-1 bg-black/40 p-1">
+                {mediaList.map((it, i) => (
+                  <div key={i} className="relative aspect-square">
+                    <span className="absolute top-1 left-1 z-10 text-[10px] font-bold bg-black/60 text-white rounded px-1.5 py-0.5">
+                      {i + 1}
+                    </span>
+                    {isVideo(it) ? (
+                      <video src={it.url} controls className="w-full h-full object-cover rounded" />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={it.url} alt={`Mídia ${i + 1}`} className="w-full h-full object-cover rounded" />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
             {captionEntries.length > 0 ? (
               <div className="p-5 border-t border-[var(--color-border)] space-y-4">
                 {captionEntries.map((e) => (

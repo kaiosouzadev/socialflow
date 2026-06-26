@@ -7,6 +7,7 @@ import { PageHeader, PlatformChip } from "@/components/ui";
 import { Icon } from "@/components/Icons";
 import { CaptionFields } from "@/components/CaptionFields";
 import { DateTimePicker } from "@/components/DatePickers";
+import { FormatPicker } from "@/components/FormatPicker";
 import { spNowLocalInput, spLocalInputToISO } from "@/lib/format-date";
 
 type Client = { id: string; name: string; email: string };
@@ -35,6 +36,7 @@ function NewPostForm() {
   const [targets, setTargets] = useState<string[]>([]);
 
   const [theme, setTheme] = useState("");
+  const [format, setFormat] = useState("feed");
   const [captions, setCaptions] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -106,6 +108,7 @@ function NewPostForm() {
     const data = {
       clientId,
       theme,
+      format,
       captions: captionsForTargets,
       mediaUrl: form.get("mediaUrl") as string,
       scheduledAt: spLocalInputToISO(form.get("scheduledAt") as string),
@@ -221,6 +224,11 @@ function NewPostForm() {
               3
             </span>
             <h2 className="font-semibold">Conteúdo</h2>
+          </div>
+
+          <div>
+            <label className="label">Formato</label>
+            <FormatPicker value={format} onChange={setFormat} />
           </div>
 
           <div>

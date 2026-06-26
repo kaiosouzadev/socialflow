@@ -46,6 +46,7 @@ export default async function EditPostPage({
           caption: post.caption ?? "",
           captions: (post.captions as Record<string, string> | null) ?? {},
           mediaUrl: post.mediaUrl ?? "",
+          format: post.format ?? "feed",
           scheduledAt: post.scheduledAt.toISOString(),
           targets: post.targets,
           status: post.status,

@@ -5,6 +5,8 @@ import { PageHeader, StatusBadge, PlatformChip } from "@/components/ui";
 import { Icon } from "@/components/Icons";
 import { formatDateTime } from "@/lib/format-date";
 import ClientInfoEditor from "./ClientInfoEditor";
+import ClientBriefingEditor, { type Briefing } from "./ClientBriefingEditor";
+import CredentialsManager from "./CredentialsManager";
 import AccountsManager from "./AccountsManager";
 import DeleteClientButton from "./DeleteClientButton";
 import GenerateCalendarButton from "./GenerateCalendarButton";
@@ -75,6 +77,25 @@ export default async function ClientDetailPage({
             driveFolderId: client.driveFolderId,
           }}
         />
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+            <ClientBriefingEditor
+              client={{
+                id: client.id,
+                tradeName: client.tradeName,
+                website: client.website,
+                city: client.city,
+                phone: client.phone,
+                whatsapp: client.whatsapp,
+                facebookUrl: client.facebookUrl,
+                instagramUrl: client.instagramUrl,
+                briefing: (client.briefing as Briefing | null) ?? null,
+              }}
+            />
+          </div>
+          <CredentialsManager clientId={client.id} hasCredentials={!!client.credentialsEnc} />
+        </div>
 
         <div className="grid grid-cols-3 gap-4">
           <div className="card p-4">

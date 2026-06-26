@@ -21,6 +21,7 @@ const createSchema = z.object({
   caption: z.string().optional(),
   captions: captionsSchema,
   mediaUrl: z.string().url().optional().or(z.literal("")),
+  format: z.enum(["feed", "story", "carrossel", "reels"]).default("feed"),
   scheduledAt: z.string().datetime(),
   targets: z.array(z.enum(["instagram", "facebook", "linkedin"])).min(1),
 });

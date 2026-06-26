@@ -245,6 +245,10 @@ export default function AccountsManager({
         <h2 className="font-semibold">Contas sociais</h2>
         <div className="flex items-center gap-3">
           <ImportMetaButton clientId={clientId} connections={metaConnections} />
+          <a href={`/api/linkedin/start?clientId=${clientId}`} className="btn-ghost">
+            <BrandBadge platform="linkedin" size={18} />
+            Conectar LinkedIn
+          </a>
           <Link
             href={`/clients/${clientId}/accounts/new`}
             className="text-sm text-[var(--color-accent)] hover:underline flex items-center gap-1"

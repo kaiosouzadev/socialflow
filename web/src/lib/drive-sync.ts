@@ -1,9 +1,33 @@
 import { prisma } from "@/lib/prisma";
-import { findFolder, findImageByBaseName, downloadFile, driveConfigured } from "@/lib/google-drive";
+import { Prisma } from "@/generated/prisma/client";
+import {
+  findFolder,
+  findMediaByBaseName,
+  listFolderMedia,
+  downloadFile,
+  driveConfigured,
+} from "@/lib/google-drive";
 import { mediaUrlFor } from "@/lib/media-token";
 import { r2Configured, uploadToR2 } from "@/lib/r2";
 
 const TZ = "America/Sao_Paulo";
+
+type DriveFile = { id: string; name: string; mimeType: string };
+type MediaItem = { url: string; driveId: string; type: "image" | "video" };
+
+function mediaType(mime: string): "image" | "video" {
+  return mime.startsWith("video/") ? "video" : "image";
+}
+
+/** Sobe uma mídia do Drive para o R2 e devolve a URL pública + metadados. */
+async function hostOnR2(file: DriveFile, clientId: string, postId: string, ord: number): Promise<MediaItem> {
+  const { buffer, contentType } = await downloadFile(file.id);
+  const dot = file.name.lastIndexOf(".");
+  const ext = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : "jpg";
+  const key = `${clientId}/${postId}-${ord}.${ext}`;
+  const url = await uploadToR2(key, buffer, contentType || file.mimeType || `image/${ext}`);
+  return { url, driveId: file.id, type: mediaType(file.mimeType) };
+}
 
 function spMonthKey(date: Date): string {
   // "YYYY-MM" no fuso de São Paulo
@@ -114,25 +138,50 @@ export async function syncMedia(opts?: {
     for (const post of posts) {
       const idx = indexById.get(post.id);
       if (!idx) continue;
-      const img = await findImageByBaseName(monthFolderId, String(idx));
-      if (!img) continue;
 
-      // hospeda a mídia numa URL pública. Preferência: R2 (edge, sem passar pelo
-      // app a cada fetch da Meta); fallback: URL assinada servida por /api/media.
+      // CARROSSEL: subpasta "N" dentro do mês, com várias mídias ordenadas
+      if (post.format === "carrossel") {
+        if (!r2Configured()) {
+          result.skipped.push({ client: client.name, reason: `carrossel (post ${idx}) requer R2 configurado` });
+          continue;
+        }
+        const subId = await findFolder(String(idx), monthFolderId);
+        if (!subId) continue;
+        const files = await listFolderMedia(subId);
+        if (files.length === 0) continue;
+
+        const items: MediaItem[] = [];
+        for (let i = 0; i < files.length; i++) {
+          items.push(await hostOnR2(files[i], client.id, post.id, i + 1));
+        }
+        await prisma.post.update({
+          where: { id: post.id },
+          data: {
+            mediaItems: items as unknown as Prisma.InputJsonValue,
+            mediaUrl: items[0].url,
+            mediaDriveId: items[0].driveId,
+          },
+        });
+        result.attached++;
+        continue;
+      }
+
+      // SINGLE (feed / reels / story): story usa "Nstory", o resto "N"
+      const base = post.format === "story" ? `${idx}story` : String(idx);
+      const file = await findMediaByBaseName(monthFolderId, base);
+      if (!file) continue;
+
+      // hospeda numa URL pública: R2 (edge) ou fallback assinado /api/media
       let mediaUrl: string;
       if (r2Configured()) {
-        const { buffer, contentType } = await downloadFile(img.id);
-        const dot = img.name.lastIndexOf(".");
-        const ext = dot > 0 ? img.name.slice(dot + 1).toLowerCase() : "jpg";
-        const key = `${client.id}/${post.id}.${ext}`;
-        mediaUrl = await uploadToR2(key, buffer, contentType || img.mimeType || `image/${ext}`);
+        mediaUrl = (await hostOnR2(file, client.id, post.id, 1)).url;
       } else {
         mediaUrl = mediaUrlFor(post.id);
       }
 
       await prisma.post.update({
         where: { id: post.id },
-        data: { mediaDriveId: img.id, mediaUrl },
+        data: { mediaDriveId: file.id, mediaUrl, mediaItems: Prisma.JsonNull },
       });
       result.attached++;
     }

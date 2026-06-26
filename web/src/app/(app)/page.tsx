@@ -1,10 +1,16 @@
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
-import { PageHeader, StatusBadge, PlatformChip, EmptyState } from "@/components/ui";
+import { PageHeader, StatusBadge, PlatformChip } from "@/components/ui";
 import { Icon } from "@/components/Icons";
 import { formatDateTime } from "@/lib/format-date";
+import { getCachedSummary, getTodayPosts } from "@/lib/daily-summary";
+import DailySummaryCard from "./DailySummaryCard";
 
 export const dynamic = "force-dynamic";
+
+const TZ = "America/Sao_Paulo";
+const fmtHora = (d: Date) =>
+  new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }).format(d);
 
 async function getStats() {
   const [clients, postsScheduled, postsPublished, postsFailed, expiringTokens] =
@@ -66,14 +72,20 @@ function StatCard({
 }
 
 export default async function DashboardPage() {
-  const [stats, posts] = await Promise.all([
+  const [stats, posts, summary, todayPosts] = await Promise.all([
     getStats(),
     prisma.post.findMany({
       take: 8,
       orderBy: { scheduledAt: "desc" },
       include: { client: { select: { name: true } } },
     }),
+    getCachedSummary(),
+    getTodayPosts(),
   ]);
+
+  const todayPending = todayPosts.filter(
+    (p) => p.status === "scheduled" || p.status === "draft"
+  ).length;
 
   return (
     <div className="p-8 max-w-6xl mx-auto animate-fade-up">
@@ -86,6 +98,12 @@ export default async function DashboardPage() {
             Novo post
           </Link>
         }
+      />
+
+      <DailySummaryCard
+        content={summary?.content ?? null}
+        generatedAt={summary ? formatDateTime(summary.updatedAt) : null}
+        postCount={summary?.postCount ?? todayPosts.length}
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -129,6 +147,63 @@ export default async function DashboardPage() {
           </p>
         </div>
       )}
+
+      <div className="card overflow-hidden mb-6">
+        <div className="px-6 py-4 border-b border-[var(--color-border)] flex items-center justify-between">
+          <h2 className="font-semibold">
+            Hoje{" "}
+            <span className="text-[var(--color-text-faint)] font-normal text-sm">
+              · {todayPosts.length} {todayPosts.length === 1 ? "post" : "posts"}
+              {todayPending > 0 && `, ${todayPending} pendente${todayPending === 1 ? "" : "s"}`}
+            </span>
+          </h2>
+          <Link href="/calendar" className="text-sm text-[var(--color-accent)] hover:underline">
+            Ver calendário
+          </Link>
+        </div>
+
+        {todayPosts.length === 0 ? (
+          <div className="px-6 py-10 text-center text-sm text-[var(--color-text-muted)]">
+            Nada agendado para hoje.
+          </div>
+        ) : (
+          <div className="divide-y divide-[var(--color-border)]">
+            {todayPosts.map((p) => (
+              <div key={p.id} className="flex items-center gap-4 px-6 py-3.5">
+                <div className="w-14 shrink-0 text-sm font-medium tabular-nums text-[var(--color-text-muted)]">
+                  {fmtHora(p.scheduledAt)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">
+                    {p.clientName}
+                    <span className="text-[var(--color-text-faint)] font-normal">
+                      {" "}· {p.theme ?? "sem tema"}
+                    </span>
+                  </p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="flex gap-1">
+                      {p.targets.map((t) => (
+                        <PlatformChip key={t} platform={t} />
+                      ))}
+                    </div>
+                    {!p.hasMedia && (
+                      <span className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
+                        sem mídia
+                      </span>
+                    )}
+                    {!p.hasCaption && (
+                      <span className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
+                        sem legenda
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <StatusBadge status={p.status} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="card overflow-hidden">
         <div className="px-6 py-4 border-b border-[var(--color-border)] flex items-center justify-between">

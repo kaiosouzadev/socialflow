@@ -20,6 +20,7 @@ const postSchema = z.object({
   theme: z.string().max(200).optional(),
   captions: captionsSchema,
   mediaUrl: z.string().url().optional().or(z.literal("")),
+  format: z.enum(["feed", "story", "carrossel", "reels"]).default("feed"),
   scheduledAt: z.string().datetime(),
   targets: z.array(z.enum(["instagram", "facebook", "linkedin"])).min(1),
 });
@@ -76,6 +77,7 @@ export async function POST(req: NextRequest) {
               ? (captions as Prisma.InputJsonValue)
               : undefined,
             mediaUrl: p.mediaUrl || null,
+            format: p.format,
             scheduledAt: new Date(p.scheduledAt),
             targets: p.targets,
             status: "draft",

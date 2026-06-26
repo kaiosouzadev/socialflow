@@ -8,6 +8,7 @@ import { Icon } from "@/components/Icons";
 import { BRAND } from "@/components/BrandIcons";
 import { CaptionFields } from "@/components/CaptionFields";
 import { DateTimePicker } from "@/components/DatePickers";
+import { FormatPicker } from "@/components/FormatPicker";
 import { spLocalInputFromISO, spLocalInputToISO } from "@/lib/format-date";
 
 type Post = {
@@ -18,6 +19,7 @@ type Post = {
   caption: string;
   captions: Record<string, string>;
   mediaUrl: string;
+  format: string;
   scheduledAt: string;
   targets: string[];
   status: string;
@@ -36,6 +38,7 @@ export default function EditPostForm({
     post.targets.filter((t) => availablePlatforms.includes(t))
   );
   const [theme, setTheme] = useState(post.theme);
+  const [format, setFormat] = useState(post.format || "feed");
   const [captions, setCaptions] = useState<Record<string, string>>(() => {
     if (post.captions && Object.keys(post.captions).length) return post.captions;
     // back-compat: usa a legenda única como base da primeira rede
@@ -66,6 +69,7 @@ export default function EditPostForm({
     );
     const data = {
       theme,
+      format,
       captions: captionsForTargets,
       mediaUrl: form.get("mediaUrl") as string,
       scheduledAt: spLocalInputToISO(form.get("scheduledAt") as string),
@@ -139,6 +143,11 @@ export default function EditPostForm({
               })}
             </div>
           )}
+        </div>
+
+        <div>
+          <label className="label">Formato</label>
+          <FormatPicker value={format} onChange={setFormat} />
         </div>
 
         <div>
