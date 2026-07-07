@@ -5,6 +5,7 @@ import { PageHeader, StatusBadge } from "@/components/ui";
 import { Icon } from "@/components/Icons";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
 import ApprovePostButton from "./ApprovePostButton";
+import GenerateArtButton from "./GenerateArtButton";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,7 @@ export default async function PostDetailPage({
   const post = await prisma.post.findUnique({
     where: { id },
     include: {
-      client: { select: { id: true, name: true } },
+      client: { select: { id: true, name: true, tier: true } },
       publications: { orderBy: { publishedAt: "desc" } },
     },
   });
@@ -64,6 +65,7 @@ export default async function PostDetailPage({
                 <Icon.edit className="w-4 h-4" />
                 Editar
               </Link>
+              {post.client.tier === "basica" && <GenerateArtButton postId={post.id} />}
               {isDraft && (
                 <ApprovePostButton postId={post.id} hasMedia={!!post.mediaUrl} />
               )}

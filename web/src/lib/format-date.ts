@@ -25,13 +25,21 @@ export function formatDate(d: Date | string): string {
   return new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, dateStyle: "short" }).format(asDate(d));
 }
 
-/** "domingo, 21 de junho de 2026 às 22:26" (data por extenso) no fuso SP. */
-export function formatFull(d: Date | string): string {
-  return new Intl.DateTimeFormat("pt-BR", {
-    timeZone: TZ,
-    dateStyle: "full",
-    timeStyle: "short",
-  }).format(asDate(d));
+/** { day, time } no fuso SP — para montar grade de calendário. */
+export function spDayTime(d: Date | string): { day: number; time: string } {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: TZ,
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+      .formatToParts(asDate(d))
+      .map((p) => [p.type, p.value])
+  );
+  const hour = parts.hour === "24" ? "00" : parts.hour;
+  return { day: Number(parts.day), time: `${hour}:${parts.minute}` };
 }
 
 /** Componentes de relógio de parede SP no formato do input datetime-local. */

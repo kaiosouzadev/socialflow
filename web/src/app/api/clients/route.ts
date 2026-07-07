@@ -10,6 +10,7 @@ const createSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   plan: z.enum(["sem_aprovacao", "aprovacao_cliente"]).default("sem_aprovacao"),
+  tier: z.enum(["basica", "completa"]).default("completa"),
   toneOfVoice: z.string().optional(),
   driveFolderId: z.string().optional(),
 });

@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
+import { Icon } from "@/components/Icons";
 
 const MAX = 5;
 const FMT: Record<string, string> = { feed: "Feed", story: "Story", carrossel: "Carrossel", reels: "Reels" };
+const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
 type Post = {
   id: string;
@@ -15,6 +17,8 @@ type Post = {
   captions: Record<string, string>;
   targets: string[];
   when: string;
+  day: number;
+  time: string;
   aiEditsUsed: number;
 };
 
@@ -22,17 +26,49 @@ function isVid(u: string) {
   return /\.(mp4|mov|webm|m4v)$/i.test(u);
 }
 
-function PostCard({ token, post }: { token: string; post: Post }) {
+function mediaOf(post: Post) {
+  return post.mediaItems?.length
+    ? post.mediaItems
+    : post.mediaUrl
+      ? [{ url: post.mediaUrl, type: undefined as string | undefined }]
+      : [];
+}
+
+function Thumb({ url, className = "" }: { url: string; className?: string }) {
+  if (isVid(url)) {
+    return <video src={url} muted className={`object-cover ${className}`} />;
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt="" className={`object-cover ${className}`} />;
+}
+
+/* --------------------------- modal de detalhe --------------------------- */
+
+function PostModal({
+  token,
+  post,
+  onClose,
+}: {
+  token: string;
+  post: Post;
+  onClose: () => void;
+}) {
+  const media = mediaOf(post);
+  const [active, setActive] = useState(0);
   const [caps, setCaps] = useState<Record<string, string>>(post.captions);
   const [editsUsed, setEditsUsed] = useState(post.aiEditsUsed);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
 
-  const media = post.mediaItems?.length
-    ? post.mediaItems
-    : post.mediaUrl
-      ? [{ url: post.mediaUrl, type: undefined as string | undefined }]
-      : [];
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [onClose]);
 
   async function save(net: string) {
     setBusy(net);
@@ -64,45 +100,71 @@ function PostCard({ token, post }: { token: string; post: Post }) {
   }
 
   return (
-    <div className="card overflow-hidden">
-      <div className="flex flex-col sm:flex-row">
-        <div className="sm:w-48 shrink-0 bg-black/40 aspect-square sm:aspect-auto flex items-center justify-center">
-          {media[0] ? (
-            isVid(media[0].url) ? (
-              <video src={media[0].url} controls className="w-full h-full object-cover" />
-            ) : (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={media[0].url} alt="" className="w-full h-full object-cover" />
-            )
-          ) : (
-            <span className="text-xs text-[var(--color-text-faint)] p-4">sem mídia ainda</span>
-          )}
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="card w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-b-none sm:rounded-2xl animate-fade-up"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* header */}
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-3 bg-[var(--color-surface)]/95 backdrop-blur border-b border-[var(--color-border)]">
+          <div className="min-w-0">
+            <p className="font-medium truncate">{post.theme || "Post"}</p>
+            <p className="text-xs text-[var(--color-text-faint)]">
+              {FMT[post.format] ?? post.format} · dia {post.day} · {post.time}
+            </p>
+          </div>
+          <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">{editsUsed}/{MAX} IA</span>
+          <button
+            onClick={onClose}
+            aria-label="Fechar"
+            className="shrink-0 p-1.5 rounded-lg hover:bg-white/10 text-[var(--color-text-muted)]"
+          >
+            <Icon.x className="w-5 h-5" />
+          </button>
         </div>
 
-        <div className="flex-1 p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <p className="font-medium">{post.theme || "Post"}</p>
-              <p className="text-xs text-[var(--color-text-faint)]">
-                {FMT[post.format] ?? post.format} · {post.when}
-                {media.length > 1 ? ` · ${media.length} mídias` : ""}
-              </p>
+        <div className="p-5 space-y-4">
+          {/* mídia */}
+          {media[0] && (
+            <div className="space-y-2">
+              <div className="rounded-xl overflow-hidden bg-black/40 aspect-square flex items-center justify-center">
+                <Thumb url={media[active]?.url ?? media[0].url} className="w-full h-full" />
+              </div>
+              {media.length > 1 && (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {media.map((m, i) => (
+                    <button
+                      key={m.url + i}
+                      onClick={() => setActive(i)}
+                      className={`shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 ${
+                        i === active ? "border-[var(--color-accent)]" : "border-transparent opacity-70"
+                      }`}
+                    >
+                      <Thumb url={m.url} className="w-full h-full" />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            <span className="text-xs text-[var(--color-text-muted)]">{editsUsed}/{MAX} IA</span>
-          </div>
+          )}
 
+          {/* legendas por rede */}
           {post.targets.map((net) => (
             <div key={net}>
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center justify-between mb-1.5">
                 <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)]">
                   <BrandBadge platform={net} size={18} /> {BRAND[net]?.label ?? net}
                 </span>
-                <div className="flex gap-2">
+                <div className="flex gap-3">
                   <button
                     onClick={() => regen(net)}
                     disabled={busy !== "" || editsUsed >= MAX}
-                    className="text-xs text-[var(--color-accent)] hover:underline disabled:opacity-40"
+                    className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline disabled:opacity-40"
                   >
+                    <Icon.zap className="w-3.5 h-3.5" />
                     {busy === `ia-${net}` ? "Gerando..." : "Gerar IA"}
                   </button>
                   <button
@@ -117,7 +179,7 @@ function PostCard({ token, post }: { token: string; post: Post }) {
               <textarea
                 value={caps[net] ?? ""}
                 onChange={(e) => setCaps((p) => ({ ...p, [net]: e.target.value }))}
-                rows={3}
+                rows={4}
                 className="input resize-none text-sm"
               />
             </div>
@@ -129,17 +191,50 @@ function PostCard({ token, post }: { token: string; post: Post }) {
   );
 }
 
+/* ------------------------------ célula do dia ------------------------------ */
+
+function DayCell({ post, onOpen }: { post: Post; onOpen: () => void }) {
+  const media = mediaOf(post);
+  return (
+    <button
+      onClick={onOpen}
+      className="group w-full text-left rounded-lg overflow-hidden bg-black/30 border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors"
+    >
+      <div className="aspect-square bg-black/40 flex items-center justify-center">
+        {media[0] ? (
+          <Thumb url={media[0].url} className="w-full h-full group-hover:scale-105 transition-transform" />
+        ) : (
+          <span className="text-[9px] text-[var(--color-text-faint)]">sem mídia</span>
+        )}
+      </div>
+      <div className="px-1.5 py-1 flex items-center gap-1">
+        {post.targets.map((t) => (
+          <BrandBadge key={t} platform={t} size={13} />
+        ))}
+        <span className="ml-auto text-[9px] text-[var(--color-text-faint)] hidden sm:inline">{post.time}</span>
+      </div>
+    </button>
+  );
+}
+
+/* --------------------------------- view --------------------------------- */
+
 export default function ApprovalView({
   token,
   clientName,
   monthLabel,
+  year,
+  month,
   posts,
 }: {
   token: string;
   clientName: string;
   monthLabel: string;
+  year: number;
+  month: number;
   posts: Post[];
 }) {
+  const [open, setOpen] = useState<Post | null>(null);
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
   const [error, setError] = useState("");
@@ -164,18 +259,52 @@ export default function ApprovalView({
     );
   }
 
+  // grade do mês (UTC para bater com monthRef)
+  const firstWeekday = new Date(Date.UTC(year, month, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const byDay = new Map<number, Post[]>();
+  for (const p of posts) {
+    const arr = byDay.get(p.day) ?? [];
+    arr.push(p);
+    byDay.set(p.day, arr);
+  }
+  const cells: (number | null)[] = [
+    ...Array<null>(firstWeekday).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+
   return (
     <div className="w-full max-w-3xl space-y-4">
       <div className="text-center mb-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Cronograma de {monthLabel}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight capitalize">{monthLabel}</h1>
         <p className="text-sm text-[var(--color-text-muted)] mt-1">
-          Olá, {clientName}! Revise os {posts.length} posts, ajuste o que quiser e aprove.
+          Olá, {clientName}! Toque em um post para ver e ajustar. {posts.length} posts no mês.
         </p>
       </div>
 
-      {posts.map((p) => (
-        <PostCard key={p.id} token={token} post={p} />
-      ))}
+      <div className="card p-3 sm:p-4">
+        <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-1">
+          {WEEKDAYS.map((w) => (
+            <div key={w} className="text-center text-[10px] sm:text-xs font-medium text-[var(--color-text-faint)] py-1">
+              {w}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-1 sm:gap-2">
+          {cells.map((d, i) => {
+            if (d === null) return <div key={`e${i}`} />;
+            const dayPosts = byDay.get(d) ?? [];
+            return (
+              <div key={d} className="min-h-[3rem] flex flex-col gap-1">
+                <span className="text-[10px] sm:text-xs text-[var(--color-text-faint)] leading-none pl-0.5">{d}</span>
+                {dayPosts.map((p) => (
+                  <DayCell key={p.id} post={p} onOpen={() => setOpen(p)} />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {error && (
         <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
@@ -188,6 +317,8 @@ export default function ApprovalView({
           {approving ? "Aprovando..." : "Aprovar cronograma"}
         </button>
       </div>
+
+      {open && <PostModal token={token} post={open} onClose={() => setOpen(null)} />}
     </div>
   );
 }

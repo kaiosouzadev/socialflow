@@ -1,95 +1,91 @@
 {
-  "name": "WF-03 Retry de Falhas",
+  "name": "SocialFlow WF-03 Retry com Backoff",
   "nodes": [
     {
       "parameters": {
         "rule": { "interval": [{ "field": "minutes", "minutesInterval": 15 }] }
       },
-      "id": "schedule",
-      "name": "Schedule (15min)",
+      "id": "8f6b80f1-cf33-4987-aeaa-26f8a96e7bab",
+      "name": "A cada 15min",
       "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [-200, 300]
+      "typeVersion": 1.3,
+      "position": [-672, 272]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE posts SET status='scheduled', scheduled_at = now() + (CASE retry_count WHEN 0 THEN interval '5 minutes' WHEN 1 THEN interval '30 minutes' ELSE interval '2 hours' END), retry_count = retry_count + 1 WHERE status='failed' AND retry_count < 3 RETURNING id, client_id, retry_count, last_error;",
+        "query": "WITH destrava AS (\n  UPDATE posts\n  SET status='failed', last_error='destravado: preso em publishing por 20+ min'\n  WHERE status='publishing' AND scheduled_at < now() - interval '20 minutes'\n  RETURNING id\n)\nUPDATE posts\nSET status='scheduled',\n    scheduled_at = now() + (CASE retry_count WHEN 0 THEN interval '5 minutes' WHEN 1 THEN interval '30 minutes' ELSE interval '2 hours' END),\n    retry_count = retry_count + 1\nWHERE status='failed' AND retry_count < 3\nRETURNING id, client_id, retry_count, last_error",
         "options": {}
       },
-      "id": "reagenda",
+      "id": "ed966c90-1d25-4780-b438-670394059100",
       "name": "Reagenda falhas (backoff)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [20, 300],
-      "notes": "Backoff: 1a tentativa +5min, 2a +30min, 3a +2h. Apos 3 falhas (retry_count=3), status permanece 'failed'. O WF-01 vai reprocessar quando status voltar a 'scheduled'."
+      "position": [-448, 272],
+      "credentials": { "postgres": { "id": "zIPyAquVv49cM1kf", "name": "Postgres SocialFlow" } }
     },
     {
-      "parameters": {
-        "options": { "reset": false }
-      },
-      "id": "split",
-      "name": "Split in Batches",
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 3,
-      "position": [240, 300],
-      "notes": "Itera sobre cada post reagendado para log individual."
+      "parameters": {},
+      "id": "2929b7cb-4502-46d6-8dae-8f1b38d8cf7e",
+      "name": "Concluido",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [0, 0]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "version": 2 },
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
           "conditions": [
             {
-              "id": "c1",
               "leftValue": "={{ $json.id }}",
-              "rightValue": "",
-              "operator": { "type": "string", "operation": "exists", "singleValue": true }
+              "operator": { "type": "string", "operation": "exists", "singleValue": true },
+              "rightValue": ""
             }
           ],
           "combinator": "and"
         },
         "options": {}
       },
-      "id": "tem-falha",
+      "id": "0eb4d071-b841-4b1f-b2f1-00842882483b",
       "name": "Houve reagendamento?",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [460, 300]
+      "typeVersion": 2.3,
+      "position": [0, 192]
     },
     {
-      "parameters": {
-        "content": "=Post {{ $json.id }} reagendado (tentativa {{ $json.retry_count }}/3). Ultimo erro: {{ $json.last_error }}",
-        "options": {}
-      },
-      "id": "log",
+      "parameters": {},
+      "id": "195359f8-fc10-4baa-925e-9565e130cee8",
       "name": "Log / notificacao",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [680, 200],
-      "notes": "Troque por Email / Slack / Telegram para alertas de falhas recorrentes."
+      "position": [224, 272]
+    },
+    {
+      "parameters": { "options": {} },
+      "id": "7fad191e-ac63-4fb4-81fc-b8786d68f6ff",
+      "name": "Loop falhas",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [-224, 272]
     }
   ],
   "connections": {
-    "Schedule (15min)": {
-      "main": [[{ "node": "Reagenda falhas (backoff)", "type": "main", "index": 0 }]]
-    },
-    "Reagenda falhas (backoff)": {
-      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
-    },
-    "Split in Batches": {
-      "main": [[{ "node": "Houve reagendamento?", "type": "main", "index": 0 }]]
-    },
+    "A cada 15min": { "main": [[{ "node": "Reagenda falhas (backoff)", "type": "main", "index": 0 }]] },
+    "Reagenda falhas (backoff)": { "main": [[{ "node": "Loop falhas", "type": "main", "index": 0 }]] },
     "Houve reagendamento?": {
       "main": [
         [{ "node": "Log / notificacao", "type": "main", "index": 0 }],
-        []
+        [{ "node": "Loop falhas", "type": "main", "index": 0 }]
       ]
     },
-    "Log / notificacao": {
-      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
+    "Log / notificacao": { "main": [[{ "node": "Loop falhas", "type": "main", "index": 0 }]] },
+    "Loop falhas": {
+      "main": [
+        [{ "node": "Concluido", "type": "main", "index": 0 }],
+        [{ "node": "Houve reagendamento?", "type": "main", "index": 0 }]
+      ]
     }
   },
-  "settings": { "executionOrder": "v1" },
-  "pinData": {}
+  "settings": { "executionOrder": "v1" }
 }

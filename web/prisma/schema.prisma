@@ -38,6 +38,12 @@ model Client {
   briefing      Json?
   // credenciais por rede (login/senha) — JSON CRIPTOGRAFADO (AES-GCM). Nunca em texto plano.
   credentialsEnc String?  @map("credentials_enc")
+  // marca (p/ geração de arte por IA em clientes de gestão básica)
+  logoUrl       String?   @map("logo_url")
+  brandColor    String?   @map("brand_color") // hex, ex: #7c5cff
+  tier          String    @default("completa") // basica | completa
+  // exibir dados de contato (phone/whatsapp/site/instagram) na arte gerada?
+  showContacts  Boolean   @default(false) @map("show_contacts")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   socialAccounts SocialAccount[]
@@ -119,6 +125,8 @@ model Post {
   aiEditsUsed Int       @default(0) @map("ai_edits_used") // regenerações IA na aprovação (máx 5)
   retryCount  Int       @default(0) @map("retry_count")
   lastError   String?   @map("last_error")
+  // arte-base que originou este post (plano básico) — evita duplicar na regeração
+  artTemplateId String? @map("art_template_id") @db.Uuid
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   client       Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -141,6 +149,22 @@ model Publication {
   post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@map("publications")
+}
+
+// Arte-base para geração por IA (gestão básica). Versionada por período;
+// a IA edita esta imagem aplicando cor/logo/tema do cliente.
+model ArtTemplate {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String   // título da arte (tema da postagem)
+  month        String?  // "YYYY-MM" (campanha do mês), opcional
+  // agenda no calendário do plano básico (dia do mês + hora SP "HH:mm")
+  day          Int?
+  time         String?  @default("18:00")
+  baseImageUrl String   @map("base_image_url")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("art_templates")
 }
 
 // Resumo diário gerado por IA para a dashboard (1 por dia, fuso SP).

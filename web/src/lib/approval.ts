@@ -6,8 +6,9 @@ export function newApprovalToken(): string {
   return randomBytes(24).toString("base64url");
 }
 
-export function approvalLink(token: string): string {
-  const base = (process.env.SYSTEM_BASE_URL ?? "").replace(/\/$/, "");
+export function approvalLink(token: string, fallbackOrigin?: string): string {
+  // SYSTEM_BASE_URL manda; sem ela, usa a origem da request (evita link relativo quebrado no e-mail)
+  const base = (process.env.SYSTEM_BASE_URL ?? fallbackOrigin ?? "").replace(/\/$/, "");
   return `${base}/aprovar/${token}`;
 }
 

@@ -37,6 +37,12 @@ const updateSchema = z.object({
   facebookUrl: z.string().optional(),
   instagramUrl: z.string().optional(),
   briefing: briefingSchema,
+  // marca (geração de arte) — "" limpa o campo
+  logoUrl: z.string().url().or(z.literal("")).optional(),
+  brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, "cor em hex, ex: #7c5cff").or(z.literal("")).optional(),
+  tier: z.enum(["basica", "completa"]).optional(),
+  // exibir dados de contato na arte gerada?
+  showContacts: z.boolean().optional(),
 });
 
 // campos texto onde "" deve virar null (limpar)
@@ -50,6 +56,8 @@ const NULLABLE_TEXT = [
   "whatsapp",
   "facebookUrl",
   "instagramUrl",
+  "logoUrl",
+  "brandColor",
 ] as const;
 
 export async function GET(

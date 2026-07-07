@@ -1,0 +1,95 @@
+{
+  "name": "SocialFlow WF-01 Publicacao Multi-Rede",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes" }] }
+      },
+      "id": "14d40b89-511b-4df9-86a1-3150a5906c97",
+      "name": "A cada 5min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [-2464, 560]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE posts SET status='publishing' WHERE id IN (SELECT id FROM posts WHERE status='scheduled' AND scheduled_at <= now() ORDER BY scheduled_at LIMIT 10) RETURNING id",
+        "options": {}
+      },
+      "id": "5806a1ce-a384-4361-934f-7d6cb4c75f01",
+      "name": "Busca fila (lock)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-2240, 560],
+      "credentials": { "postgres": { "id": "zIPyAquVv49cM1kf", "name": "Postgres SocialFlow" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "exists", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "369bd175-d5f2-4dd6-8e29-55216bcfe32f",
+      "name": "Tem post?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [-2016, 560]
+    },
+    {
+      "parameters": { "options": {} },
+      "id": "cc046636-8258-4676-960d-f7b43804d9c9",
+      "name": "Loop posts",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [-1792, 560]
+    },
+    {
+      "parameters": {},
+      "id": "8642f493-90b7-4184-93e2-ca4eba040416",
+      "name": "Concluido",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [-1568, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://flow.grupocoletivo.com.br/api/internal/publish/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 290000 }
+      },
+      "id": "2f7730c8-51a0-4bc6-852a-d8e1a16ca62a",
+      "name": "Publica",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-1568, 640],
+      "credentials": { "httpHeaderAuth": { "id": "Dim9CZ5Acht6xxCl", "name": "SocialFlow Internal Key" } },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "A cada 5min": { "main": [[{ "node": "Busca fila (lock)", "type": "main", "index": 0 }]] },
+    "Busca fila (lock)": { "main": [[{ "node": "Tem post?", "type": "main", "index": 0 }]] },
+    "Tem post?": { "main": [[{ "node": "Loop posts", "type": "main", "index": 0 }]] },
+    "Loop posts": {
+      "main": [
+        [{ "node": "Concluido", "type": "main", "index": 0 }],
+        [{ "node": "Publica", "type": "main", "index": 0 }]
+      ]
+    },
+    "Publica": { "main": [[{ "node": "Loop posts", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

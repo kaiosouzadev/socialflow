@@ -9,11 +9,9 @@ para `web/node_modules`, ou use `node ../system/...` de dentro de `web/`.
 - `seed-teste.sql` — dados de teste (cliente/contas/post) para o WF-01.
 - `seed-unsplash.js` — cria um post de teste com imagem pública do Unsplash.
 
-## scripts/ — testes e diagnóstico
-- `test-crud.js` — valida CRUD + cascatas + criptografia contra o banco real.
-- `test-gemini.js` / `test-calendar.js` — checam a API Gemini e os modelos.
-- `test-zod.js` — sanity check de validações.
-- `check-and-cleanup.js` — reseta posts presos em `publishing` e limpa placeholders.
+## scripts/ — diagnóstico
+- `inspect-db.js` — visão rápida do banco (clientes, contas, conexões, posts).
+- `diag-drive.js` — diagnóstico do acesso da service account ao Google Drive.
 
-> Esses scripts são apenas para desenvolvimento. Nenhum segredo é commitado:
-> eles leem `web/.env` (gitignored).
+> Scripts one-off de teste/debug foram removidos após a validação (histórico no git).
+> Nenhum segredo é commitado: os scripts leem `web/.env` (gitignored).

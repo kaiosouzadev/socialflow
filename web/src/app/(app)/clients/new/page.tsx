@@ -75,6 +75,18 @@ export default function NewClientPage() {
         </div>
 
         <div>
+          <label className="label">Tipo de gestão</label>
+          <select name="tier" className="input">
+            <option value="completa">Completa (artes próprias)</option>
+            <option value="basica">Básica — artes geradas por IA do calendário padrão</option>
+          </select>
+          <p className="text-xs text-[var(--color-text-faint)] mt-1">
+            No plano básico, após criar o cliente configure logo, cor e contatos; as artes do
+            calendário são geradas automaticamente na página do cliente.
+          </p>
+        </div>
+
+        <div>
           <label className="label">
             Tom de voz <span className="text-[var(--color-text-faint)] font-normal">(opcional)</span>
           </label>

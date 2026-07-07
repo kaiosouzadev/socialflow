@@ -11,6 +11,8 @@ import AccountsManager from "./AccountsManager";
 import DeleteClientButton from "./DeleteClientButton";
 import GenerateCalendarButton from "./GenerateCalendarButton";
 import SyncMediaButton from "./SyncMediaButton";
+import BasicPlanManager from "./BasicPlanManager";
+import { listBasicMonths } from "@/lib/basic-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +40,8 @@ export default async function ClientDetailPage({
   ]);
 
   if (!client) notFound();
+
+  const basicMonths = client.tier === "basica" ? await listBasicMonths(client.id) : [];
 
   const accounts = client.socialAccounts.map((a) => ({
     id: a.id,
@@ -75,8 +79,16 @@ export default async function ClientDetailPage({
             plan: client.plan,
             toneOfVoice: client.toneOfVoice,
             driveFolderId: client.driveFolderId,
+            logoUrl: client.logoUrl,
+            brandColor: client.brandColor,
+            tier: client.tier,
+            showContacts: client.showContacts,
           }}
         />
+
+        {client.tier === "basica" && (
+          <BasicPlanManager clientId={client.id} initial={basicMonths} />
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2">

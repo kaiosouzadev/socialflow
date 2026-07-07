@@ -2,6 +2,9 @@ const BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 export const CAPTION_MODEL = process.env.GEMINI_CAPTION_MODEL || "gemini-2.5-flash";
 export const CALENDAR_MODEL = process.env.GEMINI_CALENDAR_MODEL || "gemini-3.5-flash";
+export const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
+
+export const GEMINI_BASE = BASE;
 
 type GenerateOptions = {
   model: string;
@@ -35,9 +38,10 @@ export async function generateText({
     },
   };
 
-  const res = await fetch(`${BASE}/models/${model}:generateContent?key=${key}`, {
+  // chave no header, nunca em query string (evita vazar em logs de URL)
+  const res = await fetch(`${BASE}/models/${model}:generateContent`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify(body),
   });
 

@@ -1,0 +1,34 @@
+{
+  "name": "SocialFlow WF-05 Sync Midia Drive",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 30 }] }
+      },
+      "id": "287b0764-99fb-47bd-bead-44a68cd4565d",
+      "name": "A cada 30min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://flow.grupocoletivo.com.br/api/internal/sync-media",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "aaf1108b-187f-4939-bf7e-f93dab002013",
+      "name": "Sincroniza midia (Drive)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [224, 0],
+      "credentials": { "httpHeaderAuth": { "id": "Dim9CZ5Acht6xxCl", "name": "SocialFlow Internal Key" } }
+    }
+  ],
+  "connections": {
+    "A cada 30min": { "main": [[{ "node": "Sincroniza midia (Drive)", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

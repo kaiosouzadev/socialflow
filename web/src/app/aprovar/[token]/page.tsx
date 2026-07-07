@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { Logo } from "@/components/Logo";
 import { monthLabel } from "@/lib/approval";
-import { formatDateTime } from "@/lib/format-date";
+import { formatDateTime, spDayTime } from "@/lib/format-date";
 import ApprovalView from "./ApprovalView";
 
 export const dynamic = "force-dynamic";
@@ -52,23 +52,30 @@ export default async function ApprovalPage({
     );
   }
 
-  const posts = schedule.posts.map((p) => ({
-    id: p.id,
-    theme: p.theme ?? "",
-    format: p.format,
-    mediaUrl: p.mediaUrl,
-    mediaItems: (p.mediaItems as { url: string; type?: string }[] | null) ?? null,
-    captions: (p.captions as Record<string, string> | null) ?? {},
-    targets: p.targets,
-    when: formatDateTime(p.scheduledAt),
-    aiEditsUsed: p.aiEditsUsed,
-  }));
+  const posts = schedule.posts.map((p) => {
+    const { day, time } = spDayTime(p.scheduledAt);
+    return {
+      id: p.id,
+      theme: p.theme ?? "",
+      format: p.format,
+      mediaUrl: p.mediaUrl,
+      mediaItems: (p.mediaItems as { url: string; type?: string }[] | null) ?? null,
+      captions: (p.captions as Record<string, string> | null) ?? {},
+      targets: p.targets,
+      when: formatDateTime(p.scheduledAt),
+      day,
+      time,
+      aiEditsUsed: p.aiEditsUsed,
+    };
+  });
 
   return shell(
     <ApprovalView
       token={token}
       clientName={schedule.client.name}
       monthLabel={monthLabel(schedule.monthRef)}
+      year={schedule.monthRef.getUTCFullYear()}
+      month={schedule.monthRef.getUTCMonth()}
       posts={posts}
     />
   );

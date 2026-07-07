@@ -3,7 +3,8 @@ import { createSign } from "crypto";
 /**
  * Cliente mínimo da Google Drive API v3 usando uma service account.
  * Assina o JWT com node:crypto (RS256) e troca por um access token — sem
- * depender do SDK googleapis. Apenas leitura (drive.readonly).
+ * depender do SDK googleapis. Leitura + escrita (a SA precisa de permissão
+ * de Editor na pasta raiz compartilhada para criar pastas/arquivos).
  *
  * A service account pode ser fornecida de duas formas (a primeira encontrada vence):
  *   1. GOOGLE_SERVICE_ACCOUNT_JSON — JSON completo inline (recomendado para Vercel/produção)
@@ -68,7 +69,8 @@ async function getAccessToken(): Promise<string> {
   const header = b64({ alg: "RS256", typ: "JWT" });
   const claim = b64({
     iss: sa.client_email,
-    scope: "https://www.googleapis.com/auth/drive.readonly",
+    // escopo com escrita: o plano básico salva as artes geradas no Drive
+    scope: "https://www.googleapis.com/auth/drive",
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
@@ -146,24 +148,6 @@ export async function findFolder(name: string, parentId: string): Promise<string
   return match?.id ?? null;
 }
 
-/**
- * Acha a imagem cujo nome (sem extensão) é exatamente `baseName` (ex.: "1")
- * dentro da pasta. Retorna o arquivo ou null.
- */
-export async function findImageByBaseName(
-  folderId: string,
-  baseName: string
-): Promise<DriveFile | null> {
-  const q = `'${escapeQ(folderId)}' in parents and trashed = false and mimeType contains 'image/'`;
-  const files = await driveList(q);
-  const match = files.find((f) => {
-    const dot = f.name.lastIndexOf(".");
-    const stem = dot > 0 ? f.name.slice(0, dot) : f.name;
-    return stem.trim() === baseName;
-  });
-  return match ?? null;
-}
-
 function isMedia(f: DriveFile): boolean {
   return f.mimeType.startsWith("image/") || f.mimeType.startsWith("video/");
 }
@@ -215,4 +199,78 @@ export async function downloadFile(
 export function driveConfigured(): boolean {
   const hasSA = !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON || !!process.env.GOOGLE_SERVICE_ACCOUNT_FILE;
   return hasSA && !!process.env.DRIVE_ROOT_FOLDER_ID;
+}
+
+/** Acha a subpasta pelo nome; se não existir, cria. Retorna o ID. */
+export async function ensureFolder(name: string, parentId: string): Promise<string> {
+  const existing = await findFolder(name, parentId);
+  if (existing) return existing;
+
+  const token = await getAccessToken();
+  const res = await fetch(
+    "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentId],
+      }),
+    }
+  );
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Drive criar pasta falhou: ${res.status} ${detail.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.id as string;
+}
+
+/**
+ * Sobe um arquivo para uma pasta do Drive (upload multipart). Se já existir
+ * arquivo com o mesmo nome na pasta, substitui o conteúdo (evita duplicatas
+ * ao regerar a arte).
+ */
+export async function uploadToDrive(
+  name: string,
+  parentId: string,
+  buffer: Buffer,
+  contentType: string
+): Promise<string> {
+  const token = await getAccessToken();
+
+  // já existe? → update de conteúdo (media upload) no mesmo arquivo
+  const q = `'${escapeQ(parentId)}' in parents and name = '${escapeQ(name)}' and trashed = false`;
+  const found = await driveList(q);
+  const existing = found[0];
+
+  const boundary = "sfmedia" + Date.now().toString(36);
+  const metadata = existing ? { name } : { name, parents: [parentId] };
+  const head = Buffer.from(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--`);
+  const body = Buffer.concat([head, buffer, tail]);
+
+  const url = existing
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existing.id}?uploadType=multipart&supportsAllDrives=true&fields=id`
+    : "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id";
+
+  const res = await fetch(url, {
+    method: existing ? "PATCH" : "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": `multipart/related; boundary=${boundary}`,
+    },
+    body: new Uint8Array(body),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Drive upload falhou: ${res.status} ${detail.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.id as string;
 }

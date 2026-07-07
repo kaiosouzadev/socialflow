@@ -9,6 +9,7 @@ const items = [
   { href: "/clients", label: "Clientes", icon: Icon.users },
   { href: "/posts", label: "Posts", icon: Icon.list },
   { href: "/calendar", label: "Calendário", icon: Icon.grid },
+  { href: "/templates", label: "Artes-base", icon: Icon.folder },
   { href: "/aprovacoes", label: "Aprovações", icon: Icon.check },
   { href: "/meta", label: "Conexões Meta", icon: Icon.link, adminOnly: true },
   { href: "/users", label: "Usuários", icon: Icon.shield, adminOnly: true },

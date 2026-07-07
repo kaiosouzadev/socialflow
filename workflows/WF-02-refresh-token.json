@@ -1,63 +1,53 @@
 {
-  "name": "WF-02 Refresh Token Meta",
+  "name": "SocialFlow WF-02 Refresh Token Meta",
   "nodes": [
     {
       "parameters": {
         "rule": { "interval": [{ "field": "hours", "hoursInterval": 12 }] }
       },
-      "id": "schedule",
-      "name": "Schedule (2x/dia)",
+      "id": "8da0c039-684c-4b59-9123-3933987df984",
+      "name": "A cada 12h",
       "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [-200, 300],
-      "notes": "Roda 2x/dia para nao perder tokens que expiram entre verificacoes."
+      "typeVersion": 1.3,
+      "position": [-672, 192]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, client_id, platform, external_id FROM social_accounts WHERE status='active' AND platform IN ('instagram','facebook') AND (token_expires_at IS NULL OR token_expires_at < now() + interval '7 days');",
+        "query": "SELECT id, client_id, platform, external_id FROM social_accounts WHERE status='active' AND platform IN ('instagram','facebook') AND (token_expires_at IS NOT NULL AND token_expires_at < now() + interval '7 days')",
         "options": {}
       },
-      "id": "busca-vencendo",
+      "id": "cc754245-f673-42b2-ab89-7472aeabb6dc",
       "name": "Tokens vencendo (<7d)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [20, 300],
-      "notes": "Busca contas com token vencendo em menos de 7 dias. NAO busca access_token_enc — o token e obtido descriptografado via endpoint do sistema."
+      "position": [-448, 192],
+      "credentials": { "postgres": { "id": "zIPyAquVv49cM1kf", "name": "Postgres SocialFlow" } }
+    },
+    {
+      "parameters": {},
+      "id": "a9247f4f-78db-4870-b5ee-0c3aaaf5c08f",
+      "name": "Concluido",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [0, 0]
     },
     {
       "parameters": {
-        "options": { "reset": false }
-      },
-      "id": "split",
-      "name": "Split in Batches",
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 3,
-      "position": [240, 300],
-      "notes": "Processa 1 conta por vez para evitar sobrecarga na API da Meta."
-    },
-    {
-      "parameters": {
-        "method": "GET",
-        "url": "={{ $env.SYSTEM_BASE_URL }}/api/internal/token/{{ $json.id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "x-internal-key", "value": "={{ $env.INTERNAL_API_KEY }}" }
-          ]
-        },
+        "url": "=https://flow.grupocoletivo.com.br/api/internal/token/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "options": {}
       },
-      "id": "busca-token",
+      "id": "4f5ac652-53e4-4716-b763-8336d562f8a1",
       "name": "Busca token atual",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [460, 300],
-      "notes": "Obtem o token atual descriptografado via endpoint interno do sistema. Nunca armazena token em variaveis de ambiente do n8n."
+      "typeVersion": 4.4,
+      "position": [0, 192],
+      "credentials": { "httpHeaderAuth": { "id": "Dim9CZ5Acht6xxCl", "name": "SocialFlow Internal Key" } }
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "https://graph.facebook.com/v21.0/oauth/access_token",
         "sendQuery": true,
         "queryParameters": {
@@ -70,70 +60,80 @@
         },
         "options": {}
       },
-      "id": "troca-token",
-      "name": "Troca por token longo",
+      "id": "6a095467-b5c2-4295-88ad-aa0f1db8e6e1",
+      "name": "Troca por token longo (Meta)",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [680, 300],
-      "notes": "Retorna { access_token, token_type, expires_in }. Token longo dura ~60 dias. NUNCA use query string para o token existente — so o novo token vai em query string aqui porque e o parametro exigido pela API da Meta."
+      "typeVersion": 4.4,
+      "position": [224, 192],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "tok1",
+              "leftValue": "={{ $json.access_token }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "exists", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "caf8defd-af02-4dae-a4db-c24e7110054d",
+      "name": "Token OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [336, 96]
     },
     {
       "parameters": {
         "method": "PUT",
-        "url": "={{ $env.SYSTEM_BASE_URL }}/api/internal/token/{{ $('Split in Batches').item.json.id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "x-internal-key", "value": "={{ $env.INTERNAL_API_KEY }}" },
-            { "name": "Content-Type", "value": "application/json" }
-          ]
-        },
+        "url": "=https://flow.grupocoletivo.com.br/api/internal/token/{{ $(\"Loop contas\").item.json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={ \"token\": \"{{ $json.access_token }}\", \"expiresIn\": {{ $json.expires_in }} }",
+        "jsonBody": "={\"token\":\"{{ $json.access_token }}\",\"expiresIn\":{{ $json.expires_in }}}",
         "options": {}
       },
-      "id": "atualiza",
+      "id": "e1225217-1e8e-42b3-9e38-44b7c141b937",
       "name": "Atualiza token no sistema",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [900, 300],
-      "notes": "Envia o novo token para o sistema web que o criptografa e grava no banco. O n8n nunca manipula criptografia diretamente."
+      "typeVersion": 4.4,
+      "position": [448, 272],
+      "credentials": { "httpHeaderAuth": { "id": "Dim9CZ5Acht6xxCl", "name": "SocialFlow Internal Key" } }
     },
     {
-      "parameters": {
-        "options": {}
-      },
-      "id": "continua",
-      "name": "Proximo batch",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [1120, 300]
+      "parameters": { "options": {} },
+      "id": "be37bc53-e500-440b-86bb-0c22b8f3ed99",
+      "name": "Loop contas",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [-224, 192]
     }
   ],
   "connections": {
-    "Schedule (2x/dia)": {
-      "main": [[{ "node": "Tokens vencendo (<7d)", "type": "main", "index": 0 }]]
+    "A cada 12h": { "main": [[{ "node": "Tokens vencendo (<7d)", "type": "main", "index": 0 }]] },
+    "Tokens vencendo (<7d)": { "main": [[{ "node": "Loop contas", "type": "main", "index": 0 }]] },
+    "Busca token atual": { "main": [[{ "node": "Troca por token longo (Meta)", "type": "main", "index": 0 }]] },
+    "Troca por token longo (Meta)": { "main": [[{ "node": "Token OK?", "type": "main", "index": 0 }]] },
+    "Token OK?": {
+      "main": [
+        [{ "node": "Atualiza token no sistema", "type": "main", "index": 0 }],
+        [{ "node": "Loop contas", "type": "main", "index": 0 }]
+      ]
     },
-    "Tokens vencendo (<7d)": {
-      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
-    },
-    "Split in Batches": {
-      "main": [[{ "node": "Busca token atual", "type": "main", "index": 0 }]]
-    },
-    "Busca token atual": {
-      "main": [[{ "node": "Troca por token longo", "type": "main", "index": 0 }]]
-    },
-    "Troca por token longo": {
-      "main": [[{ "node": "Atualiza token no sistema", "type": "main", "index": 0 }]]
-    },
-    "Atualiza token no sistema": {
-      "main": [[{ "node": "Proximo batch", "type": "main", "index": 0 }]]
-    },
-    "Proximo batch": {
-      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
+    "Atualiza token no sistema": { "main": [[{ "node": "Loop contas", "type": "main", "index": 0 }]] },
+    "Loop contas": {
+      "main": [
+        [{ "node": "Concluido", "type": "main", "index": 0 }],
+        [{ "node": "Busca token atual", "type": "main", "index": 0 }]
+      ]
     }
   },
-  "settings": { "executionOrder": "v1" },
-  "pinData": {}
+  "settings": { "executionOrder": "v1" }
 }

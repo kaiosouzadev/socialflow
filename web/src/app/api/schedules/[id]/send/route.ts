@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { newApprovalToken, approvalLink, monthLabel } from "@/lib/approval";
-import { sendEmail, approvalEmailHtml } from "@/lib/email";
+import { sendEmail, approvalEmailHtml, emailConfigured } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -24,18 +24,37 @@ export async function POST(
     return Response.json({ error: "Cronograma sem posts" }, { status: 400 });
   }
 
+  // diagnóstico claro antes de enviar
+  const clientEmail = schedule.client.email?.trim() ?? "";
+  if (!clientEmail) {
+    return Response.json(
+      { error: "Cliente sem e-mail cadastrado. Preencha o campo e-mail no cadastro do cliente." },
+      { status: 400 }
+    );
+  }
+
   const token = schedule.approvalToken ?? newApprovalToken();
   await prisma.schedule.update({
     where: { id },
     data: { approvalToken: token, status: "enviado_cliente", sentAt: new Date() },
   });
 
-  const link = approvalLink(token);
+  const link = approvalLink(token, req.nextUrl.origin);
   const result = await sendEmail({
-    to: schedule.client.email,
+    to: clientEmail,
     subject: `Cronograma de ${monthLabel(schedule.monthRef)} para aprovação`,
     html: approvalEmailHtml(schedule.client.name, monthLabel(schedule.monthRef), link),
   });
 
-  return Response.json({ ok: true, link, emailed: result.sent, emailError: result.error ?? null });
+  return Response.json({
+    ok: true,
+    link,
+    to: clientEmail,
+    emailed: result.sent,
+    emailError: result.sent
+      ? null
+      : !emailConfigured()
+        ? "RESEND_API_KEY/RESEND_FROM não configurados no servidor"
+        : (result.error ?? null),
+  });
 }
