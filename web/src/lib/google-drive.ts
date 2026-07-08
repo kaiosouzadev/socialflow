@@ -67,8 +67,13 @@ async function getAccessToken(): Promise<string> {
   const sa = loadServiceAccount();
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const header = b64({ alg: "RS256", typ: "JWT" });
+  // Impersonação (domain-wide delegation, Workspace): com GOOGLE_IMPERSONATE_EMAIL
+  // setado, a SA age como esse usuário e os arquivos ficam na conta dele —
+  // contorna o "Service Accounts do not have storage quota" no Meu Drive.
+  const impersonate = process.env.GOOGLE_IMPERSONATE_EMAIL?.trim();
   const claim = b64({
     iss: sa.client_email,
+    ...(impersonate ? { sub: impersonate } : {}),
     // escopo com escrita: o plano básico salva as artes geradas no Drive
     scope: "https://www.googleapis.com/auth/drive",
     aud: "https://oauth2.googleapis.com/token",

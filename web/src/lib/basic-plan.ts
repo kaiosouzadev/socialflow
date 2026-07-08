@@ -101,9 +101,16 @@ function postCaptions(tpl: TemplateCaptions): Record<string, string> {
   return captions;
 }
 
-/** Instrução acionável quando o Drive nega escrita (403) — sem despejar o JSON do Google. */
+/** Instrução acionável quando o Drive nega escrita — sem despejar o JSON do Google. */
 function driveHint(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
+  if (msg.includes("storage quota") || msg.includes("storageQuota")) {
+    return (
+      "service account não pode ser dona de arquivos no Meu Drive (política do Google). " +
+      "Use um Drive COMPARTILHADO (mova a pasta de clientes pra lá e atualize DRIVE_ROOT_FOLDER_ID) " +
+      "ou configure GOOGLE_IMPERSONATE_EMAIL com delegação de domínio no Workspace"
+    );
+  }
   if (msg.includes("403")) {
     const sa = serviceAccountEmail();
     return `sem permissão de escrita no Drive — compartilhe a pasta raiz com ${sa ?? "a service account"} como EDITOR`;
