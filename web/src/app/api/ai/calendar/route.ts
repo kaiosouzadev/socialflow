@@ -20,12 +20,26 @@ const schema = z.object({
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** Mon/Wed/Fri datas do mês (3 por semana), em instantes UTC a partir do fuso -03:00. */
+/**
+ * Mon/Wed/Fri datas do mês (3 por semana), em instantes UTC a partir do fuso -03:00.
+ * Mês em andamento: só datas a partir de amanhã (nunca gera post para dia que já passou).
+ */
 function pickDates(year: number, month: number, count: number, time: string): Date[] {
   const targetWeekdays = [1, 3, 5]; // seg, qua, sex
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+  // dia de hoje no fuso SP; se o mês pedido é o corrente, começa em hoje+1
+  const spNow = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date()); // "YYYY-MM-DD"
+  const [curY, curM, curD] = spNow.split("-").map(Number);
+  const firstDay = year === curY && month === curM ? curD + 1 : 1;
+
   const days: number[] = [];
-  for (let d = 1; d <= lastDay; d++) {
+  for (let d = firstDay; d <= lastDay; d++) {
     const wd = new Date(Date.UTC(year, month - 1, d)).getUTCDay();
     if (targetWeekdays.includes(wd)) days.push(d);
   }
@@ -76,6 +90,12 @@ export async function POST(req: NextRequest) {
         : ["instagram", "facebook"];
 
   const dates = pickDates(year, mon, count, time);
+  if (dates.length === 0) {
+    return Response.json(
+      { error: "Este mês não tem mais datas futuras disponíveis. Gere o calendário do próximo mês." },
+      { status: 400 }
+    );
+  }
   const n = Math.min(count, dates.length);
 
   const monthName = new Intl.DateTimeFormat("pt-BR", {

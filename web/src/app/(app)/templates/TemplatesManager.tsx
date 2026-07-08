@@ -31,6 +31,54 @@ export default function TemplatesManager({ initial }: { initial: Template[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // gerar mês inteiro com IA (títulos + legendas padronizadas + arte-base do mês)
+  const [genMonth, setGenMonth] = useState("");
+  const [genCount, setGenCount] = useState("12");
+  const [genFile, setGenFile] = useState<File | null>(null);
+  const [genBusy, setGenBusy] = useState(false);
+  const [genMsg, setGenMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function generateMonth() {
+    if (!/^\d{4}-\d{2}$/.test(genMonth)) {
+      setGenMsg({ ok: false, text: "Mês no formato YYYY-MM (ex: 2026-08)." });
+      return;
+    }
+    if (!genFile) {
+      setGenMsg({ ok: false, text: "Selecione a arte-base do mês." });
+      return;
+    }
+    setGenBusy(true);
+    setGenMsg(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", genFile);
+      fd.append("kind", "template");
+      const up = await fetch("/api/upload", { method: "POST", body: fd });
+      const upData = await up.json();
+      if (!up.ok) throw new Error(upData?.error ?? "upload falhou");
+
+      const res = await fetch("/api/art-templates/generate-month", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          month: genMonth,
+          baseImageUrl: upData.url,
+          count: Math.max(1, Math.min(31, Number(genCount) || 12)),
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : "Falha na geração");
+
+      setGenMsg({ ok: true, text: `${data.created} artes criadas para ${genMonth} (títulos + legendas padronizadas).` });
+      setGenFile(null);
+      router.refresh();
+    } catch (e) {
+      setGenMsg({ ok: false, text: e instanceof Error ? e.message : "Erro" });
+    } finally {
+      setGenBusy(false);
+    }
+  }
+
   async function create() {
     if (!name.trim() || !file) {
       setError("Título e imagem-base são obrigatórios.");
@@ -109,6 +157,51 @@ export default function TemplatesManager({ initial }: { initial: Template[] }) {
 
   return (
     <div className="space-y-6">
+      {/* gerar mês inteiro com IA */}
+      <div className="card p-6 border-[var(--color-accent)]/30">
+        <h2 className="font-semibold mb-1 flex items-center gap-2">
+          <Icon.zap className="w-4 h-4 text-[var(--color-accent)]" />
+          Gerar mês com IA
+        </h2>
+        <p className="text-xs text-[var(--color-text-faint)] mb-4">
+          Igual ao calendário dos clientes completos: a IA cria os títulos do mês e as legendas
+          padronizadas, todos usando a arte-base do mês. Datas seg/qua/sex, nunca no passado.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="label">Mês (YYYY-MM)</label>
+            <input value={genMonth} onChange={(e) => setGenMonth(e.target.value)} placeholder="2026-08" className="input" />
+          </div>
+          <div>
+            <label className="label">Qtd. de posts</label>
+            <input
+              value={genCount}
+              onChange={(e) => setGenCount(e.target.value.replace(/\D/g, "").slice(0, 2))}
+              inputMode="numeric"
+              className="input"
+            />
+          </div>
+          <div className="flex items-end gap-3">
+            <label className="btn-ghost !py-2 cursor-pointer whitespace-nowrap">
+              {genFile ? "Trocar arte-base" : "Arte-base do mês"}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={(e) => setGenFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <button onClick={generateMonth} disabled={genBusy} className="btn-primary !py-2 ml-auto">
+              {genBusy ? "Gerando..." : "Gerar"}
+            </button>
+          </div>
+        </div>
+        {genFile && <p className="text-xs text-[var(--color-text-muted)] mt-2 truncate">{genFile.name}</p>}
+        {genMsg && (
+          <p className={`mt-3 text-sm ${genMsg.ok ? "text-emerald-300" : "text-red-400"}`}>{genMsg.text}</p>
+        )}
+      </div>
+
       {/* nova arte-base */}
       <div className="card p-6">
         <h2 className="font-semibold mb-1">Nova arte do calendário básico</h2>

@@ -22,11 +22,11 @@ const schema = z.object({
   notes: z.string().max(500).optional(),
 });
 
-const GUIDE: Record<string, string> = {
-  instagram: "Instagram: envolvente, 3-6 hashtags, emojis moderados.",
-  facebook: "Facebook: explicativo, call-to-action, poucos hashtags.",
-  linkedin: "LinkedIn: profissional, foco em valor, sem excesso de emojis.",
-};
+// padrão do sistema: FB+IG compartilham a MESMA legenda; LinkedIn tem a própria
+const SHARED_GUIDE =
+  '"shared": legenda única para Facebook e Instagram (envolvente, 3-6 hashtags, emojis moderados)';
+const LINKEDIN_GUIDE =
+  '"linkedin": legenda para LinkedIn (profissional, foco em valor, sem excesso de emojis)';
 
 export async function POST(
   req: NextRequest,
@@ -77,7 +77,14 @@ export async function POST(
   if (regenLimited) return regenLimited;
 
   const targets = post.targets;
-  const guide = targets.map((t) => `- ${GUIDE[t]}`).join("\n");
+  const hasMeta = targets.includes("instagram") || targets.includes("facebook");
+  const hasLinkedin = targets.includes("linkedin");
+  const guide = [hasMeta ? `- ${SHARED_GUIDE}` : "", hasLinkedin ? `- ${LINKEDIN_GUIDE}` : ""]
+    .filter(Boolean)
+    .join("\n");
+  const jsonKeys = [hasMeta ? '"shared":"<legenda>"' : "", hasLinkedin ? '"linkedin":"<legenda>"' : ""]
+    .filter(Boolean)
+    .join(",");
   const system =
     "Você é redator de social media (pt-BR). Reescreva a legenda mantendo o tema, " +
     "variando a abordagem. Responda SOMENTE JSON.";
@@ -86,17 +93,24 @@ export async function POST(
     schedule.client.toneOfVoice ? `Tom: ${schedule.client.toneOfVoice}.` : "",
     post.theme ? `Tema: ${post.theme}.` : "",
     parsed.data.notes ? `Pedido do cliente: ${parsed.data.notes}.` : "",
-    "Reescreva uma legenda por rede:",
+    "Reescreva:",
     guide,
-    `JSON: {${targets.map((t) => `"${t}":"<legenda>"`).join(",")}}`,
+    `JSON: {${jsonKeys}}`,
   ].filter(Boolean).join("\n");
 
   let captions: Record<string, string>;
   try {
     const raw = await generateText({ model: CAPTION_MODEL, system, prompt, temperature: 0.95, json: true });
-    const data = JSON.parse(raw);
+    const data = JSON.parse(raw) as Record<string, unknown>;
     captions = {};
-    for (const t of targets) if (typeof data?.[t] === "string" && data[t].trim()) captions[t] = data[t].trim();
+    const shared = typeof data.shared === "string" && data.shared.trim() ? data.shared.trim() : "";
+    const li = typeof data.linkedin === "string" && data.linkedin.trim() ? data.linkedin.trim() : "";
+    // FB+IG sempre com a mesma legenda; LinkedIn com a própria (fallback = shared)
+    if (hasMeta && shared) {
+      if (targets.includes("instagram")) captions.instagram = shared;
+      if (targets.includes("facebook")) captions.facebook = shared;
+    }
+    if (hasLinkedin && (li || shared)) captions.linkedin = li || shared;
     if (Object.keys(captions).length === 0) throw new Error("sem conteúdo");
   } catch (e) {
     const msg = e instanceof Error ? e.message : "erro IA";

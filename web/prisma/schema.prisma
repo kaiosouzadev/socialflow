@@ -160,6 +160,8 @@ model ArtTemplate {
   // agenda no calendário do plano básico (dia do mês + hora SP "HH:mm")
   day          Int?
   time         String?  @default("18:00")
+  // legendas padronizadas (mesmas p/ todos os clientes básicos): { shared, linkedin }
+  captions     Json?
   baseImageUrl String   @map("base_image_url")
   active       Boolean  @default(true)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

@@ -60,6 +60,28 @@ function PostModal({
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
 
+  const hasMeta = post.targets.includes("instagram") || post.targets.includes("facebook");
+  const hasLinkedin = post.targets.includes("linkedin");
+  const shared = caps.instagram ?? caps.facebook ?? "";
+  // LinkedIn espelha a legenda FB+IG até ser editado
+  const [liDirty, setLiDirty] = useState(
+    () => typeof post.captions.linkedin === "string" &&
+      post.captions.linkedin !== (post.captions.instagram ?? post.captions.facebook ?? "")
+  );
+
+  function setShared(text: string) {
+    setCaps((p) => ({
+      ...p,
+      ...(post.targets.includes("instagram") ? { instagram: text } : {}),
+      ...(post.targets.includes("facebook") ? { facebook: text } : {}),
+      ...(hasLinkedin && !liDirty ? { linkedin: text } : {}),
+    }));
+  }
+  function setLinkedin(text: string) {
+    setLiDirty(true);
+    setCaps((p) => ({ ...p, linkedin: text }));
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -70,21 +92,23 @@ function PostModal({
     };
   }, [onClose]);
 
-  async function save(net: string) {
-    setBusy(net);
+  async function save() {
+    setBusy("save");
     setMsg("");
+    const captions: Record<string, string> = {};
+    for (const t of post.targets) captions[t] = caps[t] ?? "";
     const r = await fetch(`/api/aprovar/${token}/post/${post.id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "edit", captions: { [net]: caps[net] ?? "" } }),
+      body: JSON.stringify({ action: "edit", captions }),
     });
     setBusy("");
     setMsg(r.ok ? "Salvo ✓" : "Erro ao salvar");
   }
 
-  async function regen(net: string) {
+  async function regen() {
     if (editsUsed >= MAX) return;
-    setBusy(`ia-${net}`);
+    setBusy("ia");
     setMsg("");
     const r = await fetch(`/api/aprovar/${token}/post/${post.id}`, {
       method: "POST",
@@ -94,7 +118,12 @@ function PostModal({
     const d = await r.json().catch(() => null);
     setBusy("");
     if (!r.ok) { setMsg(typeof d?.error === "string" ? d.error : "Erro IA"); return; }
-    setCaps(d.captions ?? caps);
+    const next: Record<string, string> = d.captions ?? caps;
+    setCaps(next);
+    setLiDirty(
+      typeof next.linkedin === "string" &&
+        next.linkedin !== (next.instagram ?? next.facebook ?? "")
+    );
     setEditsUsed(d.aiEditsUsed ?? editsUsed + 1);
     setMsg("Nova versão gerada ✓");
   }
@@ -151,39 +180,66 @@ function PostModal({
             </div>
           )}
 
-          {/* legendas por rede */}
-          {post.targets.map((net) => (
-            <div key={net}>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)]">
-                  <BrandBadge platform={net} size={18} /> {BRAND[net]?.label ?? net}
-                </span>
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => regen(net)}
-                    disabled={busy !== "" || editsUsed >= MAX}
-                    className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline disabled:opacity-40"
-                  >
-                    <Icon.zap className="w-3.5 h-3.5" />
-                    {busy === `ia-${net}` ? "Gerando..." : "Gerar IA"}
-                  </button>
-                  <button
-                    onClick={() => save(net)}
-                    disabled={busy !== ""}
-                    className="text-xs text-[var(--color-text-muted)] hover:text-white disabled:opacity-40"
-                  >
-                    {busy === net ? "..." : "Salvar"}
-                  </button>
-                </div>
+          {/* legendas: FB+IG compartilham um campo; LinkedIn é próprio */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text-muted)]">Legendas</span>
+              <div className="flex gap-3">
+                <button
+                  onClick={regen}
+                  disabled={busy !== "" || editsUsed >= MAX}
+                  className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline disabled:opacity-40"
+                >
+                  <Icon.zap className="w-3.5 h-3.5" />
+                  {busy === "ia" ? "Gerando..." : "Gerar IA"}
+                </button>
+                <button
+                  onClick={save}
+                  disabled={busy !== ""}
+                  className="text-xs text-[var(--color-text-muted)] hover:text-white disabled:opacity-40"
+                >
+                  {busy === "save" ? "..." : "Salvar"}
+                </button>
               </div>
-              <textarea
-                value={caps[net] ?? ""}
-                onChange={(e) => setCaps((p) => ({ ...p, [net]: e.target.value }))}
-                rows={4}
-                className="input resize-none text-sm"
-              />
             </div>
-          ))}
+
+            {hasMeta && (
+              <div>
+                <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
+                  <span className="flex items-center gap-1">
+                    {post.targets.includes("facebook") && <BrandBadge platform="facebook" size={18} />}
+                    {post.targets.includes("instagram") && <BrandBadge platform="instagram" size={18} />}
+                  </span>
+                  {post.targets.includes("facebook") && post.targets.includes("instagram")
+                    ? "Facebook + Instagram (legenda única)"
+                    : BRAND[post.targets.includes("facebook") ? "facebook" : "instagram"]?.label}
+                </span>
+                <textarea
+                  value={shared}
+                  onChange={(e) => setShared(e.target.value)}
+                  rows={4}
+                  className="input resize-none text-sm"
+                />
+              </div>
+            )}
+
+            {hasLinkedin && (
+              <div>
+                <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
+                  <BrandBadge platform="linkedin" size={18} /> LinkedIn
+                  {!liDirty && hasMeta && (
+                    <span className="text-[var(--color-text-faint)] font-normal">· espelhando FB+IG</span>
+                  )}
+                </span>
+                <textarea
+                  value={caps.linkedin ?? shared}
+                  onChange={(e) => setLinkedin(e.target.value)}
+                  rows={4}
+                  className="input resize-none text-sm"
+                />
+              </div>
+            )}
+          </div>
           {msg && <p className="text-xs text-[var(--color-text-muted)]">{msg}</p>}
         </div>
       </div>

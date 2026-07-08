@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
+import { scheduleAllBasicMonths } from "@/lib/basic-plan";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +42,20 @@ export async function POST(req: NextRequest) {
 
   try {
     const client = await prisma.client.create({ data: parsed.data });
-    return Response.json(client, { status: 201 });
+
+    // cliente básico: agenda na hora o calendário de artes básicas de todos os
+    // meses disponíveis (posts draft sem arte — as imagens ficam pendentes)
+    let basicPlan: { scheduled: number } | null = null;
+    if (client.tier === "basica") {
+      try {
+        const r = await scheduleAllBasicMonths(client.id);
+        basicPlan = { scheduled: r.scheduled };
+      } catch {
+        basicPlan = null; // não bloqueia o cadastro; dá pra agendar depois na página do cliente
+      }
+    }
+
+    return Response.json({ ...client, basicPlan }, { status: 201 });
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return Response.json({ error: "Já existe um cliente com este email" }, { status: 409 });

@@ -1,7 +1,11 @@
 import type { NextRequest } from "next/server";
 import { requireAuth } from "@/lib/api-auth";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
-import { listBasicMonths, generateBasicPlanMonth } from "@/lib/basic-plan";
+import {
+  listBasicMonths,
+  scheduleBasicMonth,
+  generateBasicArtsMonth,
+} from "@/lib/basic-plan";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -23,9 +27,10 @@ export async function GET(
 
 const schema = z.object({
   month: z.string().regex(/^\d{4}-\d{2}$/),
+  // schedule = só agenda os posts (sem arte); arts = gera as artes pendentes
+  action: z.enum(["schedule", "arts"]).default("arts"),
 });
 
-/** Gera um lote de artes do mês para o cliente básico. */
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -44,10 +49,14 @@ export async function POST(
   }
 
   try {
-    const result = await generateBasicPlanMonth(id, parsed.data.month);
+    if (parsed.data.action === "schedule") {
+      const result = await scheduleBasicMonth(id, parsed.data.month);
+      return Response.json(result);
+    }
+    const result = await generateBasicArtsMonth(id, parsed.data.month);
     return Response.json(result);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Falha na geração";
+    const msg = e instanceof Error ? e.message : "Falha na operação";
     return Response.json({ error: msg }, { status: 502 });
   }
 }

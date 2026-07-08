@@ -201,6 +201,15 @@ export function driveConfigured(): boolean {
   return hasSA && !!process.env.DRIVE_ROOT_FOLDER_ID;
 }
 
+/** E-mail da service account (para instruções de compartilhamento). */
+export function serviceAccountEmail(): string | null {
+  try {
+    return loadServiceAccount().client_email;
+  } catch {
+    return null;
+  }
+}
+
 /** Acha a subpasta pelo nome; se não existir, cria. Retorna o ID. */
 export async function ensureFolder(name: string, parentId: string): Promise<string> {
   const existing = await findFolder(name, parentId);

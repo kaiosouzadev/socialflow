@@ -57,8 +57,18 @@ export default function CalendarReviewModal({
   );
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [regenerating, setRegenerating] = useState<Record<string, boolean>>({});
+  // LinkedIn editado manualmente (deixa de espelhar a legenda FB+IG)
+  const [liDirty, setLiDirty] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  const FORMATS = [
+    { value: "feed", label: "Feed" },
+    { value: "story", label: "Story" },
+    { value: "feed_story", label: "Feed + Story" },
+    { value: "carrossel", label: "Carrossel" },
+    { value: "reels", label: "Reels" },
+  ];
 
   const platforms = availablePlatforms.length ? availablePlatforms : ["instagram", "facebook"];
   const withArt = posts.filter((p) => p.mediaUrl.trim()).length;
@@ -73,10 +83,29 @@ export default function CalendarReviewModal({
   function update(uid: string, patch: Partial<ReviewPost>) {
     setPosts((prev) => prev.map((p) => (p.uid === uid ? { ...p, ...patch } : p)));
   }
-  function updateCaption(uid: string, platform: string, text: string) {
+  // legenda única FB+IG (LinkedIn espelha até ser editado)
+  function updateShared(uid: string, text: string) {
     setPosts((prev) =>
       prev.map((p) =>
-        p.uid === uid ? { ...p, captions: { ...p.captions, [platform]: text } } : p
+        p.uid === uid
+          ? {
+              ...p,
+              captions: {
+                ...p.captions,
+                instagram: text,
+                facebook: text,
+                ...(liDirty[uid] ? {} : { linkedin: text }),
+              },
+            }
+          : p
+      )
+    );
+  }
+  function updateLinkedin(uid: string, text: string) {
+    setLiDirty((d) => ({ ...d, [uid]: true }));
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.uid === uid ? { ...p, captions: { ...p.captions, linkedin: text } } : p
       )
     );
   }
@@ -92,6 +121,11 @@ export default function CalendarReviewModal({
       })
     );
   }
+  /**
+   * Regenera a postagem a partir do TÍTULO atual (mesmo fluxo da criação
+   * individual): legendas, hashtags e conteúdo refeitos para o novo título.
+   * Sem título, sorteia um tema novo (comportamento antigo).
+   */
   async function substitute(uid: string) {
     const post = posts.find((p) => p.uid === uid);
     if (!post || post.targets.length === 0) {
@@ -100,6 +134,30 @@ export default function CalendarReviewModal({
     }
     setRegenerating((r) => ({ ...r, [uid]: true }));
     setError("");
+
+    if (post.theme.trim()) {
+      // título definido pelo usuário → regenera o conteúdo a partir dele
+      const res = await fetch("/api/ai/caption", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, theme: post.theme.trim(), targets: post.targets }),
+      });
+      const data = await res.json().catch(() => null);
+      setRegenerating((r) => ({ ...r, [uid]: false }));
+      if (!res.ok) {
+        setError(typeof data?.error === "string" ? data.error : "Falha ao regenerar a postagem.");
+        return;
+      }
+      const g: Record<string, string> = data.captions ?? {};
+      const shared = g.instagram ?? g.facebook ?? "";
+      setLiDirty((d) => ({ ...d, [uid]: !!g.linkedin && g.linkedin !== shared }));
+      update(uid, {
+        captions: { instagram: shared, facebook: shared, linkedin: g.linkedin ?? shared },
+      });
+      return;
+    }
+
+    // sem título → sorteia tema novo (evitando os existentes)
     const avoid = posts.filter((p) => p.uid !== uid).map((p) => p.theme).filter(Boolean);
     const res = await fetch("/api/ai/calendar/regenerate", {
       method: "POST",
@@ -112,7 +170,6 @@ export default function CalendarReviewModal({
       setError(typeof data?.error === "string" ? data.error : "Falha ao gerar novo post.");
       return;
     }
-    // novo post: troca tema/legendas, mantém data e redes, zera a arte
     update(uid, {
       theme: data.theme ?? post.theme,
       format: data.format ?? post.format,
@@ -135,19 +192,29 @@ export default function CalendarReviewModal({
     const payload = {
       clientId,
       month,
-      posts: posts.map((p) => {
+      // "Feed + Story" vira dois posts (story 15 min depois do feed) — cada um
+      // com seu formato, casando com a convenção de mídia (N.* e Nstory.*)
+      posts: posts.flatMap((p) => {
         const captions: Record<string, string> = {};
         for (const t of p.targets) {
           const c = p.captions[t];
           if (c && c.trim()) captions[t] = c.trim();
         }
-        return {
+        const baseIso = spLocalInputToISO(p.scheduledLocal);
+        const base = {
           theme: p.theme,
           captions,
           mediaUrl: p.mediaUrl.trim(),
-          scheduledAt: spLocalInputToISO(p.scheduledLocal),
           targets: p.targets,
         };
+        if (p.format === "feed_story") {
+          const storyIso = new Date(new Date(baseIso).getTime() + 15 * 60_000).toISOString();
+          return [
+            { ...base, format: "feed", scheduledAt: baseIso },
+            { ...base, format: "story", mediaUrl: "", scheduledAt: storyIso },
+          ];
+        }
+        return [{ ...base, format: p.format, scheduledAt: baseIso }];
       }),
     };
     const res = await fetch("/api/ai/calendar/commit", {
@@ -233,13 +300,25 @@ export default function CalendarReviewModal({
                       className="input font-medium"
                     />
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
                         <label className="label">Agendar para</label>
                         <DateTimePicker
                           defaultValue={p.scheduledLocal}
                           onChange={(v) => update(p.uid, { scheduledLocal: v })}
                         />
+                      </div>
+                      <div>
+                        <label className="label">Tipo de postagem</label>
+                        <select
+                          value={p.format}
+                          onChange={(e) => update(p.uid, { format: e.target.value })}
+                          className="input"
+                        >
+                          {FORMATS.map((f) => (
+                            <option key={f.value} value={f.value}>{f.label}</option>
+                          ))}
+                        </select>
                       </div>
                       <div>
                         <label className="label flex items-center gap-2">
@@ -296,21 +375,42 @@ export default function CalendarReviewModal({
                         {p.targets.length === 0 && (
                           <p className="text-xs text-amber-300">Selecione uma rede para editar a legenda.</p>
                         )}
-                        {p.targets.map((t) => (
-                          <div key={t}>
+                        {(p.targets.includes("instagram") || p.targets.includes("facebook")) && (
+                          <div>
                             <label className="label flex items-center gap-1.5">
-                              <BrandBadge platform={t} size={16} />
-                              {BRAND[t]?.label ?? t}
+                              <span className="flex items-center gap-1">
+                                <BrandBadge platform="facebook" size={16} />
+                                <BrandBadge platform="instagram" size={16} />
+                              </span>
+                              Facebook + Instagram (legenda única)
                             </label>
                             <textarea
-                              value={p.captions[t] ?? ""}
-                              onChange={(e) => updateCaption(p.uid, t, e.target.value)}
+                              value={p.captions.instagram ?? p.captions.facebook ?? ""}
+                              onChange={(e) => updateShared(p.uid, e.target.value)}
                               rows={3}
                               className="input resize-none text-sm"
-                              placeholder={`Legenda para ${BRAND[t]?.label ?? t}`}
+                              placeholder="Legenda para Facebook e Instagram"
                             />
                           </div>
-                        ))}
+                        )}
+                        {p.targets.includes("linkedin") && (
+                          <div>
+                            <label className="label flex items-center gap-1.5">
+                              <BrandBadge platform="linkedin" size={16} />
+                              LinkedIn
+                              {!liDirty[p.uid] && (
+                                <span className="text-[var(--color-text-faint)] font-normal">· espelhando FB+IG</span>
+                              )}
+                            </label>
+                            <textarea
+                              value={p.captions.linkedin ?? p.captions.instagram ?? p.captions.facebook ?? ""}
+                              onChange={(e) => updateLinkedin(p.uid, e.target.value)}
+                              rows={3}
+                              className="input resize-none text-sm"
+                              placeholder="Legenda para LinkedIn (por padrão igual à de FB+IG)"
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
