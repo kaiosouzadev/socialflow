@@ -78,7 +78,26 @@ export default async function PostDetailPage({
         {/* Media preview */}
         <div className="lg:col-span-3">
           <div className="card overflow-hidden">
-            {mediaList.length === 0 ? (
+            {mediaList.length === 0 && post.status === "published" && post.mediaThumb ? (
+              <div className="relative aspect-square bg-black/40">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={post.mediaThumb}
+                  alt="Lembrança da publicação"
+                  className="w-full h-full object-cover"
+                />
+                <span className="absolute bottom-3 left-3 text-[11px] font-medium text-white/90 bg-black/60 backdrop-blur rounded-full px-2.5 py-1">
+                  Lembrança — arquivo original removido após 30 dias
+                </span>
+              </div>
+            ) : mediaList.length === 0 && post.status === "published" ? (
+              <div className="aspect-square bg-black/40 flex items-center justify-center">
+                <div className="text-center text-[var(--color-text-faint)] p-8">
+                  <Icon.check className="w-8 h-8 mx-auto mb-2 text-emerald-400/60" />
+                  <p className="text-sm">Publicado — arquivo removido após 30 dias</p>
+                </div>
+              </div>
+            ) : mediaList.length === 0 ? (
               <div className="aspect-square bg-black/40 flex items-center justify-center">
                 <div className="text-center text-[var(--color-text-faint)] p-8">
                   <Icon.alert className="w-8 h-8 mx-auto mb-2" />

@@ -1,10 +1,9 @@
 import type { NextRequest } from "next/server";
-import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { checkInternalKey } from "@/lib/internal-auth";
 import { decryptToken } from "@/lib/crypto";
 import { publishToPlatform, type MediaItem } from "@/lib/meta-publish";
-import { r2Configured, r2KeyFromUrl, deleteFromR2 } from "@/lib/r2";
+import { thumbFromUrl } from "@/lib/media-thumb";
 
 export const dynamic = "force-dynamic";
 // publish de vídeo/carrossel faz polling — pode levar minutos
@@ -12,7 +11,8 @@ export const maxDuration = 300;
 
 /**
  * Publica um post nas redes-alvo (chamado pelo WF-01). Grava `publications`,
- * atualiza o status do post e, no sucesso, limpa a mídia do R2.
+ * atualiza o status e salva a miniatura-lembrança. A mídia cheia PERMANECE no
+ * R2 por 30 dias (limpeza em /api/internal/cleanup-media, WF-06).
  */
 export async function POST(
   req: NextRequest,
@@ -65,17 +65,11 @@ export async function POST(
   const allOk = results.length > 0 && results.every((r) => r.ok);
 
   if (allOk) {
-    // limpa mídia do R2 + zera URLs
-    if (r2Configured()) {
-      const urls = [post.mediaUrl, ...(items?.map((i) => i.url) ?? [])].filter(Boolean) as string[];
-      for (const u of urls) {
-        const key = r2KeyFromUrl(u);
-        if (key) await deleteFromR2(key).catch(() => {});
-      }
-    }
+    // mídia fica no R2 por 30 dias (WF-06 limpa); grava a miniatura-lembrança
+    const thumb = post.mediaUrl ? await thumbFromUrl(post.mediaUrl) : null;
     await prisma.post.update({
       where: { id: postId },
-      data: { status: "published", mediaUrl: null, mediaItems: Prisma.JsonNull, lastError: null },
+      data: { status: "published", lastError: null, ...(thumb ? { mediaThumb: thumb } : {}) },
     });
   } else {
     await prisma.post.update({

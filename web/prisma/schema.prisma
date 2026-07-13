@@ -127,6 +127,9 @@ model Post {
   lastError   String?   @map("last_error")
   // arte-base que originou este post (plano básico) — evita duplicar na regeração
   artTemplateId String? @map("art_template_id") @db.Uuid
+  // "lembrança": miniatura (data URI jpeg ~15KB) gravada ao publicar; a mídia
+  // cheia fica no R2 por 30 dias e depois é excluída (não ocupa Cloudflare)
+  mediaThumb  String?   @map("media_thumb")
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   client       Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
