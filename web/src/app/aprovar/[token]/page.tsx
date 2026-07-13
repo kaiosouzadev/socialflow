@@ -41,16 +41,7 @@ export default async function ApprovalPage({
     );
   }
 
-  if (schedule.status === "aprovado_cliente") {
-    return shell(
-      <div className="card p-8 max-w-md text-center">
-        <h1 className="text-xl font-semibold mb-1">Cronograma aprovado ✓</h1>
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Obrigado! O cronograma de {monthLabel(schedule.monthRef)} já foi aprovado.
-        </p>
-      </div>
-    );
-  }
+  const approved = schedule.status === "aprovado_cliente";
 
   const posts = schedule.posts.map((p) => {
     const { day, time } = spDayTime(p.scheduledAt);
@@ -77,6 +68,7 @@ export default async function ApprovalPage({
       year={schedule.monthRef.getUTCFullYear()}
       month={schedule.monthRef.getUTCMonth()}
       posts={posts}
+      readOnly={approved}
     />
   );
 }

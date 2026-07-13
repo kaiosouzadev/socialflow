@@ -136,8 +136,15 @@ export default function TemplatesManager({ initial }: { initial: Template[] }) {
     router.refresh();
   }
 
+  // exclusão em 2 passos (mesmo padrão dos outros deletes do sistema)
+  const [removing, setRemoving] = useState<string | null>(null);
   async function remove(id: string) {
+    if (removing !== id) {
+      setRemoving(id);
+      return;
+    }
     await fetch(`/api/art-templates/${id}`, { method: "DELETE" });
+    setRemoving(null);
     router.refresh();
   }
 
@@ -312,12 +319,23 @@ export default function TemplatesManager({ initial }: { initial: Template[] }) {
                         <button onClick={() => toggle(t)} className="text-sm text-[var(--color-accent)] hover:underline">
                           {t.active ? "Desativar" : "Ativar"}
                         </button>
-                        <button
-                          onClick={() => remove(t.id)}
-                          className="text-sm text-[var(--color-text-muted)] hover:text-red-400 ml-auto flex items-center gap-1"
-                        >
-                          <Icon.trash className="w-3.5 h-3.5" /> Excluir
-                        </button>
+                        {removing === t.id ? (
+                          <span className="ml-auto flex items-center gap-2 text-sm">
+                            <button onClick={() => remove(t.id)} className="text-red-300 hover:text-red-200 font-medium">
+                              Confirmar
+                            </button>
+                            <button onClick={() => setRemoving(null)} className="text-[var(--color-text-muted)] hover:text-white">
+                              Cancelar
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => remove(t.id)}
+                            className="text-sm text-[var(--color-text-muted)] hover:text-red-400 ml-auto flex items-center gap-1"
+                          >
+                            <Icon.trash className="w-3.5 h-3.5" /> Excluir
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

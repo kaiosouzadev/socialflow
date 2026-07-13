@@ -48,10 +48,12 @@ function PostModal({
   token,
   post,
   onClose,
+  readOnly = false,
 }: {
   token: string;
   post: Post;
   onClose: () => void;
+  readOnly?: boolean;
 }) {
   const media = mediaOf(post);
   const [active, setActive] = useState(0);
@@ -184,23 +186,25 @@ function PostModal({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-[var(--color-text-muted)]">Legendas</span>
-              <div className="flex gap-3">
-                <button
-                  onClick={regen}
-                  disabled={busy !== "" || editsUsed >= MAX}
-                  className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline disabled:opacity-40"
-                >
-                  <Icon.zap className="w-3.5 h-3.5" />
-                  {busy === "ia" ? "Gerando..." : "Gerar IA"}
-                </button>
-                <button
-                  onClick={save}
-                  disabled={busy !== ""}
-                  className="text-xs text-[var(--color-text-muted)] hover:text-white disabled:opacity-40"
-                >
-                  {busy === "save" ? "..." : "Salvar"}
-                </button>
-              </div>
+              {!readOnly && (
+                <div className="flex gap-3">
+                  <button
+                    onClick={regen}
+                    disabled={busy !== "" || editsUsed >= MAX}
+                    className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline disabled:opacity-40"
+                  >
+                    <Icon.zap className="w-3.5 h-3.5" />
+                    {busy === "ia" ? "Gerando..." : "Gerar IA"}
+                  </button>
+                  <button
+                    onClick={save}
+                    disabled={busy !== ""}
+                    className="text-xs text-[var(--color-text-muted)] hover:text-white disabled:opacity-40"
+                  >
+                    {busy === "save" ? "..." : "Salvar"}
+                  </button>
+                </div>
+              )}
             </div>
 
             {hasMeta && (
@@ -218,7 +222,8 @@ function PostModal({
                   value={shared}
                   onChange={(e) => setShared(e.target.value)}
                   rows={4}
-                  className="input resize-none text-sm"
+                  readOnly={readOnly}
+                  className="input resize-none text-sm read-only:opacity-70"
                 />
               </div>
             )}
@@ -235,7 +240,8 @@ function PostModal({
                   value={caps.linkedin ?? shared}
                   onChange={(e) => setLinkedin(e.target.value)}
                   rows={4}
-                  className="input resize-none text-sm"
+                  readOnly={readOnly}
+                  className="input resize-none text-sm read-only:opacity-70"
                 />
               </div>
             )}
@@ -282,6 +288,7 @@ export default function ApprovalView({
   year,
   month,
   posts,
+  readOnly = false,
 }: {
   token: string;
   clientName: string;
@@ -289,6 +296,7 @@ export default function ApprovalView({
   year: number;
   month: number;
   posts: Post[];
+  readOnly?: boolean;
 }) {
   const [open, setOpen] = useState<Post | null>(null);
   const [approving, setApproving] = useState(false);
@@ -334,9 +342,17 @@ export default function ApprovalView({
       <div className="text-center mb-2">
         <h1 className="text-2xl font-semibold tracking-tight capitalize">{monthLabel}</h1>
         <p className="text-sm text-[var(--color-text-muted)] mt-1">
-          Olá, {clientName}! Toque em um post para ver e ajustar. {posts.length} posts no mês.
+          {readOnly
+            ? `Olá, ${clientName}! Este cronograma já foi aprovado — toque em um post para rever.`
+            : `Olá, ${clientName}! Toque em um post para ver e ajustar. ${posts.length} posts no mês.`}
         </p>
       </div>
+
+      {readOnly && (
+        <p className="text-sm text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-center">
+          Cronograma aprovado ✓ — os posts entrarão na fila de publicação nas datas marcadas.
+        </p>
+      )}
 
       <div className="card p-3 sm:p-4">
         <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-1">
@@ -368,13 +384,15 @@ export default function ApprovalView({
         </p>
       )}
 
-      <div className="sticky bottom-4 pt-2">
-        <button onClick={approve} disabled={approving} className="btn-primary w-full !py-3 text-base shadow-2xl">
-          {approving ? "Aprovando..." : "Aprovar cronograma"}
-        </button>
-      </div>
+      {!readOnly && (
+        <div className="sticky bottom-4 pt-2">
+          <button onClick={approve} disabled={approving} className="btn-primary w-full !py-3 text-base shadow-2xl">
+            {approving ? "Aprovando..." : "Aprovar cronograma"}
+          </button>
+        </div>
+      )}
 
-      {open && <PostModal token={token} post={open} onClose={() => setOpen(null)} />}
+      {open && <PostModal token={token} post={open} onClose={() => setOpen(null)} readOnly={readOnly} />}
     </div>
   );
 }

@@ -186,12 +186,13 @@ export default async function DashboardPage() {
                         <PlatformChip key={t} platform={t} />
                       ))}
                     </div>
-                    {!p.hasMedia && (
+                    {/* alertas só fazem sentido antes de publicar */}
+                    {!p.hasMedia && p.status !== "published" && (
                       <span className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
                         sem mídia
                       </span>
                     )}
-                    {!p.hasCaption && (
+                    {!p.hasCaption && p.status !== "published" && (
                       <span className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
                         sem legenda
                       </span>
