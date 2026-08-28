@@ -65,39 +65,82 @@ function Steps({ status }: { status: string }) {
 function RowItem({ row }: { row: Row }) {
   const router = useRouter();
   const [busy, setBusy] = useState("");
-  const [link, setLink] = useState(row.link);
+  // link recém-gerado pelo send() desta linha; senão usa o vindo do servidor
+  const [freshLink, setFreshLink] = useState<string | null>(null);
+  const link = freshLink ?? row.link;
   const [msg, setMsg] = useState("");
   const [ok, setOk] = useState(false);
+  const [confirmingRevert, setConfirmingRevert] = useState(false);
 
   async function send() {
     setBusy("send");
     setMsg("");
     setOk(false);
-    const r = await fetch(`/api/schedules/${row.id}/send`, { method: "POST" });
-    const d = await r.json().catch(() => null);
-    setBusy("");
-    if (!r.ok) { setMsg(typeof d?.error === "string" ? d.error : "Erro ao enviar"); return; }
-    setLink(d.link);
-    setOk(d.emailed === true);
-    setMsg(
-      d.emailed
-        ? `E-mail enviado para ${d.to ?? "o cliente"}`
-        : `E-mail NÃO enviado: ${d.emailError ?? "erro desconhecido"} — copie o link`
-    );
-    router.refresh();
+    try {
+      const r = await fetch(`/api/schedules/${row.id}/send`, { method: "POST" });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) { setMsg(typeof d?.error === "string" ? d.error : "Erro ao enviar"); return; }
+      setFreshLink(d.link);
+      setOk(d.emailed === true);
+      setMsg(
+        d.emailed
+          ? `E-mail enviado para ${d.to ?? "o cliente"}`
+          : `E-mail NÃO enviado: ${d.emailError ?? "erro desconhecido"} — copie o link`
+      );
+      router.refresh();
+    } catch {
+      setMsg("Falha de conexão ao enviar. Tente novamente.");
+    } finally {
+      setBusy("");
+    }
   }
 
   async function approveInternal() {
     setBusy("appr");
     setMsg("");
-    const r = await fetch(`/api/schedules/${row.id}/approve-internal`, { method: "POST" });
-    setBusy("");
-    if (r.ok) router.refresh();
-    else setMsg("Erro ao aprovar");
+    try {
+      const r = await fetch(`/api/schedules/${row.id}/approve-internal`, { method: "POST" });
+      if (r.ok) {
+        router.refresh();
+      } else {
+        const d = await r.json().catch(() => null);
+        setMsg(typeof d?.error === "string" ? d.error : "Erro ao aprovar");
+      }
+    } catch {
+      setMsg("Falha de conexão ao aprovar. Tente novamente.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function revert() {
+    setBusy("revert");
+    setMsg("");
+    try {
+      const r = await fetch(`/api/schedules/${row.id}/revert`, { method: "POST" });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) {
+        setMsg(typeof d?.error === "string" ? d.error : "Erro ao reverter");
+        return;
+      }
+      setMsg(
+        `Aprovação revertida — ${d.reverted ?? 0} post(s) voltaram para rascunho.`
+      );
+      router.refresh();
+    } catch {
+      setMsg("Falha de conexão ao reverter. Tente novamente.");
+    } finally {
+      setBusy("");
+      setConfirmingRevert(false);
+    }
   }
 
   function copy() {
-    if (link) { navigator.clipboard.writeText(link); setOk(true); setMsg("Link copiado"); }
+    if (!link) return;
+    navigator.clipboard
+      ?.writeText(link)
+      .then(() => { setOk(true); setMsg("Link copiado"); })
+      .catch(() => { setOk(false); setMsg("Não foi possível copiar — abra o link e copie da barra."); });
   }
 
   const done = row.status === "aprovado_cliente";
@@ -163,10 +206,42 @@ function RowItem({ row }: { row: Row }) {
               {busy === "appr" ? "..." : "Aprovar interno"}
             </button>
           )}
-          {done && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
-              <Icon.check className="w-4 h-4" /> Concluído
-            </span>
+          {done && !confirmingRevert && (
+            <>
+              <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
+                <Icon.check className="w-4 h-4" /> Concluído
+              </span>
+              <button
+                onClick={() => setConfirmingRevert(true)}
+                disabled={busy !== ""}
+                title="Volta o cronograma para edição e tira da fila os posts ainda não publicados"
+                className="btn-ghost !py-2 text-xs inline-flex items-center gap-1.5"
+              >
+                <Icon.refresh className="w-3.5 h-3.5" />
+                Reverter aprovação
+              </button>
+            </>
+          )}
+          {done && confirmingRevert && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-[var(--color-text-muted)]">
+                Tirar da fila os posts não publicados?
+              </span>
+              <button
+                onClick={revert}
+                disabled={busy !== ""}
+                className="font-medium text-amber-300 hover:text-amber-200"
+              >
+                {busy === "revert" ? "Revertendo..." : "Reverter"}
+              </button>
+              <button
+                onClick={() => setConfirmingRevert(false)}
+                disabled={busy !== ""}
+                className="text-[var(--color-text-muted)] hover:text-white"
+              >
+                Cancelar
+              </button>
+            </div>
           )}
         </div>
       </div>

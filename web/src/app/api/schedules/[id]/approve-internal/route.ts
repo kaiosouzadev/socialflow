@@ -16,8 +16,14 @@ export async function POST(
   if (denied) return denied;
 
   const { id } = await params;
-  const schedule = await prisma.schedule.findUnique({ where: { id }, select: { id: true } });
+  const schedule = await prisma.schedule.findUnique({
+    where: { id },
+    select: { id: true, status: true },
+  });
   if (!schedule) return Response.json({ error: "Cronograma não encontrado" }, { status: 404 });
+  if (schedule.status === "aprovado_cliente") {
+    return Response.json({ error: "Cronograma já aprovado" }, { status: 409 });
+  }
 
   const [, posts] = await prisma.$transaction([
     prisma.schedule.update({

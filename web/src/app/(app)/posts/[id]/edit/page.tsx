@@ -34,9 +34,13 @@ export default async function EditPostPage({
     new Set(post.client.socialAccounts.map((a) => a.platform))
   );
 
+  const rawSlides = Array.isArray(post.slides)
+    ? (post.slides as { text?: string }[]).map((s) => s?.text ?? "").filter(Boolean)
+    : [];
+
   return (
-    <div className="p-8 max-w-2xl mx-auto animate-fade-up">
-      <PageHeader title="Editar post" back="/posts" />
+    <div className="p-8 max-w-6xl mx-auto animate-fade-up">
+      <PageHeader title="Revisar e editar post" back="/posts" />
       <EditPostForm
         post={{
           id: post.id,
@@ -50,6 +54,7 @@ export default async function EditPostPage({
           scheduledAt: post.scheduledAt.toISOString(),
           targets: post.targets,
           status: post.status,
+          slides: rawSlides,
         }}
         availablePlatforms={availablePlatforms}
       />

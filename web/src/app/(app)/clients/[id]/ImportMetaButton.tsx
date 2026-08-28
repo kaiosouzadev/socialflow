@@ -30,20 +30,25 @@ export default function ImportMetaButton({
   const [connectingId, setConnectingId] = useState("");
   const [query, setQuery] = useState("");
 
-  async function loadAssets(id: string) {
+  async function loadAssets(id: string, refresh = false) {
     setConnId(id);
     setAssets(null);
     setError("");
     if (!id) return;
     setLoading(true);
-    const res = await fetch(`/api/meta/connections/${id}/assets`);
-    const data = await res.json().catch(() => null);
-    setLoading(false);
-    if (!res.ok) {
-      setError(typeof data?.error === "string" ? data.error : "Falha ao listar ativos.");
-      return;
+    try {
+      const res = await fetch(`/api/meta/connections/${id}/assets${refresh ? "?refresh=1" : ""}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(typeof data?.error === "string" ? data.error : "Falha ao listar ativos.");
+        return;
+      }
+      setAssets(data.assets ?? []);
+    } catch {
+      setError("Falha de conexão ao listar as páginas. Tente novamente.");
+    } finally {
+      setLoading(false);
     }
-    setAssets(data.assets ?? []);
   }
 
   // load assets for the preselected connection as soon as the modal opens.
@@ -74,25 +79,30 @@ export default function ImportMetaButton({
   async function connect(a: Asset) {
     setConnectingId(a.pageId);
     setError("");
-    const res = await fetch("/api/meta/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        clientId,
-        connectionId: connId,
-        pageId: a.pageId,
-        connectFacebook: true,
-        connectInstagram: !!a.instagramId,
-      }),
-    });
-    const data = await res.json().catch(() => null);
-    setConnectingId("");
-    if (!res.ok) {
-      setError(typeof data?.error === "string" ? data.error : "Falha ao conectar.");
-      return;
+    try {
+      const res = await fetch("/api/meta/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId,
+          connectionId: connId,
+          pageId: a.pageId,
+          connectFacebook: true,
+          connectInstagram: !!a.instagramId,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(typeof data?.error === "string" ? data.error : "Falha ao conectar.");
+        return;
+      }
+      close();
+      router.refresh();
+    } catch {
+      setError("Falha de conexão ao vincular. Tente novamente.");
+    } finally {
+      setConnectingId("");
     }
-    close();
-    router.refresh();
   }
 
   const filtered =
@@ -172,14 +182,24 @@ export default function ImportMetaButton({
                   </div>
 
                   {assets && assets.length > 0 && (
-                    <div className="relative">
-                      <Icon.search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-faint)] pointer-events-none" />
-                      <input
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Buscar página…"
-                        className="input pl-9"
-                      />
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <Icon.search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-faint)] pointer-events-none" />
+                        <input
+                          value={query}
+                          onChange={(e) => setQuery(e.target.value)}
+                          placeholder="Buscar página…"
+                          className="input pl-9"
+                        />
+                      </div>
+                      <button
+                        onClick={() => loadAssets(connId, true)}
+                        disabled={loading}
+                        title="Buscar a lista atualizada no Meta"
+                        className="btn-ghost !py-2.5 shrink-0"
+                      >
+                        <Icon.refresh className="w-4 h-4" />
+                      </button>
                     </div>
                   )}
                 </div>
@@ -187,8 +207,9 @@ export default function ImportMetaButton({
                 {/* page list */}
                 <div className="flex-1 overflow-auto px-6 pb-6">
                   {loading && (
-                    <div className="py-10 text-center text-sm text-[var(--color-text-muted)]">
-                      Carregando páginas…
+                    <div className="py-10 flex flex-col items-center gap-3 text-sm text-[var(--color-text-muted)]">
+                      <Icon.refresh className="w-5 h-5 animate-spin text-[var(--color-accent)]" />
+                      <span>Carregando páginas do Business Manager…</span>
                     </div>
                   )}
 

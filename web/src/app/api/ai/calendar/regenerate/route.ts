@@ -2,11 +2,12 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
-import { generateText, CALENDAR_MODEL } from "@/lib/gemini";
+import { generateText, parseModelJson, CALENDAR_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const schema = z.object({
   clientId: uuidString,
@@ -18,7 +19,7 @@ const schema = z.object({
 type Idea = {
   theme?: string;
   format?: string;
-  captions?: { instagram?: string; facebook?: string; linkedin?: string };
+  captions?: { shared?: string; linkedin?: string };
 };
 
 /** Gera UMA nova ideia de post para substituir um item do calendário em revisão. */
@@ -46,9 +47,13 @@ export async function POST(req: NextRequest) {
   const system =
     "Você é um estrategista de conteúdo de social media de uma agência brasileira. " +
     "Cria ideias de post coerentes com o tom de voz do cliente. " +
+    "Facebook e Instagram usam SEMPRE a mesma legenda (uma só). " +
     "Responda SOMENTE com JSON válido, sem texto fora do JSON.";
 
-  const captionKeys = targets.map((t) => `"${t}":"<legenda ${t}>"`).join(",");
+  const hasLinkedin = targets.includes("linkedin");
+  const captionKeys = hasLinkedin
+    ? '"shared":"<legenda FB+IG>","linkedin":"<legenda LinkedIn>"'
+    : '"shared":"<legenda FB+IG>"';
   const avoidLine = avoid.length
     ? `NÃO repita nem se aproxime destes temas já usados: ${avoid.slice(0, 30).join("; ")}.`
     : "";
@@ -63,8 +68,10 @@ export async function POST(req: NextRequest) {
     avoidLine,
     "Forneça: theme (título curto do tema), ",
     "format (um de: 'feed', 'carrossel', 'reels', 'story') ",
-    "e captions: UMA legenda pronta por rede, em pt-BR, no tom do cliente, adaptada ao estilo de cada rede ",
-    "(Instagram com hashtags e emojis moderados; Facebook mais explicativo; LinkedIn profissional). ",
+    "e captions: 'shared' é UMA legenda única pronta usada igual no Facebook e no Instagram ",
+    "(envolvente, call-to-action, 3-6 hashtags, emojis moderados)",
+    hasLinkedin ? "; 'linkedin' é a versão profissional para o LinkedIn" : "",
+    ". Tudo em pt-BR, no tom do cliente. ",
     `Responda em JSON no formato: {"theme":"...","format":"...","captions":{${captionKeys}}}.`,
   ].join("");
 
@@ -76,21 +83,28 @@ export async function POST(req: NextRequest) {
       prompt,
       temperature: 0.95,
       json: true,
+      maxOutputTokens: 8192,
     });
-    const data = JSON.parse(raw);
+    const data = parseModelJson<Record<string, unknown>>(raw);
     // aceita tanto {theme,...} quanto {posts:[{...}]}
-    idea = Array.isArray(data) ? data[0] : data.posts ? data.posts[0] : data;
+    const cand = Array.isArray(data) ? data[0] : (data.posts as Idea[] | undefined)?.[0] ?? data;
+    idea = cand as Idea;
     if (!idea || typeof idea !== "object") throw new Error("formato inesperado");
   } catch (e) {
+    console.error("[ai/calendar/regenerate]", e);
     const msg = e instanceof Error ? e.message : "Erro ao gerar a ideia";
     return Response.json({ error: `IA: ${msg}` }, { status: 502 });
   }
 
+  // FB+IG com a mesma legenda; LinkedIn a própria (fallback shared)
   const captions: Record<string, string> = {};
-  for (const t of targets) {
-    const c = idea.captions?.[t as keyof typeof idea.captions];
-    if (typeof c === "string" && c.trim()) captions[t] = c.trim();
+  const shared = typeof idea.captions?.shared === "string" ? idea.captions.shared.trim() : "";
+  const li = typeof idea.captions?.linkedin === "string" ? idea.captions.linkedin.trim() : "";
+  if (shared) {
+    if (targets.includes("instagram")) captions.instagram = shared;
+    if (targets.includes("facebook")) captions.facebook = shared;
   }
+  if (targets.includes("linkedin") && (li || shared)) captions.linkedin = li || shared;
 
   return Response.json(
     {

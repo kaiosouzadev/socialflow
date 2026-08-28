@@ -33,9 +33,29 @@ export default async function PostDetailPage({
   const isDraft = post.status === "draft";
 
   const capMap = (post.captions as Record<string, string> | null) ?? {};
-  const captionEntries = post.targets
-    .map((t) => ({ platform: t, text: capMap[t] ?? "" }))
-    .filter((e) => e.text.trim());
+  // FB+IG usam legenda única no sistema: quando o texto é o mesmo, mostra um
+  // bloco só ("Facebook + Instagram") em vez de repetir a legenda duas vezes.
+  const captionEntries: { platforms: string[]; label: string; text: string }[] = [];
+  const igText = post.targets.includes("instagram") ? (capMap.instagram ?? "").trim() : "";
+  const fbText = post.targets.includes("facebook") ? (capMap.facebook ?? "").trim() : "";
+  if (igText && fbText && igText === fbText) {
+    captionEntries.push({
+      platforms: ["facebook", "instagram"],
+      label: "Facebook + Instagram",
+      text: igText,
+    });
+  } else {
+    if (fbText) captionEntries.push({ platforms: ["facebook"], label: BRAND.facebook?.label ?? "Facebook", text: fbText });
+    if (igText) captionEntries.push({ platforms: ["instagram"], label: BRAND.instagram?.label ?? "Instagram", text: igText });
+  }
+  const liText = post.targets.includes("linkedin") ? (capMap.linkedin ?? "").trim() : "";
+  if (liText) {
+    captionEntries.push({ platforms: ["linkedin"], label: BRAND.linkedin?.label ?? "LinkedIn", text: liText });
+  }
+
+  const slides = Array.isArray(post.slides)
+    ? (post.slides as { text?: string }[]).map((s) => s?.text ?? "").filter(Boolean)
+    : [];
 
   // mídia: carrossel (mediaItems) ou single (mediaUrl)
   const rawItems = Array.isArray(post.mediaItems) ? (post.mediaItems as { url: string; type?: string }[]) : [];
@@ -67,7 +87,10 @@ export default async function PostDetailPage({
               </Link>
               {post.client.tier === "basica" && <GenerateArtButton postId={post.id} />}
               {isDraft && (
-                <ApprovePostButton postId={post.id} hasMedia={!!post.mediaUrl} />
+                <ApprovePostButton
+                  postId={post.id}
+                  hasMedia={!!post.mediaUrl || mediaList.length > 0}
+                />
               )}
             </div>
           )
@@ -133,11 +156,15 @@ export default async function PostDetailPage({
             {captionEntries.length > 0 ? (
               <div className="p-5 border-t border-[var(--color-border)] space-y-4">
                 {captionEntries.map((e) => (
-                  <div key={e.platform}>
+                  <div key={e.label}>
                     <div className="flex items-center gap-2 mb-1.5">
-                      <BrandBadge platform={e.platform} size={20} />
+                      <span className="flex items-center gap-1">
+                        {e.platforms.map((p) => (
+                          <BrandBadge key={p} platform={p} size={20} />
+                        ))}
+                      </span>
                       <p className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider">
-                        {BRAND[e.platform]?.label ?? e.platform}
+                        {e.label}
                       </p>
                     </div>
                     <p className="text-sm whitespace-pre-wrap leading-relaxed">{e.text}</p>
@@ -195,6 +222,30 @@ export default async function PostDetailPage({
               </div>
             )}
           </div>
+
+          {/* Roteiro por tela (carrossel/reels) */}
+          {slides.length > 0 && (
+            <div className="card overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-[var(--color-border)]">
+                <h2 className="font-semibold text-sm">
+                  {post.format === "reels" ? "Telas do reels" : "Páginas do carrossel"}
+                  <span className="ml-2 text-xs font-normal text-[var(--color-text-faint)]">
+                    {slides.length} {slides.length === 1 ? "tela" : "telas"}
+                  </span>
+                </h2>
+              </div>
+              <div className="divide-y divide-[var(--color-border)]">
+                {slides.map((text, i) => (
+                  <div key={i} className="px-5 py-3 flex gap-3">
+                    <span className="shrink-0 text-xs font-semibold text-[var(--color-accent)] mt-0.5">
+                      Arte {i + 1}
+                    </span>
+                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{text}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Publications history */}
           <div className="card overflow-hidden">

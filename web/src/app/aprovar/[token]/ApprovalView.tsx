@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
 import { Icon } from "@/components/Icons";
 
-const MAX = 5;
 const FMT: Record<string, string> = { feed: "Feed", story: "Story", carrossel: "Carrossel", reels: "Reels" };
 const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
@@ -20,6 +19,7 @@ type Post = {
   day: number;
   time: string;
   aiEditsUsed: number;
+  slides: string[];
 };
 
 function isVid(u: string) {
@@ -34,12 +34,29 @@ function mediaOf(post: Post) {
       : [];
 }
 
-function Thumb({ url, className = "" }: { url: string; className?: string }) {
+function Thumb({
+  url,
+  className = "",
+  playable = false,
+}: {
+  url: string;
+  className?: string;
+  playable?: boolean;
+}) {
   if (isVid(url)) {
-    return <video src={url} muted className={`object-cover ${className}`} />;
+    return (
+      <video
+        src={url}
+        muted={!playable}
+        controls={playable}
+        playsInline
+        preload="metadata"
+        className={`object-cover ${className}`}
+      />
+    );
   }
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={url} alt="" className={`object-cover ${className}`} />;
+  return <img src={url} alt="" loading="lazy" className={`object-cover ${className}`} />;
 }
 
 /* --------------------------- modal de detalhe --------------------------- */
@@ -48,17 +65,18 @@ function PostModal({
   token,
   post,
   onClose,
+  onSaved,
   readOnly = false,
 }: {
   token: string;
   post: Post;
   onClose: () => void;
+  onSaved: (postId: string, captions: Record<string, string>) => void;
   readOnly?: boolean;
 }) {
   const media = mediaOf(post);
   const [active, setActive] = useState(0);
   const [caps, setCaps] = useState<Record<string, string>>(post.captions);
-  const [editsUsed, setEditsUsed] = useState(post.aiEditsUsed);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -97,37 +115,26 @@ function PostModal({
   async function save() {
     setBusy("save");
     setMsg("");
-    const captions: Record<string, string> = {};
-    for (const t of post.targets) captions[t] = caps[t] ?? "";
-    const r = await fetch(`/api/aprovar/${token}/post/${post.id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "edit", captions }),
-    });
-    setBusy("");
-    setMsg(r.ok ? "Salvo ✓" : "Erro ao salvar");
-  }
-
-  async function regen() {
-    if (editsUsed >= MAX) return;
-    setBusy("ia");
-    setMsg("");
-    const r = await fetch(`/api/aprovar/${token}/post/${post.id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "regenerate" }),
-    });
-    const d = await r.json().catch(() => null);
-    setBusy("");
-    if (!r.ok) { setMsg(typeof d?.error === "string" ? d.error : "Erro IA"); return; }
-    const next: Record<string, string> = d.captions ?? caps;
-    setCaps(next);
-    setLiDirty(
-      typeof next.linkedin === "string" &&
-        next.linkedin !== (next.instagram ?? next.facebook ?? "")
-    );
-    setEditsUsed(d.aiEditsUsed ?? editsUsed + 1);
-    setMsg("Nova versão gerada ✓");
+    try {
+      const captions: Record<string, string> = {};
+      for (const t of post.targets) captions[t] = caps[t] ?? "";
+      const r = await fetch(`/api/aprovar/${token}/post/${post.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "edit", captions }),
+      });
+      if (r.ok) {
+        onSaved(post.id, captions);
+        setMsg("Salvo ✓");
+      } else {
+        const d = await r.json().catch(() => null);
+        setMsg(typeof d?.error === "string" ? d.error : "Erro ao salvar");
+      }
+    } catch {
+      setMsg("Falha de conexão ao salvar. Tente novamente.");
+    } finally {
+      setBusy("");
+    }
   }
 
   return (
@@ -147,7 +154,6 @@ function PostModal({
               {FMT[post.format] ?? post.format} · dia {post.day} · {post.time}
             </p>
           </div>
-          <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">{editsUsed}/{MAX} IA</span>
           <button
             onClick={onClose}
             aria-label="Fechar"
@@ -162,7 +168,7 @@ function PostModal({
           {media[0] && (
             <div className="space-y-2">
               <div className="rounded-xl overflow-hidden bg-black/40 aspect-square flex items-center justify-center">
-                <Thumb url={media[active]?.url ?? media[0].url} className="w-full h-full" />
+                <Thumb url={media[active]?.url ?? media[0].url} playable className="w-full h-full" />
               </div>
               {media.length > 1 && (
                 <div className="flex gap-2 overflow-x-auto pb-1">
@@ -182,28 +188,37 @@ function PostModal({
             </div>
           )}
 
+          {/* roteiro das telas (carrossel/reels ainda sem arte final) */}
+          {post.slides.length > 0 && (
+            <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] overflow-hidden">
+              <p className="px-4 py-2 text-xs font-medium text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
+                {post.format === "reels" ? "Telas do reels" : "Páginas do carrossel"}
+              </p>
+              <div className="divide-y divide-[var(--color-border)]">
+                {post.slides.map((s, i) => (
+                  <div key={i} className="px-4 py-2.5 flex gap-2.5">
+                    <span className="shrink-0 text-[11px] font-semibold text-[var(--color-accent)] mt-0.5">
+                      {i + 1}
+                    </span>
+                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{s}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* legendas: FB+IG compartilham um campo; LinkedIn é próprio */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-[var(--color-text-muted)]">Legendas</span>
               {!readOnly && (
-                <div className="flex gap-3">
-                  <button
-                    onClick={regen}
-                    disabled={busy !== "" || editsUsed >= MAX}
-                    className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline disabled:opacity-40"
-                  >
-                    <Icon.zap className="w-3.5 h-3.5" />
-                    {busy === "ia" ? "Gerando..." : "Gerar IA"}
-                  </button>
-                  <button
-                    onClick={save}
-                    disabled={busy !== ""}
-                    className="text-xs text-[var(--color-text-muted)] hover:text-white disabled:opacity-40"
-                  >
-                    {busy === "save" ? "..." : "Salvar"}
-                  </button>
-                </div>
+                <button
+                  onClick={save}
+                  disabled={busy !== ""}
+                  className="text-xs font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40"
+                >
+                  {busy === "save" ? "Salvando..." : "Salvar alterações"}
+                </button>
               )}
             </div>
 
@@ -221,9 +236,9 @@ function PostModal({
                 <textarea
                   value={shared}
                   onChange={(e) => setShared(e.target.value)}
-                  rows={4}
+                  rows={7}
                   readOnly={readOnly}
-                  className="input resize-none text-sm read-only:opacity-70"
+                  className="input resize-y min-h-24 text-sm leading-relaxed read-only:opacity-70"
                 />
               </div>
             )}
@@ -239,9 +254,9 @@ function PostModal({
                 <textarea
                   value={caps.linkedin ?? shared}
                   onChange={(e) => setLinkedin(e.target.value)}
-                  rows={4}
+                  rows={5}
                   readOnly={readOnly}
-                  className="input resize-none text-sm read-only:opacity-70"
+                  className="input resize-y min-h-20 text-sm leading-relaxed read-only:opacity-70"
                 />
               </div>
             )}
@@ -287,7 +302,7 @@ export default function ApprovalView({
   monthLabel,
   year,
   month,
-  posts,
+  posts: initialPosts,
   readOnly = false,
 }: {
   token: string;
@@ -298,18 +313,37 @@ export default function ApprovalView({
   posts: Post[];
   readOnly?: boolean;
 }) {
-  const [open, setOpen] = useState<Post | null>(null);
+  // estado local: edições salvas no modal refletem ao reabrir o mesmo post
+  const [posts, setPosts] = useState<Post[]>(initialPosts);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
   const [error, setError] = useState("");
 
+  const open = openId ? posts.find((p) => p.id === openId) ?? null : null;
+
+  function handleSaved(postId: string, captions: Record<string, string>) {
+    setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, captions } : p)));
+  }
+
   async function approve() {
     setApproving(true);
     setError("");
-    const r = await fetch(`/api/aprovar/${token}/approve`, { method: "POST" });
-    setApproving(false);
-    if (!r.ok) { setError("Não foi possível aprovar. Tente novamente."); return; }
-    setApproved(true);
+    try {
+      const r = await fetch(`/api/aprovar/${token}/approve`, { method: "POST" });
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        setError(
+          typeof d?.error === "string" ? d.error : "Não foi possível aprovar. Tente novamente."
+        );
+        return;
+      }
+      setApproved(true);
+    } catch {
+      setError("Falha de conexão. Tente novamente.");
+    } finally {
+      setApproving(false);
+    }
   }
 
   if (approved) {
@@ -370,7 +404,7 @@ export default function ApprovalView({
               <div key={d} className="min-h-[3rem] flex flex-col gap-1">
                 <span className="text-[10px] sm:text-xs text-[var(--color-text-faint)] leading-none pl-0.5">{d}</span>
                 {dayPosts.map((p) => (
-                  <DayCell key={p.id} post={p} onOpen={() => setOpen(p)} />
+                  <DayCell key={p.id} post={p} onOpen={() => setOpenId(p.id)} />
                 ))}
               </div>
             );
@@ -392,7 +426,15 @@ export default function ApprovalView({
         </div>
       )}
 
-      {open && <PostModal token={token} post={open} onClose={() => setOpen(null)} readOnly={readOnly} />}
+      {open && (
+        <PostModal
+          token={token}
+          post={open}
+          onClose={() => setOpenId(null)}
+          onSaved={handleSaved}
+          readOnly={readOnly}
+        />
+      )}
     </div>
   );
 }

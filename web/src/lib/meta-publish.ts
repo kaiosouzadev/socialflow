@@ -98,6 +98,9 @@ async function publishInstagram(
   const url = post.mediaUrl;
   if (!url) throw new Error("post sem mídia");
   const video = isVideoUrl(url);
+  if (post.format === "reels" && !video) {
+    throw new Error("reels exige vídeo (mp4/mov) — a mídia atual é imagem");
+  }
 
   let creationId: string;
   if (post.format === "story") {
@@ -139,6 +142,9 @@ async function publishFacebook(
   const url = post.mediaUrl;
   if (!url) throw new Error("post sem mídia");
   const video = isVideoUrl(url);
+  if (post.format === "reels" && !video) {
+    throw new Error("reels exige vídeo (mp4/mov) — a mídia atual é imagem");
+  }
 
   // STORY no Facebook (Page Stories API)
   if (post.format === "story") {

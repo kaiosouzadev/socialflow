@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { generateText, CAPTION_MODEL } from "@/lib/gemini";
+import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { MAX_AI_EDITS } from "@/lib/approval";
 import { z } from "zod";
@@ -53,6 +53,10 @@ export async function POST(
     where: { id: postId, scheduleId: schedule.id },
   });
   if (!post) return Response.json({ error: "Post não encontrado" }, { status: 404 });
+  // pós-reversão o link reabre, mas post já publicado não muda mais
+  if (post.status === "published" || post.status === "publishing") {
+    return Response.json({ error: "Este post já foi publicado e não pode ser alterado" }, { status: 409 });
+  }
 
   // marca em revisão na primeira mexida
   const markReview = schedule.status === "enviado_cliente"
@@ -100,8 +104,15 @@ export async function POST(
 
   let captions: Record<string, string>;
   try {
-    const raw = await generateText({ model: CAPTION_MODEL, system, prompt, temperature: 0.95, json: true });
-    const data = JSON.parse(raw) as Record<string, unknown>;
+    const raw = await generateText({
+      model: CAPTION_MODEL,
+      system,
+      prompt,
+      temperature: 0.95,
+      json: true,
+      maxOutputTokens: 8192,
+    });
+    const data = parseModelJson<Record<string, unknown>>(raw);
     captions = {};
     const shared = typeof data.shared === "string" && data.shared.trim() ? data.shared.trim() : "";
     const li = typeof data.linkedin === "string" && data.linkedin.trim() ? data.linkedin.trim() : "";

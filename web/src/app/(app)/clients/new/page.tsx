@@ -10,39 +10,57 @@ export default function NewClientPage() {
   const router = useRouter();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [tier, setTier] = useState("completa");
+  const [brandColor, setBrandColor] = useState("#7c5cff");
+  const [showContacts, setShowContacts] = useState(false);
+
+  const isBasica = tier === "basica";
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError("");
     setLoading(true);
 
-    const data = Object.fromEntries(new FormData(e.currentTarget));
+    const data: Record<string, unknown> = Object.fromEntries(new FormData(e.currentTarget));
     // não enviar campos opcionais vazios (evita gravar string em branco)
-    for (const k of ["toneOfVoice", "driveFolderId"]) {
-      if (typeof data[k] === "string" && !data[k].trim()) delete data[k];
+    for (const k of ["toneOfVoice", "driveFolderId", "whatsapp", "phone", "website", "instagramUrl", "city"]) {
+      if (typeof data[k] === "string" && !(data[k] as string).trim()) delete data[k];
+    }
+    if (isBasica) {
+      data.brandColor = brandColor;
+      data.showContacts = showContacts;
+    } else {
+      // gestão completa não usa os campos de marca/contatos da arte por IA
+      for (const k of ["brandColor", "showContacts", "whatsapp", "phone", "website", "instagramUrl", "city"]) {
+        delete data[k];
+      }
     }
 
-    const res = await fetch("/api/clients", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
+    try {
+      const res = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
 
-    setLoading(false);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setError(
+          typeof body?.error === "string"
+            ? body.error
+            : "Não foi possível criar o cliente. Verifique os dados."
+        );
+        return;
+      }
 
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      setError(
-        typeof body?.error === "string"
-          ? body.error
-          : "Não foi possível criar o cliente. Verifique os dados."
-      );
-      return;
+      const client = await res.json();
+      router.push(`/clients/${client.id}`);
+      router.refresh();
+    } catch {
+      setError("Falha de conexão ao criar o cliente. Tente novamente.");
+    } finally {
+      setLoading(false);
     }
-
-    const client = await res.json();
-    router.push(`/clients/${client.id}`);
-    router.refresh();
   }
 
   return (
@@ -76,14 +94,15 @@ export default function NewClientPage() {
 
         <div>
           <label className="label">Tipo de gestão</label>
-          <select name="tier" className="input">
+          <select
+            name="tier"
+            value={tier}
+            onChange={(e) => setTier(e.target.value)}
+            className="input"
+          >
             <option value="completa">Completa (artes próprias)</option>
             <option value="basica">Básica — artes geradas por IA do calendário padrão</option>
           </select>
-          <p className="text-xs text-[var(--color-text-faint)] mt-1">
-            No plano básico, após criar o cliente configure logo, cor e contatos; as artes do
-            calendário são geradas automaticamente na página do cliente.
-          </p>
         </div>
 
         <div>
@@ -107,6 +126,73 @@ export default function NewClientPage() {
           </label>
           <DriveFolderPicker name="driveFolderId" />
         </div>
+
+        {/* campos exclusivos da gestão básica (marca + contatos da arte por IA) */}
+        {isBasica && (
+          <div className="pt-4 border-t border-[var(--color-border)] space-y-4 animate-fade-up">
+            <div>
+              <p className="text-sm font-medium">Marca (geração de arte por IA)</p>
+              <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
+                A logo é enviada depois, na página do cliente (precisa do cadastro criado).
+              </p>
+            </div>
+
+            <div>
+              <label className="label">Cor da marca</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={brandColor}
+                  onChange={(e) => setBrandColor(e.target.value)}
+                  className="h-10 w-12 rounded-lg bg-transparent border border-[var(--color-border)] cursor-pointer"
+                />
+                <input
+                  value={brandColor}
+                  onChange={(e) => setBrandColor(e.target.value)}
+                  className="input font-mono"
+                  placeholder="#7c5cff"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Exibir dados de contato na arte?</label>
+              <select
+                value={showContacts ? "sim" : "nao"}
+                onChange={(e) => setShowContacts(e.target.value === "sim")}
+                className="input"
+              >
+                <option value="nao">Não — arte sem bloco de contato</option>
+                <option value="sim">Sim — usa os contatos abaixo</option>
+              </select>
+            </div>
+
+            {showContacts && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 animate-fade-up">
+                <div>
+                  <label className="label">WhatsApp</label>
+                  <input name="whatsapp" className="input" placeholder="(11) 99999-9999" />
+                </div>
+                <div>
+                  <label className="label">Telefone</label>
+                  <input name="phone" className="input" placeholder="(11) 3333-3333" />
+                </div>
+                <div>
+                  <label className="label">Site</label>
+                  <input name="website" className="input" placeholder="www.cliente.com.br" />
+                </div>
+                <div>
+                  <label className="label">Instagram</label>
+                  <input name="instagramUrl" className="input" placeholder="instagram.com/cliente" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="label">Cidade - UF</label>
+                  <input name="city" className="input" placeholder="São Paulo - SP" />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {error && (
           <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">

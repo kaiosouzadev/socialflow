@@ -37,10 +37,23 @@ async function graph<T = unknown>(
   const proof = appSecretProof(token);
   if (proof) url.searchParams.set("appsecret_proof", proof);
 
-  const res = await fetch(url, { cache: "no-store" });
+  // uma chamada pendurada não pode travar a rota inteira
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20_000);
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: "no-store", signal: ctrl.signal });
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error("Graph API demorou demais para responder (timeout)");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    const msg = data?.error?.message ?? `HTTP ${res.status}`;
+    const msg = (data as { error?: { message?: string } })?.error?.message ?? `HTTP ${res.status}`;
     throw new Error(msg);
   }
   return data as T;
@@ -51,9 +64,28 @@ export async function validateToken(token: string): Promise<{ id: string; name: 
   return graph<{ id: string; name: string }>("/me", token, { fields: "id,name" });
 }
 
+type PageNode = {
+  id: string;
+  name: string;
+  access_token: string;
+  instagram_business_account?: { id: string; username?: string };
+};
+
+function toAsset(p: PageNode): MetaAsset {
+  return {
+    pageId: p.id,
+    pageName: p.name,
+    pageAccessToken: p.access_token,
+    instagramId: p.instagram_business_account?.id ?? null,
+    instagramUsername: p.instagram_business_account?.username ?? null,
+  };
+}
+
 /**
  * Lista as Páginas do Business + a conta IG vinculada a cada uma.
- * /me/accounts traz o token de cada Página (longa duração com System User token).
+ * O vínculo IG vem por field expansion na PRÓPRIA chamada /me/accounts
+ * (1 requisição por lote de 100 páginas) — antes era 1 requisição extra
+ * por página, o que deixava BMs grandes com 15-30s de espera.
  */
 export async function listAssets(token: string): Promise<MetaAsset[]> {
   const assets: MetaAsset[] = [];
@@ -61,38 +93,15 @@ export async function listAssets(token: string): Promise<MetaAsset[]> {
 
   do {
     const page = await graph<{
-      data: { id: string; name: string; access_token: string }[];
+      data: PageNode[];
       paging?: { cursors?: { after?: string }; next?: string };
     }>("/me/accounts", token, {
-      fields: "id,name,access_token",
+      fields: "id,name,access_token,instagram_business_account{id,username}",
       limit: "100",
       ...(after ? { after } : {}),
     });
 
-    for (const p of page.data ?? []) {
-      let igId: string | null = null;
-      let igUser: string | null = null;
-      try {
-        const ig = await graph<{
-          instagram_business_account?: { id: string; username?: string };
-        }>(`/${p.id}`, p.access_token, {
-          fields: "instagram_business_account{id,username}",
-        });
-        if (ig.instagram_business_account) {
-          igId = ig.instagram_business_account.id;
-          igUser = ig.instagram_business_account.username ?? null;
-        }
-      } catch {
-        // página sem IG vinculado ou sem permissão — segue sem IG
-      }
-      assets.push({
-        pageId: p.id,
-        pageName: p.name,
-        pageAccessToken: p.access_token,
-        instagramId: igId,
-        instagramUsername: igUser,
-      });
-    }
+    for (const p of page.data ?? []) assets.push(toAsset(p));
 
     after = page.paging?.next ? page.paging?.cursors?.after : undefined;
   } while (after);
@@ -100,8 +109,25 @@ export async function listAssets(token: string): Promise<MetaAsset[]> {
   return assets;
 }
 
-/** Acha um ativo (Página) específico pelo pageId, com o token atual. */
+/**
+ * Acha um ativo (Página) específico pelo pageId — busca direta no nó, sem
+ * varrer o Business inteiro. O page access token vem na própria resposta
+ * quando consultado com o System User token.
+ */
 export async function getAsset(token: string, pageId: string): Promise<MetaAsset | null> {
-  const all = await listAssets(token);
-  return all.find((a) => a.pageId === pageId) ?? null;
+  try {
+    const p = await graph<PageNode>(`/${pageId}`, token, {
+      fields: "id,name,access_token,instagram_business_account{id,username}",
+    });
+    if (!p?.id || !p.access_token) return null;
+    return toAsset(p);
+  } catch (e) {
+    // página inexistente/fora do Business: null (como o antigo scan). Erros de
+    // permissão/token sobem — mascará-los viraria um "não encontrada" enganoso.
+    const msg = e instanceof Error ? e.message : "";
+    if (/does not exist|cannot be loaded|Unsupported get request/i.test(msg)) {
+      return null;
+    }
+    throw e;
+  }
 }

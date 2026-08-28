@@ -22,9 +22,16 @@ function SparkleIcon({ className = "w-4 h-4" }: { className?: string }) {
 }
 
 function nextMonth() {
-  const d = new Date();
-  d.setMonth(d.getMonth() + 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  // mês corrente no fuso SP (evita o overflow de setMonth no dia 31)
+  const sp = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+  }).format(new Date()); // "YYYY-MM"
+  const [y, m] = sp.split("-").map(Number);
+  const ny = m === 12 ? y + 1 : y;
+  const nm = m === 12 ? 1 : m + 1;
+  return `${ny}-${String(nm).padStart(2, "0")}`;
 }
 
 export default function GenerateCalendarButton({ clientId }: { clientId: string }) {
@@ -39,24 +46,29 @@ export default function GenerateCalendarButton({ clientId }: { clientId: string 
   async function generate() {
     setBusy(true);
     setError("");
-    const res = await fetch("/api/ai/calendar", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId, month, time, count: 12 }),
-    });
-    const data = await res.json().catch(() => null);
-    setBusy(false);
-    if (!res.ok) {
-      setError(typeof data?.error === "string" ? data.error : "Falha ao gerar o calendário.");
-      return;
+    try {
+      const res = await fetch("/api/ai/calendar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, month, time, count: 12 }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(typeof data?.error === "string" ? data.error : "Falha ao gerar o calendário.");
+        return;
+      }
+      setOpen(false);
+      setPreview({
+        month: data.month,
+        clientName: data.clientName,
+        activePlatforms: data.activePlatforms ?? [],
+        posts: data.posts ?? [],
+      });
+    } catch {
+      setError("Falha de conexão ao gerar o calendário. Tente novamente.");
+    } finally {
+      setBusy(false);
     }
-    setOpen(false);
-    setPreview({
-      month: data.month,
-      clientName: data.clientName,
-      activePlatforms: data.activePlatforms ?? [],
-      posts: data.posts ?? [],
-    });
   }
 
   return (
@@ -68,7 +80,7 @@ export default function GenerateCalendarButton({ clientId }: { clientId: string 
 
       {open && (
         <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-10" onClick={busy ? undefined : () => setOpen(false)} />
           <div
             className="absolute right-0 mt-2 w-80 z-20 card p-5 shadow-2xl"
             style={{ backgroundColor: "var(--color-surface)" }}
@@ -99,8 +111,14 @@ export default function GenerateCalendarButton({ clientId }: { clientId: string 
               </p>
             )}
 
+            {busy && (
+              <p className="mt-3 text-xs text-[var(--color-text-muted)]">
+                Gerando os 12 posts com a IA — isso leva de 30s a 1 minuto…
+              </p>
+            )}
+
             <div className="flex gap-2 mt-4">
-              <button onClick={() => setOpen(false)} className="btn-ghost flex-1 !py-2">
+              <button onClick={() => setOpen(false)} disabled={busy} className="btn-ghost flex-1 !py-2">
                 Cancelar
               </button>
               <button onClick={generate} disabled={busy} className="btn-primary flex-1 !py-2">

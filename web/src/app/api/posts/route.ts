@@ -24,6 +24,8 @@ const createSchema = z.object({
   format: z.enum(["feed", "story", "carrossel", "reels"]).default("feed"),
   scheduledAt: z.string().datetime(),
   targets: z.array(z.enum(["instagram", "facebook", "linkedin"])).min(1),
+  // roteiro por tela (carrossel/reels)
+  slides: z.array(z.object({ text: z.string().max(2000) })).max(20).optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -33,6 +35,9 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const clientId = searchParams.get("clientId");
   const status = searchParams.get("status");
+  if (clientId && !uuidString.safeParse(clientId).success) {
+    return Response.json({ error: "clientId inválido" }, { status: 400 });
+  }
 
   const posts = await prisma.post.findMany({
     where: {
@@ -57,12 +62,13 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { mediaUrl, captions, scheduledAt, ...rest } = parsed.data;
+  const { mediaUrl, captions, scheduledAt, slides, ...rest } = parsed.data;
   try {
     const post = await prisma.post.create({
       data: {
         ...rest,
         captions: captions ? (captions as Prisma.InputJsonValue) : undefined,
+        slides: slides?.length ? (slides as unknown as Prisma.InputJsonValue) : undefined,
         mediaUrl: mediaUrl || null,
         scheduledAt: new Date(scheduledAt),
       },

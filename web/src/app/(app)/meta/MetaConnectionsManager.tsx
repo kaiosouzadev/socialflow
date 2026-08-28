@@ -29,27 +29,45 @@ function ConnectionRow({ conn }: { conn: Connection }) {
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState(false);
 
-  async function loadAssets() {
-    if (assets) {
+  async function loadAssets(refresh = false) {
+    if (assets && !refresh) {
       setOpen((v) => !v);
       return;
     }
     setLoading(true);
     setError("");
-    const res = await fetch(`/api/meta/connections/${conn.id}/assets`);
-    const data = await res.json().catch(() => null);
-    setLoading(false);
-    if (!res.ok) {
-      setError(typeof data?.error === "string" ? data.error : "Falha ao listar ativos.");
-      return;
+    try {
+      const res = await fetch(
+        `/api/meta/connections/${conn.id}/assets${refresh ? "?refresh=1" : ""}`
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(typeof data?.error === "string" ? data.error : "Falha ao listar ativos.");
+        return;
+      }
+      setAssets(data.assets ?? []);
+      setOpen(true);
+    } catch {
+      setError("Falha de conexão ao listar os ativos. Tente novamente.");
+    } finally {
+      setLoading(false);
     }
-    setAssets(data.assets ?? []);
-    setOpen(true);
   }
 
   async function remove() {
-    await fetch(`/api/meta/connections/${conn.id}`, { method: "DELETE" });
-    router.refresh();
+    try {
+      const res = await fetch(`/api/meta/connections/${conn.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setError(typeof data?.error === "string" ? data.error : "Falha ao remover a conexão.");
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError("Falha de conexão ao remover. Tente novamente.");
+    } finally {
+      setConfirming(false);
+    }
   }
 
   return (
@@ -68,10 +86,20 @@ function ConnectionRow({ conn }: { conn: Connection }) {
             {conn.businessId ? ` · business ${conn.businessId}` : ""}
           </p>
         </div>
-        <button onClick={loadAssets} disabled={loading} className="btn-ghost !py-2 text-xs">
-          <Icon.users className="w-3.5 h-3.5" />
+        <button onClick={() => loadAssets()} disabled={loading} className="btn-ghost !py-2 text-xs">
+          <Icon.users className={`w-3.5 h-3.5 ${loading ? "animate-pulse" : ""}`} />
           {loading ? "Carregando..." : open ? "Ocultar ativos" : "Ver ativos"}
         </button>
+        {open && assets && (
+          <button
+            onClick={() => loadAssets(true)}
+            disabled={loading}
+            className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-white hover:bg-white/5 transition-colors"
+            title="Atualizar a lista no Meta"
+          >
+            <Icon.refresh className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+          </button>
+        )}
         {!confirming ? (
           <button
             onClick={() => setConfirming(true)}

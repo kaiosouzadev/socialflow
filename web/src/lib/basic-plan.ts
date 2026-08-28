@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
 import { generateArt } from "@/lib/art-gen";
-import { generateText, CAPTION_MODEL } from "@/lib/gemini";
+import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
 import { r2Configured, uploadToR2 } from "@/lib/r2";
 import {
   driveConfigured,
@@ -77,13 +77,22 @@ export async function genTemplateCaptions(title: string): Promise<TemplateCaptio
   ].join("\n");
 
   try {
-    const raw = await generateText({ model: CAPTION_MODEL, system, prompt, temperature: 0.9, json: true });
-    const data = JSON.parse(raw) as Record<string, unknown>;
+    const raw = await generateText({
+      model: CAPTION_MODEL,
+      system,
+      prompt,
+      temperature: 0.9,
+      json: true,
+      maxOutputTokens: 8192,
+    });
+    const data = parseModelJson<Record<string, unknown>>(raw);
     const out: TemplateCaptions = {};
     if (typeof data.shared === "string" && data.shared.trim()) out.shared = data.shared.trim();
     if (typeof data.linkedin === "string" && data.linkedin.trim()) out.linkedin = data.linkedin.trim();
     return out;
-  } catch {
+  } catch (e) {
+    // tolerante (o post pode sair sem legenda e ser editado depois), mas nunca silencioso
+    console.error(`[basic-plan] falha ao gerar legendas de "${title}":`, e);
     return {};
   }
 }
@@ -334,6 +343,13 @@ export async function generateBasicArtsMonth(
         client.driveFolderId ??
         (await findFolder(client.name, rootId)) ??
         (await ensureFolder(client.name, rootId));
+      // persiste o id resolvido para não re-consultar o Drive a cada lote
+      if (!client.driveFolderId && clientFolderId) {
+        await prisma.client.update({
+          where: { id: client.id },
+          data: { driveFolderId: clientFolderId },
+        });
+      }
       monthFolderId = await ensureFolder(monthFolderName(monthKey), clientFolderId);
     } catch (e) {
       result.warnings.push(`Drive indisponível: ${driveHint(e)}`);
@@ -354,6 +370,7 @@ export async function generateBasicArtsMonth(
         logoUrl: client.logoUrl,
         brandColor: client.brandColor,
         theme: tpl.name,
+        format: post.format,
         contacts,
       });
 

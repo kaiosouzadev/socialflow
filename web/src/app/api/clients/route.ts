@@ -14,6 +14,14 @@ const createSchema = z.object({
   tier: z.enum(["basica", "completa"]).default("completa"),
   toneOfVoice: z.string().optional(),
   driveFolderId: z.string().optional(),
+  // campos da gestão básica (marca + contatos usados na arte gerada por IA)
+  brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  showContacts: z.boolean().optional(),
+  whatsapp: z.string().max(40).optional(),
+  phone: z.string().max(40).optional(),
+  website: z.string().max(200).optional(),
+  instagramUrl: z.string().max(200).optional(),
+  city: z.string().max(120).optional(),
 });
 
 export async function GET(req: NextRequest) {

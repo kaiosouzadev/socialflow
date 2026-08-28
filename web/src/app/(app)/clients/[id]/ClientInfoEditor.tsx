@@ -206,85 +206,89 @@ export default function ClientInfoEditor({ client }: { client: Client }) {
       </div>
 
       <div className="pt-3 border-t border-[var(--color-border)] space-y-4">
-        <p className="text-sm font-medium">Marca (geração de arte)</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="label">Tipo de gestão</label>
-            <select value={tier} onChange={(e) => setTier(e.target.value)} className="input">
-              <option value="completa">Completa</option>
-              <option value="basica">Básica (arte gerada por IA)</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">Cor da marca</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={brandColor}
-                onChange={(e) => setBrandColor(e.target.value)}
-                className="h-10 w-12 rounded-lg bg-transparent border border-[var(--color-border)] cursor-pointer"
-              />
-              <input
-                value={brandColor}
-                onChange={(e) => setBrandColor(e.target.value)}
-                className="input font-mono"
-                placeholder="#7c5cff"
-              />
+        <div>
+          <label className="label">Tipo de gestão</label>
+          <select value={tier} onChange={(e) => setTier(e.target.value)} className="input">
+            <option value="completa">Completa (artes próprias)</option>
+            <option value="basica">Básica (arte gerada por IA)</option>
+          </select>
+        </div>
+
+        {/* marca/logo/contatos: só a gestão básica usa (arte gerada por IA) */}
+        {tier === "basica" && (
+          <div className="space-y-4 animate-fade-up">
+            <p className="text-sm font-medium">Marca (geração de arte)</p>
+            <div>
+              <label className="label">Cor da marca</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={brandColor}
+                  onChange={(e) => setBrandColor(e.target.value)}
+                  className="h-10 w-12 rounded-lg bg-transparent border border-[var(--color-border)] cursor-pointer"
+                />
+                <input
+                  value={brandColor}
+                  onChange={(e) => setBrandColor(e.target.value)}
+                  className="input font-mono"
+                  placeholder="#7c5cff"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="label">Exibir dados de contato na arte?</label>
+              <select
+                value={showContacts ? "sim" : "nao"}
+                onChange={(e) => setShowContacts(e.target.value === "sim")}
+                className="input"
+              >
+                <option value="nao">Não — arte sem bloco de contato</option>
+                <option value="sim">Sim — usa telefone, WhatsApp, site e Instagram do briefing</option>
+              </select>
+              {showContacts && (
+                <p className="text-xs text-[var(--color-text-faint)] mt-1">
+                  Preencha os contatos na seção &quot;Dados do cliente&quot; abaixo (telefone, WhatsApp, site, Instagram, cidade).
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="label">Logo</label>
+              <div className="flex items-center gap-4">
+                {logoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={logoUrl}
+                    alt="logo"
+                    className="w-16 h-16 rounded-xl object-contain bg-white/5 border border-[var(--color-border)]"
+                  />
+                ) : (
+                  <div className="w-16 h-16 rounded-xl bg-white/5 border border-dashed border-[var(--color-border)] flex items-center justify-center text-xs text-[var(--color-text-faint)]">
+                    sem logo
+                  </div>
+                )}
+                <label className="btn-ghost !py-2 cursor-pointer">
+                  {uploading ? "Enviando..." : logoUrl ? "Trocar logo" : "Enviar logo"}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={(e) => e.target.files?.[0] && uploadLogo(e.target.files[0])}
+                    disabled={uploading}
+                  />
+                </label>
+                {logoUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setLogoUrl("")}
+                    className="text-xs text-[var(--color-text-muted)] hover:text-red-400"
+                  >
+                    Remover
+                  </button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-        <div>
-          <label className="label">Exibir dados de contato na arte?</label>
-          <select
-            value={showContacts ? "sim" : "nao"}
-            onChange={(e) => setShowContacts(e.target.value === "sim")}
-            className="input"
-          >
-            <option value="nao">Não — arte sem bloco de contato</option>
-            <option value="sim">Sim — usa telefone, WhatsApp, site e Instagram do briefing</option>
-          </select>
-          {showContacts && (
-            <p className="text-xs text-[var(--color-text-faint)] mt-1">
-              Preencha os contatos na seção &quot;Dados do cliente&quot; abaixo (telefone, WhatsApp, site, Instagram, cidade).
-            </p>
-          )}
-        </div>
-        <div>
-          <label className="label">Logo</label>
-          <div className="flex items-center gap-4">
-            {logoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={logoUrl}
-                alt="logo"
-                className="w-16 h-16 rounded-xl object-contain bg-white/5 border border-[var(--color-border)]"
-              />
-            ) : (
-              <div className="w-16 h-16 rounded-xl bg-white/5 border border-dashed border-[var(--color-border)] flex items-center justify-center text-xs text-[var(--color-text-faint)]">
-                sem logo
-              </div>
-            )}
-            <label className="btn-ghost !py-2 cursor-pointer">
-              {uploading ? "Enviando..." : logoUrl ? "Trocar logo" : "Enviar logo"}
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                className="hidden"
-                onChange={(e) => e.target.files?.[0] && uploadLogo(e.target.files[0])}
-                disabled={uploading}
-              />
-            </label>
-            {logoUrl && (
-              <button
-                type="button"
-                onClick={() => setLogoUrl("")}
-                className="text-xs text-[var(--color-text-muted)] hover:text-red-400"
-              >
-                Remover
-              </button>
-            )}
-          </div>
-        </div>
+        )}
       </div>
 
       {error && (

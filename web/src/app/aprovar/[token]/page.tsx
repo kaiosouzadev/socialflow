@@ -57,6 +57,9 @@ export default async function ApprovalPage({
       day,
       time,
       aiEditsUsed: p.aiEditsUsed,
+      slides: Array.isArray(p.slides)
+        ? (p.slides as { text?: string }[]).map((s) => s?.text ?? "").filter(Boolean)
+        : [],
     };
   });
 

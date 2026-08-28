@@ -2,11 +2,13 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
-import { generateText, CALENDAR_MODEL } from "@/lib/gemini";
+import { generateText, parseModelJson, CALENDAR_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
+// 12 posts com legendas é a chamada de texto mais longa do app
+export const maxDuration = 120;
 
 const schema = z.object({
   clientId: uuidString,
@@ -51,7 +53,7 @@ function pickDates(year: number, month: number, count: number, time: string): Da
 type Idea = {
   theme: string;
   format?: string;
-  captions?: { instagram?: string; facebook?: string; linkedin?: string };
+  captions?: { shared?: string; linkedin?: string };
 };
 
 export async function POST(req: NextRequest) {
@@ -107,9 +109,13 @@ export async function POST(req: NextRequest) {
   const system =
     "Você é um estrategista de conteúdo de social media de uma agência brasileira. " +
     "Cria calendários editoriais mensais variados e coerentes com o tom de voz do cliente. " +
+    "Facebook e Instagram usam SEMPRE a mesma legenda (uma só). " +
     "Responda SOMENTE com JSON válido, sem texto fora do JSON.";
 
-  const captionKeys = targets.map((t) => `"${t}":"<legenda ${t}>"`).join(",");
+  const hasLinkedin = targets.includes("linkedin");
+  const captionKeys = hasLinkedin
+    ? '"shared":"<legenda FB+IG>","linkedin":"<legenda LinkedIn>"'
+    : '"shared":"<legenda FB+IG>"';
   const prompt = [
     `Cliente: ${client.name}.`,
     client.toneOfVoice ? `Tom de voz: ${client.toneOfVoice}.` : "Tom de voz: não informado, use um tom profissional e próximo.",
@@ -118,9 +124,11 @@ export async function POST(req: NextRequest) {
     `Gere EXATAMENTE ${n} ideias de post para o mês, variando os tipos de conteúdo `,
     "(educativo, bastidores, prova social/depoimento, promocional, engajamento/pergunta, dica rápida, institucional). ",
     "Evite repetir temas. Para cada post forneça: theme (título curto do tema), ",
-    "format (um de: 'feed', 'carrossel', 'reels', 'story') ",
-    "e captions: UMA legenda pronta por rede, em pt-BR, no tom do cliente, adaptada ao estilo de cada rede ",
-    "(Instagram com hashtags e emojis moderados; Facebook mais explicativo; LinkedIn profissional). ",
+    "format (um de: 'feed', 'carrossel', 'reels' — todo post ganha um story de apoio automaticamente, não gere posts só de story) ",
+    "e captions: 'shared' é UMA legenda única pronta usada igual no Facebook e no Instagram ",
+    "(envolvente, call-to-action, 3-6 hashtags, emojis moderados)",
+    hasLinkedin ? "; 'linkedin' é a versão profissional para o LinkedIn" : "",
+    ". Tudo em pt-BR, no tom do cliente. ",
     `Responda em JSON no formato: {"posts":[{"theme":"...","format":"...","captions":{${captionKeys}}}]} com ${n} itens.`,
   ].join("");
 
@@ -132,11 +140,15 @@ export async function POST(req: NextRequest) {
       prompt,
       temperature: 0.95,
       json: true,
+      // 2 tentativas × 55s + 1.5s de pausa cabem no maxDuration de 120s
+      maxOutputTokens: 32768,
+      timeoutMs: 55_000,
     });
-    const data = JSON.parse(raw);
-    ideas = Array.isArray(data) ? data : data.posts;
+    const data = parseModelJson<{ posts?: Idea[] } | Idea[]>(raw);
+    ideas = Array.isArray(data) ? data : (data.posts as Idea[]);
     if (!Array.isArray(ideas)) throw new Error("formato inesperado");
   } catch (e) {
+    console.error("[ai/calendar]", e);
     const msg = e instanceof Error ? e.message : "Erro ao gerar calendário";
     return Response.json({ error: `IA: ${msg}` }, { status: 502 });
   }
@@ -149,11 +161,17 @@ export async function POST(req: NextRequest) {
   // Preview: NÃO salva nada. Devolve os rascunhos gerados para o usuário
   // revisar/ajustar e só então aprovar (POST /api/ai/calendar/commit).
   const previewPosts = items.map((idea, i) => {
+    // FB+IG recebem a mesma legenda ('shared'); LinkedIn a própria (fallback shared)
     const captions: Record<string, string> = {};
-    for (const t of targets) {
-      const c = idea.captions?.[t as keyof typeof idea.captions];
-      if (typeof c === "string" && c.trim()) captions[t] = c.trim();
+    const shared =
+      typeof idea.captions?.shared === "string" ? idea.captions.shared.trim() : "";
+    const li =
+      typeof idea.captions?.linkedin === "string" ? idea.captions.linkedin.trim() : "";
+    if (shared) {
+      if (targets.includes("instagram")) captions.instagram = shared;
+      if (targets.includes("facebook")) captions.facebook = shared;
     }
+    if (targets.includes("linkedin") && (li || shared)) captions.linkedin = li || shared;
     return {
       theme: (idea.theme ?? `Post ${i + 1}`).slice(0, 200),
       format: idea.format ?? "feed",

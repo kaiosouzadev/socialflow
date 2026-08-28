@@ -8,6 +8,7 @@ import { Icon } from "@/components/Icons";
 import { CaptionFields } from "@/components/CaptionFields";
 import { DateTimePicker } from "@/components/DatePickers";
 import { FormatPicker } from "@/components/FormatPicker";
+import { SlidesEditor } from "@/components/SlidesEditor";
 import { spNowLocalInput, spLocalInputToISO } from "@/lib/format-date";
 
 type Client = { id: string; name: string; email: string };
@@ -38,8 +39,19 @@ function NewPostForm() {
   const [theme, setTheme] = useState("");
   const [format, setFormat] = useState("feed");
   const [captions, setCaptions] = useState<Record<string, string>>({});
+  const [slides, setSlides] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // conteúdo digitado para um cliente não pode vazar para outro — reset
+  // síncrono na troca (padrão prev-state durante o render, como CalendarFilters)
+  const [prevClientId, setPrevClientId] = useState(clientId);
+  if (clientId !== prevClientId) {
+    setPrevClientId(clientId);
+    setCaptions({});
+    setTheme("");
+    setSlides([]);
+  }
 
   // load clients once
   useEffect(() => {
@@ -105,6 +117,7 @@ function NewPostForm() {
     const captionsForTargets = Object.fromEntries(
       targets.map((t) => [t, captions[t] ?? ""]).filter(([, v]) => v)
     );
+    const hasSlides = format === "carrossel" || format === "reels";
     const data = {
       clientId,
       theme,
@@ -113,23 +126,31 @@ function NewPostForm() {
       mediaUrl: form.get("mediaUrl") as string,
       scheduledAt: spLocalInputToISO(form.get("scheduledAt") as string),
       targets,
+      slides: hasSlides ? slides.filter((s) => s.trim()).map((text) => ({ text })) : undefined,
     };
 
-    const res = await fetch("/api/posts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-
-    setSubmitting(false);
-
-    if (!res.ok) {
-      setError("Não foi possível criar o post. Verifique os campos.");
-      return;
+    try {
+      const res = await fetch("/api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        setError(
+          typeof d?.error === "string"
+            ? d.error
+            : "Não foi possível criar o post. Verifique os campos."
+        );
+        return;
+      }
+      router.push("/posts");
+      router.refresh();
+    } catch {
+      setError("Falha de conexão ao criar o post. Tente novamente.");
+    } finally {
+      setSubmitting(false);
     }
-
-    router.push("/posts");
-    router.refresh();
   }
 
   const [nowLocal] = useState(() => spNowLocalInput());
@@ -227,12 +248,12 @@ function NewPostForm() {
           </div>
 
           <div>
-            <label className="label">Formato</label>
+            <label className="label">Tipo de postagem</label>
             <FormatPicker value={format} onChange={setFormat} />
           </div>
 
           <div>
-            <label className="label">Tema</label>
+            <label className="label">Título da postagem</label>
             <input
               name="theme"
               value={theme}
@@ -242,7 +263,12 @@ function NewPostForm() {
             />
           </div>
 
+          {(format === "carrossel" || format === "reels") && (
+            <SlidesEditor format={format} slides={slides} onChange={setSlides} />
+          )}
+
           <CaptionFields
+            key={clientId}
             clientId={clientId}
             theme={theme}
             targets={targets}

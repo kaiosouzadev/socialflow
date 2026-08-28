@@ -18,17 +18,23 @@ export default function ApprovePostButton({
   async function approve() {
     setBusy(true);
     setError("");
-    const res = await fetch(`/api/posts/${postId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "scheduled" }),
-    });
-    setBusy(false);
-    if (!res.ok) {
-      setError("Não foi possível agendar.");
-      return;
+    try {
+      const res = await fetch(`/api/posts/${postId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "scheduled" }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        setError(typeof d?.error === "string" ? d.error : "Não foi possível agendar.");
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError("Falha de conexão. Tente novamente.");
+    } finally {
+      setBusy(false);
     }
-    router.refresh();
   }
 
   return (

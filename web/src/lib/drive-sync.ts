@@ -2,7 +2,9 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
 import {
   findFolder,
-  findMediaByBaseName,
+  findFolderForIndex,
+  findCarouselFilesForIndex,
+  findMediaForIndex,
   listFolderMedia,
   downloadFile,
   driveConfigured,
@@ -51,12 +53,47 @@ export type SyncResult = {
   attached: number;
   checked: number;
   skipped: { client: string; reason: string }[];
+  /** posts verificados que continuam sem arte, com o nome de arquivo esperado */
+  missing: { client: string; post: string; expected: string }[];
 };
 
 /**
+ * Numeração dos posts do mês para casar com os nomes dos arquivos no Drive:
+ * - só posts PRINCIPAIS (não-story) contam: 1, 2, 3… em ordem cronológica;
+ * - um story herda o índice do post principal anterior mais próximo (o story
+ *   sai junto do post, 15 min depois) → arquivo "Nstory.*".
+ * Assim "1.jpg", "1story.jpg", "2.jpg" casam com feed 1 + story 1 + feed 2.
+ */
+function buildMonthIndex(
+  monthPosts: { id: string; format: string; scheduledAt: Date }[]
+): Map<string, number> {
+  const byId = new Map<string, number>();
+  let mainIdx = 0;
+  let lastMainIdx = 0;
+  for (const p of monthPosts) {
+    if (p.format === "story") {
+      // sem principal anterior no mês (story avulso no dia 1): usa o próximo índice
+      byId.set(p.id, lastMainIdx > 0 ? lastMainIdx : 1);
+    } else {
+      mainIdx += 1;
+      lastMainIdx = mainIdx;
+      byId.set(p.id, mainIdx);
+    }
+  }
+  return byId;
+}
+
+/**
  * Para posts AGENDADOS sem mídia (na janela), procura a imagem correspondente
- * na pasta do cliente no Drive (cliente → mês → imagem Nº) e, se achar, grava
- * o ID do arquivo e a URL assinada de mídia. Não muda o status do post.
+ * na pasta do cliente no Drive (cliente → mês → arquivo Nº) e, se achar, grava
+ * o ID do arquivo e a URL pública. Não muda o status do post.
+ *
+ * Convenções aceitas na pasta do mês:
+ * - single (feed/reels): "N.ext" (também "03.ext", "3 - Título.ext");
+ * - story: "Nstory.ext" ("3 story", "3-story", "03_STORY"…);
+ * - carrossel: subpasta "N" com as mídias, OU arquivos "N-1.ext", "N-2.ext"…
+ *   soltos na pasta do mês (2+ arquivos).
+ * Vídeo (mp4/mov/webm) vale em qualquer um dos casos.
  */
 export async function syncMedia(opts?: {
   clientId?: string;
@@ -82,7 +119,7 @@ export async function syncMedia(opts?: {
     orderBy: { scheduledAt: "asc" },
   });
 
-  const result: SyncResult = { attached: 0, checked: eligible.length, skipped: [] };
+  const result: SyncResult = { attached: 0, checked: eligible.length, skipped: [], missing: [] };
   if (eligible.length === 0) return result;
 
   // agrupa por cliente + mês
@@ -124,25 +161,30 @@ export async function syncMedia(opts?: {
       continue;
     }
 
-    // índice de cada post dentro do mês (1-based, ordem cronológica) entre TODOS os posts do mês
+    // numeração do mês entre TODOS os posts do cliente (stories não contam —
+    // herdam o índice do post principal que os acompanha)
     const [y, m] = monthKey.split("-").map(Number);
     const monthStart = new Date(`${y}-${String(m).padStart(2, "0")}-01T00:00:00-03:00`);
     const nextMonth = new Date(`${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, "0")}-01T00:00:00-03:00`);
     const monthPosts = await prisma.post.findMany({
       where: { clientId: client.id, scheduledAt: { gte: monthStart, lt: nextMonth } },
       orderBy: { scheduledAt: "asc" },
-      select: { id: true },
+      select: { id: true, format: true, scheduledAt: true },
     });
-    const indexById = new Map(monthPosts.map((p, i) => [p.id, i + 1]));
+    const indexById = buildMonthIndex(monthPosts);
 
     for (const post of posts) {
       const idx = indexById.get(post.id);
       if (!idx) continue;
+      const label = `post ${idx}${post.theme ? ` (${post.theme.slice(0, 40)})` : ""}`;
 
       // STORY: sempre arquivo único "Nstory" (nunca vira carrossel)
       if (post.format === "story") {
-        const file = await findMediaByBaseName(monthFolderId, `${idx}story`);
-        if (!file) continue;
+        const { file } = await findMediaForIndex(monthFolderId, idx, true);
+        if (!file) {
+          result.missing.push({ client: client.name, post: label, expected: `${idx}story.*` });
+          continue;
+        }
         const mediaUrl = r2Configured()
           ? (await hostOnR2(file, client.id, post.id, 1)).url
           : mediaUrlFor(post.id);
@@ -154,30 +196,52 @@ export async function syncMedia(opts?: {
         continue;
       }
 
-      // CARROSSEL: subpasta "N" com várias mídias. Detecta mesmo se o post
-      // ainda estiver marcado como feed/reels — o Drive é a fonte da verdade
-      // do formato; se achar a subpasta, corrige format para "carrossel".
+      // CARROSSEL: subpasta "N" (ou arquivos "N-1", "N-2"… soltos). Detecta
+      // mesmo se o post estiver marcado como feed/reels — o Drive é a fonte da
+      // verdade do formato; se achar 2+ mídias, corrige format para "carrossel".
       if (r2Configured()) {
-        const subId = await findFolder(String(idx), monthFolderId);
-        if (subId) {
-          const files = await listFolderMedia(subId);
-          if (files.length > 0) {
-            const items: MediaItem[] = [];
-            for (let i = 0; i < files.length; i++) {
-              items.push(await hostOnR2(files[i], client.id, post.id, i + 1));
-            }
+        let files: DriveFile[] = [];
+        const subId = await findFolderForIndex(monthFolderId, idx);
+        if (subId) files = await listFolderMedia(subId);
+        if (files.length === 0) {
+          const loose = await findCarouselFilesForIndex(monthFolderId, idx);
+          if (loose.length >= 2) files = loose;
+        }
+        if (files.length > 0) {
+          const items: MediaItem[] = [];
+          for (let i = 0; i < files.length; i++) {
+            items.push(await hostOnR2(files[i], client.id, post.id, i + 1));
+          }
+          await prisma.post.update({
+            where: { id: post.id },
+            data: {
+              mediaItems: items as unknown as Prisma.InputJsonValue,
+              mediaUrl: items[0].url,
+              mediaDriveId: items[0].driveId,
+              ...(post.format === "carrossel" || items.length < 2 ? {} : { format: "carrossel" }),
+            },
+          });
+          result.attached++;
+          continue;
+        }
+        if (post.format === "carrossel") {
+          // sem subpasta e sem N-K: tenta arquivo único antes de reportar
+          const { file } = await findMediaForIndex(monthFolderId, idx, false);
+          if (file) {
+            const item = await hostOnR2(file, client.id, post.id, 1);
             await prisma.post.update({
               where: { id: post.id },
-              data: {
-                mediaItems: items as unknown as Prisma.InputJsonValue,
-                mediaUrl: items[0].url,
-                mediaDriveId: items[0].driveId,
-                ...(post.format === "carrossel" ? {} : { format: "carrossel" }),
-              },
+              data: { mediaDriveId: item.driveId, mediaUrl: item.url, mediaItems: Prisma.JsonNull },
             });
             result.attached++;
-            continue;
+          } else {
+            result.missing.push({
+              client: client.name,
+              post: label,
+              expected: `subpasta "${idx}" ou arquivos "${idx}-1.*", "${idx}-2.*"…`,
+            });
           }
+          continue;
         }
       } else if (post.format === "carrossel") {
         result.skipped.push({ client: client.name, reason: `carrossel (post ${idx}) requer R2 configurado` });
@@ -185,8 +249,15 @@ export async function syncMedia(opts?: {
       }
 
       // SINGLE (feed / reels): arquivo "N"
-      const file = await findMediaByBaseName(monthFolderId, String(idx));
-      if (!file) continue;
+      const { file } = await findMediaForIndex(monthFolderId, idx, false);
+      if (!file) {
+        result.missing.push({
+          client: client.name,
+          post: label,
+          expected: post.format === "reels" ? `${idx}.mp4 (vídeo)` : `${idx}.*`,
+        });
+        continue;
+      }
 
       // hospeda numa URL pública: R2 (edge) ou fallback assinado /api/media
       let mediaUrl: string;

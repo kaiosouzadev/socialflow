@@ -23,6 +23,13 @@ export async function POST(
   if (schedule._count.posts === 0) {
     return Response.json({ error: "Cronograma sem posts" }, { status: 400 });
   }
+  // reenviar um cronograma já aprovado reabriria a edição do cliente por acidente
+  if (schedule.status === "aprovado_cliente") {
+    return Response.json(
+      { error: "Cronograma já aprovado. Use 'Reverter aprovação' antes de reenviar." },
+      { status: 409 }
+    );
+  }
 
   // diagnóstico claro antes de enviar
   const clientEmail = schedule.client.email?.trim() ?? "";

@@ -18,6 +18,14 @@ const statusDot: Record<string, string> = {
   failed: "bg-red-400",
 };
 
+// tipo de postagem exibido na célula (como no cronograma da planilha)
+const FMT: Record<string, string> = {
+  feed: "Feed",
+  story: "Story",
+  carrossel: "Carrossel",
+  reels: "Reels",
+};
+
 // civil date helpers (UTC arithmetic = no DST surprises)
 function pad(n: number) {
   return String(n).padStart(2, "0");
@@ -85,7 +93,16 @@ export default async function CalendarPage({
     prisma.post.findMany({
       where,
       orderBy: { scheduledAt: "asc" },
-      include: { client: { select: { name: true } } },
+      // só o que a célula usa — sem legendas/mediaThumb (pesados) na grade
+      select: {
+        id: true,
+        status: true,
+        scheduledAt: true,
+        targets: true,
+        theme: true,
+        format: true,
+        client: { select: { name: true } },
+      },
     }),
     prisma.client.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
@@ -222,7 +239,7 @@ export default async function CalendarPage({
               <div
                 key={key}
                 className={`relative border-b border-r border-[var(--color-border)] p-2 ${
-                  view === "month" ? "min-h-[7rem]" : "min-h-[18rem]"
+                  view === "month" ? "min-h-[9rem]" : "min-h-[18rem]"
                 } ${inMonth ? "" : "opacity-40"}`}
               >
                 <div className="flex items-center justify-between mb-1.5">
@@ -258,6 +275,21 @@ export default async function CalendarPage({
                         <span className="text-[11px] font-medium truncate flex-1">
                           {p.client.name}
                         </span>
+                      </div>
+                      {/* tipo + título — espelha o cronograma da planilha */}
+                      <div className="mt-0.5 pl-2.5">
+                        <span className="text-[10px] font-semibold text-[var(--color-accent)]">
+                          {FMT[p.format] ?? p.format}
+                        </span>
+                        {p.theme && (
+                          <span
+                            className={`block text-[10px] leading-tight text-[var(--color-text-muted)] ${
+                              view === "week" ? "" : "truncate"
+                            }`}
+                          >
+                            {p.theme}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-1 mt-0.5 pl-2.5">
                         <span className="text-[10px] text-[var(--color-text-faint)]">

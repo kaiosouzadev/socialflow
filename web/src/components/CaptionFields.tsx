@@ -86,8 +86,8 @@ export function CaptionFields({
               <textarea
                 value={shared}
                 onChange={(e) => setShared(e.target.value)}
-                rows={4}
-                className="input resize-none"
+                rows={9}
+                className="input resize-y min-h-32 leading-relaxed"
                 placeholder="Legenda para Facebook e Instagram... ou gere com IA"
               />
             </div>
@@ -107,8 +107,8 @@ export function CaptionFields({
               <textarea
                 value={captions.linkedin ?? shared}
                 onChange={(e) => setLinkedin(e.target.value)}
-                rows={4}
-                className="input resize-none"
+                rows={7}
+                className="input resize-y min-h-24 leading-relaxed"
                 placeholder="Legenda para LinkedIn (por padrão igual à de Facebook/Instagram)"
               />
             </div>
