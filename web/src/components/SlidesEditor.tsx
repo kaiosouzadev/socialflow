@@ -43,33 +43,35 @@ export function SlidesEditor({
 
   return (
     <div>
-      <label className="label uppercase tracking-wider">{label}</label>
+      <label className="label">{label}</label>
 
-      <div className="flex flex-wrap items-center gap-1.5 mb-3">
-        {slides.map((_, i) => (
+      {slides.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-3">
+          {slides.map((_, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setActive(i)}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                i === current
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-white"
+                  : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-strong)]"
+              }`}
+            >
+              Slide {i + 1}
+            </button>
+          ))}
           <button
-            key={i}
             type="button"
-            onClick={() => setActive(i)}
-            className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-              i === current
-                ? "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-white"
-                : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-strong)]"
-            }`}
+            onClick={add}
+            disabled={slides.length >= MAX_SLIDES}
+            title={`Adicionar ${unit}`}
+            className="flex items-center justify-center w-8 h-8 rounded-lg border border-dashed border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors disabled:opacity-40"
           >
-            Slide {i + 1}
+            <Icon.plus className="w-4 h-4" />
           </button>
-        ))}
-        <button
-          type="button"
-          onClick={add}
-          disabled={slides.length >= MAX_SLIDES}
-          title={`Adicionar ${unit}`}
-          className="flex items-center justify-center w-8 h-8 rounded-lg border border-dashed border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors disabled:opacity-40"
-        >
-          <Icon.plus className="w-4 h-4" />
-        </button>
-      </div>
+        </div>
+      )}
 
       {slides.length === 0 ? (
         <button
@@ -77,7 +79,7 @@ export function SlidesEditor({
           onClick={add}
           className="w-full rounded-xl border border-dashed border-[var(--color-border-strong)] px-4 py-6 text-sm text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors"
         >
-          + Adicionar a primeira {unit}
+          + Adicionar {unit === "tela" ? "a primeira tela" : "o primeiro slide"}
         </button>
       ) : (
         <div>
@@ -99,7 +101,7 @@ export function SlidesEditor({
             onChange={(e) => setText(current, e.target.value)}
             rows={4}
             className="input text-sm"
-            placeholder={`Insira o conteúdo visual/textual do ${unit} aqui…`}
+            placeholder={`Insira o conteúdo visual/textual ${unit === "tela" ? "da tela" : "do slide"} aqui…`}
           />
         </div>
       )}

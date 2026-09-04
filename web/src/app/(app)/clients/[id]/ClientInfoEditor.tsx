@@ -39,6 +39,7 @@ export default function ClientInfoEditor({ client }: { client: Client }) {
   const [tier, setTier] = useState(client.tier ?? "completa");
   const [showContacts, setShowContacts] = useState(client.showContacts);
   const [uploading, setUploading] = useState(false);
+  const [toneExpanded, setToneExpanded] = useState(false);
 
   async function uploadLogo(file: File) {
     setUploading(true);
@@ -145,9 +146,22 @@ export default function ClientInfoEditor({ client }: { client: Client }) {
             <p className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider mb-1">
               Tom de voz
             </p>
-            <p className="text-sm text-[var(--color-text-muted)]">
+            {/* briefings longos não podem dominar a página — clampa em 6 linhas */}
+            <p
+              className={`text-sm text-[var(--color-text-muted)] whitespace-pre-wrap ${
+                toneExpanded ? "" : "line-clamp-6"
+              }`}
+            >
               {client.toneOfVoice || "Não definido"}
             </p>
+            {(client.toneOfVoice?.length ?? 0) > 400 && (
+              <button
+                onClick={() => setToneExpanded((v) => !v)}
+                className="mt-1 text-xs font-medium text-[var(--color-accent)] hover:underline"
+              >
+                {toneExpanded ? "Mostrar menos" : "Ver tom de voz completo"}
+              </button>
+            )}
           </div>
         </div>
       </div>

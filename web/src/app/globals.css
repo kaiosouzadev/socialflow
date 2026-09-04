@@ -208,7 +208,10 @@ body {
   }
 }
 .animate-fade-up {
-  animation: fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  /* fill-mode "backwards" (nunca "both/forwards"): manter o transform após a
+     animação transforma o elemento em containing block e QUEBRA position:fixed
+     de todos os modals descendentes quando a página está scrollada */
+  animation: fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
 @keyframes shimmer {
