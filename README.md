@@ -20,6 +20,7 @@ gera texto/calendário com IA), compartilhando um Postgres.**
 | `docs/04-METODO-DO-VIDEO.md` | Método do print/vídeo mapeado ao projeto |
 | `docs/05-MULTI-REDE-E-ESCALA.md` | 3 redes no mesmo fluxo + escala 1→todos |
 | `docs/06-SETUP-META.md` | Criar App Meta, conectar conta, gerar token |
+| `docs/07-DEV-LOCAL.md` | Rodar o `web/` na máquina para ver as telas (banco clonado) |
 
 ## Arquivos prontos para usar
 
