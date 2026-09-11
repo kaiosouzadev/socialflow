@@ -11,6 +11,8 @@ import { DateTimePicker } from "@/components/DatePickers";
 import { FormatPicker } from "@/components/FormatPicker";
 import { SlidesEditor } from "@/components/SlidesEditor";
 import { AssistantPanel } from "@/components/AssistantPanel";
+import { MediaField } from "@/components/MediaField";
+import { PostPreview } from "@/components/PostPreview";
 import { spLocalInputFromISO, spLocalInputToISO } from "@/lib/format-date";
 
 type Post = {
@@ -43,6 +45,7 @@ export default function EditPostForm({
   const [theme, setTheme] = useState(post.theme);
   const [format, setFormat] = useState(post.format || "feed");
   const [slides, setSlides] = useState<string[]>(post.slides);
+  const [mediaUrl, setMediaUrl] = useState(post.mediaUrl);
   const [scheduledLocal, setScheduledLocal] = useState(() =>
     spLocalInputFromISO(post.scheduledAt)
   );
@@ -205,9 +208,20 @@ export default function EditPostForm({
           />
 
           <div>
-            <label className="label">URL da mídia</label>
-            <input name="mediaUrl" type="url" defaultValue={post.mediaUrl} className="input" />
+            <MediaField value={mediaUrl} onChange={setMediaUrl} clientId={post.clientId} />
+            {/* o submit continua lendo o FormData, então o valor vai num hidden */}
+            <input type="hidden" name="mediaUrl" value={mediaUrl} />
           </div>
+
+          {(mediaUrl || captions.instagram || captions.facebook) && (
+            <PostPreview
+              mediaUrl={mediaUrl}
+              caption={captions.instagram ?? captions.facebook ?? ""}
+              clientName={post.clientName}
+              targets={targets}
+              format={format}
+            />
+          )}
 
           <div>
             <label className="label">Agendar para</label>

@@ -3,12 +3,20 @@ import { Prisma } from "@/generated/prisma/client";
 import Link from "next/link";
 import { PageHeader, PlatformChip } from "@/components/ui";
 import { Icon } from "@/components/Icons";
+import { clientColor } from "@/lib/client-color";
 import CalendarFilters from "./CalendarFilters";
 
 export const dynamic = "force-dynamic";
 
 const TZ = "America/Sao_Paulo";
 const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+/** Status que o cliente precisa ver de longe — o resto fica só na bolinha. */
+const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
+  failed: { label: "Falhou", cls: "text-red-200 bg-red-500/20 border-red-500/40" },
+  publishing: { label: "Publicando", cls: "text-amber-200 bg-amber-500/20 border-amber-500/40" },
+  draft: { label: "Rascunho", cls: "text-violet-200 bg-violet-500/15 border-violet-500/30" },
+};
 
 const statusDot: Record<string, string> = {
   draft: "bg-violet-400",
@@ -59,13 +67,20 @@ function weekdayOf(key: string) {
 export default async function CalendarPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string; ref?: string; clientId?: string; q?: string }>;
+  searchParams: Promise<{
+    view?: string;
+    ref?: string;
+    clientId?: string;
+    q?: string;
+    status?: string;
+  }>;
 }) {
   const sp = await searchParams;
   const view = sp.view === "week" ? "week" : "month";
   const ref = sp.ref && /^\d{4}-\d{2}-\d{2}$/.test(sp.ref) ? sp.ref : todaySpKey();
   const clientId = sp.clientId;
   const q = sp.q?.trim() ?? "";
+  const status = sp.status;
   const [ry, rm] = ref.split("-").map(Number);
 
   // build the visible cells
@@ -86,10 +101,11 @@ export default async function CalendarPage({
   const where: Prisma.PostWhereInput = {
     scheduledAt: { gte: winStart, lt: winEnd },
     ...(clientId ? { clientId } : {}),
+    ...(status ? { status } : {}),
     ...(q ? { client: { is: { name: { contains: q, mode: "insensitive" } } } } : {}),
   };
 
-  const [posts, clients] = await Promise.all([
+  const [posts, clients, failedInWindow] = await Promise.all([
     prisma.post.findMany({
       where,
       orderBy: { scheduledAt: "asc" },
@@ -101,10 +117,20 @@ export default async function CalendarPage({
         targets: true,
         theme: true,
         format: true,
-        client: { select: { name: true } },
+        clientId: true,
+        client: { select: { name: true, brandColor: true } },
       },
     }),
     prisma.client.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    // contagem para o atalho "só os que falharam" da barra de filtros
+    prisma.post.count({
+      where: {
+        scheduledAt: { gte: winStart, lt: winEnd },
+        status: "failed",
+        ...(clientId ? { clientId } : {}),
+        ...(q ? { client: { is: { name: { contains: q, mode: "insensitive" } } } } : {}),
+      },
+    }),
   ]);
 
   const byDay = new Map<string, typeof posts>();
@@ -140,6 +166,16 @@ export default async function CalendarPage({
     const params = new URLSearchParams({ view: v, ref: r });
     if (clientId) params.set("clientId", clientId);
     if (q) params.set("q", q);
+    if (status) params.set("status", status);
+    return `/calendar?${params}`;
+  }
+
+  /** Mesmo período e cliente, alternando só o filtro de status. */
+  function statusHref(s: string | null) {
+    const params = new URLSearchParams({ view, ref });
+    if (clientId) params.set("clientId", clientId);
+    if (q) params.set("q", q);
+    if (s) params.set("status", s);
     return `/calendar?${params}`;
   }
 
@@ -148,6 +184,7 @@ export default async function CalendarPage({
     const params = new URLSearchParams({ range: "day", ref: key });
     if (clientId) params.set("clientId", clientId);
     if (q) params.set("q", q);
+    if (status) params.set("status", status);
     return `/posts?${params}`;
   }
 
@@ -186,6 +223,21 @@ export default async function CalendarPage({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* atalho para achar falhas sem sair do calendário */}
+          {(failedInWindow > 0 || status === "failed") && (
+            <Link
+              href={statusHref(status === "failed" ? null : "failed")}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                status === "failed"
+                  ? "text-red-200 bg-red-500/20 border-red-500/40"
+                  : "text-red-300 bg-red-500/[0.07] border-red-500/25 hover:bg-red-500/15"
+              }`}
+            >
+              <Icon.alert className="w-3.5 h-3.5" />
+              {status === "failed" ? `Só falhas (${failedInWindow})` : `${failedInWindow} falharam`}
+            </Link>
+          )}
+
           <CalendarFilters
             clients={clients}
             view={view}
@@ -240,7 +292,7 @@ export default async function CalendarPage({
                 key={key}
                 className={`relative border-b border-r border-[var(--color-border)] p-2 ${
                   view === "month" ? "min-h-[9rem]" : "min-h-[18rem]"
-                } ${inMonth ? "" : "opacity-40"}`}
+                } ${inMonth ? "" : "opacity-25 bg-black/20"}`}
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <span
@@ -268,13 +320,29 @@ export default async function CalendarPage({
                     <Link
                       key={p.id}
                       href={`/posts/${p.id}`}
-                      className="block rounded-md px-1.5 py-1 bg-white/[0.04] hover:bg-white/[0.08] border border-[var(--color-border)] transition-colors"
+                      className={`relative block rounded-md pl-2 pr-1.5 py-1 border transition-colors ${
+                        p.status === "failed"
+                          ? "bg-red-500/[0.12] hover:bg-red-500/20 border-red-500/30"
+                          : "bg-white/[0.04] hover:bg-white/[0.08] border-[var(--color-border)]"
+                      }`}
                     >
+                      {/* faixa com a cor fixa do cliente — igual em todas as telas */}
+                      <span
+                        className="absolute left-0 top-1 bottom-1 w-[3px] rounded-full"
+                        style={{ background: clientColor(p.clientId, p.client.brandColor) }}
+                      />
                       <div className="flex items-center gap-1">
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot[p.status] ?? "bg-zinc-400"}`} />
                         <span className="text-[11px] font-medium truncate flex-1">
                           {p.client.name}
                         </span>
+                        {STATUS_BADGE[p.status] && (
+                          <span
+                            className={`shrink-0 text-[9px] font-semibold leading-none rounded px-1 py-0.5 border ${STATUS_BADGE[p.status].cls}`}
+                          >
+                            {STATUS_BADGE[p.status].label}
+                          </span>
+                        )}
                       </div>
                       {/* tipo + título — espelha o cronograma da planilha */}
                       <div className="mt-0.5 pl-2.5">

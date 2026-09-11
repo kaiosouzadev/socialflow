@@ -4,6 +4,7 @@ import Link from "next/link";
 import { PageHeader, StatusBadge, PlatformChip } from "@/components/ui";
 import { Icon } from "@/components/Icons";
 import { formatDateTime } from "@/lib/format-date";
+import ClientChecklist from "./ClientChecklist";
 import ClientInfoEditor from "./ClientInfoEditor";
 import ClientBriefingEditor, { type Briefing } from "./ClientBriefingEditor";
 import CredentialsManager from "./CredentialsManager";
@@ -71,6 +72,20 @@ export default async function ClientDetailPage({
       />
 
       <div className="space-y-6">
+        <ClientChecklist
+          hasBriefing={
+            !!client.briefing && Object.values(client.briefing as Record<string, unknown>).some(
+              (v) => typeof v === "string" && v.trim().length > 0
+            )
+          }
+          hasCredentials={!!client.credentialsEnc}
+          hasToneOfVoice={!!client.toneOfVoice?.trim()}
+          activeAccounts={client.socialAccounts.filter((a) => a.status === "active").length}
+          hasDriveFolder={!!client.driveFolderId}
+          hasLogo={!!client.logoUrl}
+          tier={client.tier}
+        />
+
         <ClientInfoEditor
           client={{
             id: client.id,

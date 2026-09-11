@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 const OPEN = ["enviado_cliente", "em_revisao"];
 
 const schema = z.object({
-  action: z.enum(["edit", "regenerate"]),
+  action: z.enum(["edit", "regenerate", "note"]),
   captions: z
     .object({
       instagram: z.string().optional(),
@@ -20,6 +20,8 @@ const schema = z.object({
     })
     .optional(),
   notes: z.string().max(500).optional(),
+  // comentário do cliente pedindo ajuste neste post ("" limpa)
+  clientNote: z.string().max(1000).optional(),
 });
 
 // padrão do sistema: FB+IG compartilham a MESMA legenda; LinkedIn tem a própria
@@ -62,6 +64,19 @@ export async function POST(
   const markReview = schedule.status === "enviado_cliente"
     ? prisma.schedule.update({ where: { id: schedule.id }, data: { status: "em_revisao" } })
     : null;
+
+  // comentário do cliente pedindo ajuste neste post
+  if (parsed.data.action === "note") {
+    const note = (parsed.data.clientNote ?? "").trim();
+    await prisma.$transaction([
+      prisma.post.update({
+        where: { id: postId },
+        data: { clientNote: note || null },
+      }),
+      ...(markReview ? [markReview] : []),
+    ]);
+    return Response.json({ ok: true, clientNote: note || null });
+  }
 
   if (parsed.data.action === "edit") {
     const cur = (post.captions as Record<string, string> | null) ?? {};

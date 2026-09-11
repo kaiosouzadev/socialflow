@@ -199,12 +199,29 @@ export default function ClientInfoEditor({ client }: { client: Client }) {
       </div>
 
       <div>
-        <label className="label">Tom de voz</label>
+        <div className="flex items-center justify-between">
+          <label className="label">Tom de voz</label>
+          {/* tom de voz costuma ter 1500+ caracteres: fica compacto por padrão
+              e expande na hora de editar, em vez de ocupar a tela inteira */}
+          <button
+            type="button"
+            onClick={() => setToneExpanded((v) => !v)}
+            className="text-xs font-medium text-[var(--color-accent)] hover:underline mb-1.5"
+          >
+            {toneExpanded ? "Recolher" : "Expandir"}
+            {tone.length > 0 && (
+              <span className="text-[var(--color-text-faint)] font-normal">
+                {" "}
+                ({tone.length} caracteres)
+              </span>
+            )}
+          </button>
+        </div>
         <textarea
           value={tone}
           onChange={(e) => setTone(e.target.value)}
-          rows={3}
-          className="input resize-none"
+          rows={toneExpanded ? 16 : 3}
+          className="input resize-y"
           placeholder="Ex: Tom profissional e próximo..."
         />
       </div>

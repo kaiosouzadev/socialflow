@@ -21,7 +21,7 @@ export default async function PostDetailPage({
   const post = await prisma.post.findUnique({
     where: { id },
     include: {
-      client: { select: { id: true, name: true, tier: true } },
+      client: { select: { id: true, name: true, tier: true, plan: true } },
       publications: { orderBy: { publishedAt: "desc" } },
     },
   });
@@ -90,6 +90,9 @@ export default async function PostDetailPage({
                 <ApprovePostButton
                   postId={post.id}
                   hasMedia={!!post.mediaUrl || mediaList.length > 0}
+                  needsClientApproval={post.client.plan === "aprovacao_cliente"}
+                  clientName={post.client.name}
+                  scheduleId={post.scheduleId}
                 />
               )}
             </div>
@@ -222,6 +225,17 @@ export default async function PostDetailPage({
               </div>
             )}
           </div>
+
+          {/* ajuste pedido pelo cliente no link de aprovação */}
+          {post.clientNote && (
+            <div className="card p-5 border-violet-500/25 bg-violet-500/[0.05]">
+              <p className="text-xs font-medium text-violet-200 flex items-center gap-1.5 mb-2">
+                <Icon.edit className="w-3.5 h-3.5" />
+                Ajuste pedido por {post.client.name}
+              </p>
+              <p className="text-sm whitespace-pre-wrap leading-relaxed">{post.clientNote}</p>
+            </div>
+          )}
 
           {/* Roteiro por tela (carrossel/reels) */}
           {slides.length > 0 && (

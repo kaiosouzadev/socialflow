@@ -13,19 +13,32 @@ export default async function AprovacoesPage() {
     include: {
       client: { select: { name: true, plan: true } },
       _count: { select: { posts: true } },
+      // só o necessário para contar prontidão de arte — sem legendas/thumbs
+      posts: { select: { id: true, mediaUrl: true, mediaItems: true, clientNote: true } },
     },
   });
 
-  const rows = schedules.map((s) => ({
-    id: s.id,
-    client: s.client.name,
-    plan: s.client.plan,
-    month: monthLabel(s.monthRef),
-    status: s.status,
-    posts: s._count.posts,
-    sentAt: s.sentAt ? formatDateTime(s.sentAt) : null,
-    link: s.approvalToken ? approvalLink(s.approvalToken) : null,
-  }));
+  const rows = schedules.map((s) => {
+    const withMedia = s.posts.filter((p) => {
+      const items = Array.isArray(p.mediaItems) ? (p.mediaItems as unknown[]) : [];
+      return !!p.mediaUrl || items.length > 0;
+    }).length;
+
+    return {
+      id: s.id,
+      client: s.client.name,
+      plan: s.client.plan,
+      month: monthLabel(s.monthRef),
+      status: s.status,
+      posts: s._count.posts,
+      withMedia,
+      notedPosts: s.posts.filter((p) => p.clientNote).length,
+      clientNote: s.clientNote,
+      changesAskedAt: s.changesAskedAt ? formatDateTime(s.changesAskedAt) : null,
+      sentAt: s.sentAt ? formatDateTime(s.sentAt) : null,
+      link: s.approvalToken ? approvalLink(s.approvalToken) : null,
+    };
+  });
 
   return (
     <div className="p-8 max-w-6xl mx-auto animate-fade-up">

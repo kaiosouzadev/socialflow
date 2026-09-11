@@ -9,10 +9,16 @@ import { CaptionFields } from "@/components/CaptionFields";
 import { DateTimePicker } from "@/components/DatePickers";
 import { FormatPicker } from "@/components/FormatPicker";
 import { SlidesEditor } from "@/components/SlidesEditor";
+import { MediaField } from "@/components/MediaField";
+import { PostPreview } from "@/components/PostPreview";
 import { spNowLocalInput, spLocalInputToISO } from "@/lib/format-date";
 
 type Client = { id: string; name: string; email: string };
 type Account = { id: string; platform: string; status: string };
+
+/** Agendar para daqui a poucos minutos é quase sempre engano — a data padrão
+ *  do formulário é "agora". Abaixo disso, pede confirmação. */
+const IMMINENT_MINUTES = 30;
 
 const PLATFORM_LABEL: Record<string, string> = {
   instagram: "Instagram",
@@ -33,6 +39,7 @@ function NewPostForm() {
   const [accountsData, setAccountsData] = useState<{
     clientId: string;
     accounts: Account[];
+    plan: string;
   } | null>(null);
   const [targets, setTargets] = useState<string[]>([]);
 
@@ -40,8 +47,10 @@ function NewPostForm() {
   const [format, setFormat] = useState("feed");
   const [captions, setCaptions] = useState<Record<string, string>>({});
   const [slides, setSlides] = useState<string[]>([]);
+  const [mediaUrl, setMediaUrl] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [confirmingImminent, setConfirmingImminent] = useState(false);
 
   // conteúdo digitado para um cliente não pode vazar para outro — reset
   // síncrono na troca (padrão prev-state durante o render, como CalendarFilters)
@@ -74,12 +83,12 @@ function NewPostForm() {
         const accs: Account[] = (data.socialAccounts ?? []).filter(
           (a: Account) => a.status === "active"
         );
-        setAccountsData({ clientId, accounts: accs });
+        setAccountsData({ clientId, accounts: accs, plan: data.plan ?? "" });
         // auto-define: all active platforms selected by default
         setTargets(Array.from(new Set(accs.map((a) => a.platform))));
       })
       .catch(() => {
-        if (!cancelled) setAccountsData({ clientId, accounts: [] });
+        if (!cancelled) setAccountsData({ clientId, accounts: [], plan: "" });
       });
 
     return () => {
@@ -99,8 +108,27 @@ function NewPostForm() {
     setTargets((prev) => (prev.includes(p) ? prev.filter((t) => t !== p) : [...prev, p]));
   }
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  const [nowLocal] = useState(() => spNowLocalInput());
+  const [scheduledLocal, setScheduledLocal] = useState(nowLocal);
+
+  // A data padrão é "agora", então já começa iminente. O cálculo fica no
+  // handler (e não no corpo do render) para não ler o relógio durante a
+  // renderização — render precisa ser puro.
+  const [minutesUntil, setMinutesUntil] = useState(0);
+  const isImminent = minutesUntil < IMMINENT_MINUTES;
+
+  /** Minutos daqui até `v` (negativo = data no passado). */
+  function minutesFromNow(v: string): number {
+    if (!v) return Number.POSITIVE_INFINITY;
+    return (new Date(spLocalInputToISO(v)).getTime() - Date.now()) / 60000;
+  }
+
+  function handleScheduledChange(v: string) {
+    setScheduledLocal(v);
+    setMinutesUntil(minutesFromNow(v));
+  }
+
+  async function create(status: "scheduled" | "draft") {
     setError("");
 
     if (!clientId) {
@@ -111,9 +139,12 @@ function NewPostForm() {
       setError("Selecione ao menos uma rede social.");
       return;
     }
+    if (!scheduledLocal) {
+      setError("Escolha a data e o horário.");
+      return;
+    }
 
     setSubmitting(true);
-    const form = new FormData(e.currentTarget);
     const captionsForTargets = Object.fromEntries(
       targets.map((t) => [t, captions[t] ?? ""]).filter(([, v]) => v)
     );
@@ -123,9 +154,10 @@ function NewPostForm() {
       theme,
       format,
       captions: captionsForTargets,
-      mediaUrl: form.get("mediaUrl") as string,
-      scheduledAt: spLocalInputToISO(form.get("scheduledAt") as string),
+      mediaUrl,
+      scheduledAt: spLocalInputToISO(scheduledLocal),
       targets,
+      status,
       slides: hasSlides ? slides.filter((s) => s.trim()).map((text) => ({ text })) : undefined,
     };
 
@@ -144,16 +176,30 @@ function NewPostForm() {
         );
         return;
       }
-      router.push("/posts");
+      router.push(status === "draft" ? "/posts?status=draft" : "/posts");
       router.refresh();
     } catch {
       setError("Falha de conexão ao criar o post. Tente novamente.");
     } finally {
       setSubmitting(false);
+      setConfirmingImminent(false);
     }
   }
 
-  const [nowLocal] = useState(() => spNowLocalInput());
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    // recalcula na hora do envio: o formulário pode ter ficado aberto um tempo
+    const mins = minutesFromNow(scheduledLocal);
+    setMinutesUntil(mins);
+    // agendamento quase imediato passa por confirmação antes de entrar na fila
+    if (mins < IMMINENT_MINUTES) {
+      setConfirmingImminent(true);
+      return;
+    }
+    void create("scheduled");
+  }
+
+  const needsClientApproval = accountsData?.plan === "aprovacao_cliente";
 
   return (
     <div className="p-8 max-w-2xl mx-auto animate-fade-up">
@@ -278,25 +324,60 @@ function NewPostForm() {
           />
 
           <div>
-            <label className="label">
-              URL da mídia{" "}
-              <span className="text-[var(--color-text-faint)] font-normal">
-                (imagem ou vídeo público)
-              </span>
-            </label>
-            <input
-              name="mediaUrl"
-              type="url"
-              className="input"
-              placeholder="https://exemplo.com/imagem.jpg"
-            />
+            <MediaField value={mediaUrl} onChange={setMediaUrl} clientId={clientId} />
+            {!mediaUrl && (
+              <p className="text-xs text-amber-300/80 mt-1.5">
+                Sem mídia a publicação falha no Instagram e no Facebook. Você pode salvar como
+                rascunho e adicionar a arte depois.
+              </p>
+            )}
           </div>
+
+          {/* prévia de como o post vai aparecer */}
+          {(mediaUrl || captions.instagram || captions.facebook) && (
+            <PostPreview
+              mediaUrl={mediaUrl}
+              caption={captions.instagram ?? captions.facebook ?? ""}
+              clientName={clients.find((c) => c.id === clientId)?.name ?? "Cliente"}
+              targets={targets}
+              format={format}
+            />
+          )}
 
           <div>
             <label className="label">Agendar para</label>
-            <DateTimePicker name="scheduledAt" defaultValue={nowLocal} required />
+            <DateTimePicker
+              name="scheduledAt"
+              defaultValue={nowLocal}
+              onChange={handleScheduledChange}
+              required
+            />
+            {isImminent && (
+              <p className="text-xs text-amber-300/90 mt-1.5">
+                {minutesUntil < 0
+                  ? "Essa data já passou — o post entra na fila assim que for criado."
+                  : `Faltam ~${Math.max(0, Math.round(minutesUntil))} min. Vamos pedir confirmação antes de agendar.`}
+              </p>
+            )}
           </div>
         </div>
+
+        {/* o cliente é do plano com aprovação: agendar aqui pula o cronograma */}
+        {needsClientApproval && (
+          <div className="flex items-start gap-3 rounded-xl bg-amber-500/[0.07] border border-amber-500/20 px-4 py-3">
+            <Icon.shield className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-200/90">
+              Este cliente é do plano <span className="font-semibold">“com aprovação”</span>.
+              Agendar por aqui publica <span className="font-semibold">sem</span> passar pela
+              aprovação dele. Para seguir o fluxo normal, salve como rascunho e envie pelo
+              cronograma em{" "}
+              <Link href="/aprovacoes" className="underline">
+                Aprovações
+              </Link>
+              .
+            </p>
+          </div>
+        )}
 
         {error && (
           <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
@@ -304,20 +385,84 @@ function NewPostForm() {
           </p>
         )}
 
-        <div className="flex gap-3">
-          <Link href="/posts" className="btn-ghost flex-1">
+        <div className="flex gap-3 flex-wrap">
+          <Link href="/posts" className="btn-ghost flex-1 min-w-24">
             Cancelar
           </Link>
           <button
+            type="button"
+            onClick={() => create("draft")}
+            disabled={submitting || !clientId || targets.length === 0}
+            title="Cria o post fora da fila — nada é publicado até você aprovar"
+            className="btn-ghost flex-1 min-w-36"
+          >
+            <Icon.edit className="w-4 h-4" />
+            {submitting ? "Salvando..." : "Salvar rascunho"}
+          </button>
+          <button
             type="submit"
             disabled={submitting || !clientId || targets.length === 0}
-            className="btn-primary flex-1"
+            className="btn-primary flex-1 min-w-36"
           >
             <Icon.send className="w-4 h-4" />
             {submitting ? "Agendando..." : "Agendar post"}
           </button>
         </div>
       </form>
+
+      {/* confirmação de agendamento iminente */}
+      {confirmingImminent && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm"
+          onClick={() => setConfirmingImminent(false)}
+        >
+          <div
+            className="card w-full max-w-md rounded-b-none sm:rounded-2xl p-6 animate-fade-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold mb-2">Publicar agora?</h2>
+            <p className="text-sm text-[var(--color-text-muted)] mb-4">
+              {minutesUntil < 0
+                ? "A data escolhida já passou, então este post entra na fila imediatamente e vai para as redes do cliente."
+                : `Faltam cerca de ${Math.max(0, Math.round(minutesUntil))} minutos para a data escolhida. O post vai para as redes do cliente em seguida.`}
+            </p>
+
+            {!mediaUrl && (
+              <div className="flex items-start gap-2.5 rounded-lg border border-red-500/25 bg-red-500/[0.07] px-3 py-2.5 mb-4">
+                <Icon.alert className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-red-200/90">
+                  E este post <span className="font-semibold">não tem mídia</span> — a publicação vai
+                  falhar. Melhor salvar como rascunho.
+                </p>
+              </div>
+            )}
+
+            <div className="flex gap-3 flex-wrap">
+              <button
+                onClick={() => setConfirmingImminent(false)}
+                disabled={submitting}
+                className="btn-ghost flex-1 min-w-24"
+              >
+                Voltar
+              </button>
+              <button
+                onClick={() => create("draft")}
+                disabled={submitting}
+                className="btn-ghost flex-1 min-w-32"
+              >
+                Salvar rascunho
+              </button>
+              <button
+                onClick={() => create("scheduled")}
+                disabled={submitting}
+                className="btn-primary flex-1 min-w-32"
+              >
+                {submitting ? "Agendando..." : "Agendar assim"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

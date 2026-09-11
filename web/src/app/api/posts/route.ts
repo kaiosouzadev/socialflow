@@ -24,6 +24,8 @@ const createSchema = z.object({
   format: z.enum(["feed", "story", "carrossel", "reels"]).default("feed"),
   scheduledAt: z.string().datetime(),
   targets: z.array(z.enum(["instagram", "facebook", "linkedin"])).min(1),
+  // rascunho fica fora da fila até alguém aprovar; só "scheduled" publica
+  status: z.enum(["scheduled", "draft"]).default("scheduled"),
   // roteiro por tela (carrossel/reels)
   slides: z.array(z.object({ text: z.string().max(2000) })).max(20).optional(),
 });

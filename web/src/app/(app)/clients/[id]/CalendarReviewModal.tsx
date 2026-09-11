@@ -5,6 +5,7 @@ import { Icon } from "@/components/Icons";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
 import { DateTimePicker } from "@/components/DatePickers";
 import { AssistantPanel } from "@/components/AssistantPanel";
+import { MediaField } from "@/components/MediaField";
 import { spLocalInputFromISO, spLocalInputToISO } from "@/lib/format-date";
 
 export type PreviewPost = {
@@ -379,11 +380,11 @@ export default function CalendarReviewModal({
                             {hasArt ? "Com arte" : "Sem arte"}
                           </span>
                         </label>
-                        <input
+                        <MediaField
                           value={p.mediaUrl}
-                          onChange={(e) => update(p.uid, { mediaUrl: e.target.value })}
-                          placeholder="https://… (opcional agora)"
-                          className="input font-mono text-xs"
+                          onChange={(url) => update(p.uid, { mediaUrl: url })}
+                          clientId={clientId}
+                          compact
                         />
                       </div>
                     </div>

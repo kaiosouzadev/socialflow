@@ -23,20 +23,26 @@ export default async function PostsPage({
     range?: string;
     ref?: string;
     page?: string;
+    scheduleId?: string;
+    noted?: string;
   }>;
 }) {
   const sp = await searchParams;
-  const { clientId, status } = sp;
+  const { clientId, status, scheduleId } = sp;
   const q = sp.q?.trim() ?? "";
   const range: RangeKind = isRangeKind(sp.range) ? sp.range : "all";
   const ref = sp.ref && /^\d{4}-\d{2}-\d{2}$/.test(sp.ref) ? sp.ref : spDateKey();
   const page = Math.max(1, Number(sp.page) || 1);
+  // vindo da tela de Aprovações: só os posts que o cliente comentou
+  const onlyNoted = sp.noted === "1";
 
   const win = dateWindow(range, ref);
 
   const where: Prisma.PostWhereInput = {
     ...(clientId ? { clientId } : {}),
     ...(status ? { status } : {}),
+    ...(scheduleId ? { scheduleId } : {}),
+    ...(onlyNoted ? { clientNote: { not: null } } : {}),
     ...(win ? { scheduledAt: { gte: win.gte, lt: win.lt } } : {}),
     ...(q ? { client: { is: { name: { contains: q, mode: "insensitive" } } } } : {}),
   };
@@ -60,7 +66,9 @@ export default async function PostsPage({
 
   const subtitle =
     `${total} post${total !== 1 ? "s" : ""}` +
-    (range !== "all" ? ` · ${rangeLabel(range, ref)}` : "");
+    (range !== "all" ? ` · ${rangeLabel(range, ref)}` : "") +
+    (onlyNoted ? " · com ajuste pedido pelo cliente" : "") +
+    (scheduleId && !onlyNoted ? " · de um cronograma" : "");
 
   return (
     <div className="p-8 max-w-6xl mx-auto animate-fade-up">
@@ -124,13 +132,32 @@ export default async function PostsPage({
                       {post.client.name}
                     </Link>
                   </td>
-                  <td className="px-6 py-3.5 max-w-xs truncate">
+                  <td className="px-6 py-3.5 max-w-xs">
                     <Link
                       href={`/posts/${post.id}`}
-                      className="text-[var(--color-text-muted)] hover:text-white transition-colors"
+                      className="block truncate text-[var(--color-text-muted)] hover:text-white transition-colors"
                     >
                       {post.theme ?? "—"}
                     </Link>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      {post.clientNote && (
+                        <span
+                          title={post.clientNote}
+                          className="inline-flex items-center gap-1 text-[10px] font-medium text-violet-200 bg-violet-500/10 border border-violet-500/25 rounded px-1.5 py-0.5"
+                        >
+                          <Icon.edit className="w-2.5 h-2.5" />
+                          ajuste pedido
+                        </span>
+                      )}
+                      {!post.mediaUrl &&
+                        !(Array.isArray(post.mediaItems) && post.mediaItems.length > 0) &&
+                        post.status !== "published" && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-200/90 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
+                            <Icon.alert className="w-2.5 h-2.5" />
+                            sem arte
+                          </span>
+                        )}
+                    </div>
                   </td>
                   <td className="px-6 py-3.5">
                     <div className="flex gap-1">

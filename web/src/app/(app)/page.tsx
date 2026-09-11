@@ -4,7 +4,10 @@ import { PageHeader, StatusBadge, PlatformChip } from "@/components/ui";
 import { Icon } from "@/components/Icons";
 import { formatDateTime } from "@/lib/format-date";
 import { getCachedSummary, getTodayPosts } from "@/lib/daily-summary";
+import { getQueueHealth } from "@/lib/queue-health";
 import DailySummaryCard from "./DailySummaryCard";
+import QueueHealthCard from "./QueueHealthCard";
+import RetryPostButton from "./RetryPostButton";
 
 export const dynamic = "force-dynamic";
 
@@ -72,7 +75,7 @@ function StatCard({
 }
 
 export default async function DashboardPage() {
-  const [stats, posts, summary, todayPosts] = await Promise.all([
+  const [stats, posts, summary, todayPosts, queue] = await Promise.all([
     getStats(),
     prisma.post.findMany({
       take: 8,
@@ -81,6 +84,7 @@ export default async function DashboardPage() {
     }),
     getCachedSummary(),
     getTodayPosts(),
+    getQueueHealth(),
   ]);
 
   const todayPending = todayPosts.filter(
@@ -104,6 +108,15 @@ export default async function DashboardPage() {
         content={summary?.content ?? null}
         generatedAt={summary ? formatDateTime(summary.updatedAt) : null}
         postCount={summary?.postCount ?? todayPosts.length}
+      />
+
+      <QueueHealthCard
+        stuck={queue.stuck}
+        overdue={queue.overdue}
+        exhausted={queue.exhausted}
+        failed={queue.failed}
+        lastPublishedLabel={queue.lastPublishedAt ? formatDateTime(queue.lastPublishedAt) : null}
+        healthy={queue.healthy}
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -199,7 +212,12 @@ export default async function DashboardPage() {
                     )}
                   </div>
                 </div>
-                <StatusBadge status={p.status} />
+                <div className="flex items-center gap-3 shrink-0">
+                  {(p.status === "failed" || p.status === "publishing") && (
+                    <RetryPostButton postId={p.id} />
+                  )}
+                  <StatusBadge status={p.status} />
+                </div>
               </div>
             ))}
           </div>

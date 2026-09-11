@@ -1,10 +1,28 @@
 import { prisma } from "@/lib/prisma";
 import { Logo } from "@/components/Logo";
 import { monthLabel } from "@/lib/approval";
-import { formatDateTime, spDayTime } from "@/lib/format-date";
+import { formatDateTime, spDayTime, TZ } from "@/lib/format-date";
 import ApprovalView from "./ApprovalView";
 
 export const dynamic = "force-dynamic";
+
+/** "quinta-feira, 2 de outubro de 2026 · 18:00" — com ano, para não confundir
+ *  cronogramas de meses futuros. */
+function fullWhen(d: Date): string {
+  const date = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: TZ,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(d);
+  const time = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+  return `${date} · ${time}`;
+}
 
 export default async function ApprovalPage({
   params,
@@ -16,7 +34,7 @@ export default async function ApprovalPage({
   const schedule = await prisma.schedule.findUnique({
     where: { approvalToken: token },
     include: {
-      client: { select: { name: true } },
+      client: { select: { name: true, logoUrl: true, brandColor: true } },
       posts: { orderBy: { scheduledAt: "asc" } },
     },
   });
@@ -54,24 +72,30 @@ export default async function ApprovalPage({
       captions: (p.captions as Record<string, string> | null) ?? {},
       targets: p.targets,
       when: formatDateTime(p.scheduledAt),
+      fullWhen: fullWhen(p.scheduledAt),
       day,
       time,
       aiEditsUsed: p.aiEditsUsed,
+      clientNote: p.clientNote,
       slides: Array.isArray(p.slides)
         ? (p.slides as { text?: string }[]).map((s) => s?.text ?? "").filter(Boolean)
         : [],
     };
   });
 
-  return shell(
+  return (
     <ApprovalView
       token={token}
       clientName={schedule.client.name}
+      clientLogoUrl={schedule.client.logoUrl}
+      clientBrandColor={schedule.client.brandColor}
       monthLabel={monthLabel(schedule.monthRef)}
       year={schedule.monthRef.getUTCFullYear()}
       month={schedule.monthRef.getUTCMonth()}
       posts={posts}
       readOnly={approved}
+      changesAsked={schedule.status === "em_revisao" && !!schedule.changesAskedAt}
+      scheduleNote={schedule.clientNote}
     />
   );
 }

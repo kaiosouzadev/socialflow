@@ -14,9 +14,9 @@ const MAX_BYTES = 8 * 1024 * 1024; // 8MB
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Upload autenticado de imagem para o R2. Usado para logo do cliente e
- * arte-base (ArtTemplate). Retorna { url }.
- * Campos (multipart/form-data): file, kind ("logo"|"template"), clientId?
+ * Upload autenticado de imagem para o R2. Usado para logo do cliente,
+ * arte-base (ArtTemplate) e a mídia de um post. Retorna { url }.
+ * Campos (multipart/form-data): file, kind ("logo"|"template"|"post"), clientId?
  */
 export async function POST(req: NextRequest) {
   const denied = await requireAuth();
@@ -34,8 +34,8 @@ export async function POST(req: NextRequest) {
   if (!(file instanceof Blob)) {
     return Response.json({ error: "Arquivo ausente" }, { status: 400 });
   }
-  if (!["logo", "template"].includes(kind)) {
-    return Response.json({ error: "kind inválido (logo|template)" }, { status: 400 });
+  if (!["logo", "template", "post"].includes(kind)) {
+    return Response.json({ error: "kind inválido (logo|template|post)" }, { status: 400 });
   }
   // clientId entra na key do R2 — precisa ser UUID para não injetar prefixo arbitrário
   if (clientId && !UUID_RE.test(clientId)) {
@@ -56,7 +56,9 @@ export async function POST(req: NextRequest) {
       ? `logos/${clientId}/${stamp}.${ext}`
       : kind === "template"
         ? `templates/${stamp}.${ext}`
-        : `uploads/${stamp}.${ext}`;
+        : kind === "post"
+          ? `posts/${clientId ?? "sem-cliente"}/${stamp}.${ext}`
+          : `uploads/${stamp}.${ext}`;
 
   try {
     const url = await uploadToR2(key, buffer, file.type);

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Icon } from "@/components/Icons";
 import { BrandBadge } from "@/components/BrandIcons";
+import { Toast, type ToastState } from "@/components/Toast";
 
 type Conn = { id: string; name: string };
 type Asset = {
@@ -29,6 +30,8 @@ export default function ImportMetaButton({
   const [error, setError] = useState("");
   const [connectingId, setConnectingId] = useState("");
   const [query, setQuery] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [toast, setToast] = useState<ToastState>(null);
 
   async function loadAssets(id: string, refresh = false) {
     setConnId(id);
@@ -96,12 +99,23 @@ export default function ImportMetaButton({
         setError(typeof data?.error === "string" ? data.error : "Falha ao conectar.");
         return;
       }
-      close();
+
+      // Recarrega os dados do servidor ANTES de fechar o modal. Fechando
+      // primeiro, a tela reaparecia com a contagem antiga ("0 contas") e só
+      // acertava depois de um F5.
+      const linked = [
+        "Facebook",
+        ...(a.instagramId ? ["Instagram"] : []),
+      ].join(" + ");
+      setRefreshing(true);
       router.refresh();
+      setToast({ kind: "success", text: `${linked} vinculado(s) em ${a.pageName}` });
+      close();
     } catch {
       setError("Falha de conexão ao vincular. Tente novamente.");
     } finally {
       setConnectingId("");
+      setRefreshing(false);
     }
   }
 
@@ -118,10 +132,12 @@ export default function ImportMetaButton({
 
   return (
     <>
-      <button onClick={() => setOpen(true)} className="btn-ghost">
+      <button onClick={() => setOpen(true)} disabled={refreshing} className="btn-ghost">
         <BrandBadge platform="facebook" size={18} />
-        Importar do Meta
+        {refreshing ? "Atualizando..." : "Importar do Meta"}
       </button>
+
+      <Toast toast={toast} onClose={() => setToast(null)} />
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
