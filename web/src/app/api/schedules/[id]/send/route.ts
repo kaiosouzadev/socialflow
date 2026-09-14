@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { newApprovalToken, approvalLink, monthLabel } from "@/lib/approval";
 import { sendEmail, approvalEmailHtml, emailConfigured } from "@/lib/email";
+import { scheduleSendWindow, shortLabel } from "@/lib/deadlines";
 
 export const dynamic = "force-dynamic";
 
@@ -53,11 +54,22 @@ export async function POST(
     html: approvalEmailHtml(schedule.client.name, monthLabel(schedule.monthRef), link),
   });
 
+  // janela ideal de envio: dias 10-20 do mês anterior (aviso, não bloqueio)
+  const win = scheduleSendWindow(schedule.monthRef);
+  const now = new Date();
+  const windowWarning =
+    now < win.start
+      ? `Envio antes da janela ideal (${shortLabel(win.start)} a ${shortLabel(win.end)}).`
+      : now > win.end
+        ? `Envio FORA da janela ideal (${shortLabel(win.start)} a ${shortLabel(win.end)}) — o cliente terá menos tempo até o prazo do dia 25.`
+        : null;
+
   return Response.json({
     ok: true,
     link,
     to: clientEmail,
     emailed: result.sent,
+    windowWarning,
     emailError: result.sent
       ? null
       : !emailConfigured()

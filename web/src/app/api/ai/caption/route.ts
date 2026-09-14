@@ -14,6 +14,8 @@ const schema = z.object({
   theme: z.string().optional(),
   notes: z.string().optional(),
   targets: z.array(z.enum(["instagram", "facebook", "linkedin"])).min(1),
+  // carrossel/reels: gera também o roteiro por tela (slides)
+  format: z.enum(["feed", "story", "carrossel", "reels"]).optional(),
 });
 
 // padrão do sistema: FB+IG compartilham a MESMA legenda; LinkedIn tem a própria
@@ -36,7 +38,8 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { clientId, theme, notes, targets } = parsed.data;
+  const { clientId, theme, notes, targets, format } = parsed.data;
+  const wantSlides = format === "carrossel" || format === "reels";
 
   const client = await prisma.client.findUnique({
     where: { id: clientId },
@@ -46,10 +49,20 @@ export async function POST(req: NextRequest) {
 
   const hasMeta = targets.includes("instagram") || targets.includes("facebook");
   const hasLinkedin = targets.includes("linkedin");
-  const guide = [hasMeta ? `- ${SHARED_GUIDE}` : "", hasLinkedin ? `- ${LINKEDIN_GUIDE}` : ""]
+  const guide = [
+    hasMeta ? `- ${SHARED_GUIDE}` : "",
+    hasLinkedin ? `- ${LINKEDIN_GUIDE}` : "",
+    wantSlides
+      ? `- "slides": array de 5 a 8 textos curtos, um por tela do ${format}, contando a história do post (primeiro = capa com gancho, último = call-to-action)`
+      : "",
+  ]
     .filter(Boolean)
     .join("\n");
-  const jsonKeys = [hasMeta ? '"shared":"<legenda>"' : "", hasLinkedin ? '"linkedin":"<legenda>"' : ""]
+  const jsonKeys = [
+    hasMeta ? '"shared":"<legenda>"' : "",
+    hasLinkedin ? '"linkedin":"<legenda>"' : "",
+    wantSlides ? '"slides":["<tela 1>","<tela 2>"]' : "",
+  ]
     .filter(Boolean)
     .join(",");
 
@@ -96,7 +109,16 @@ export async function POST(req: NextRequest) {
     if (Object.keys(captions).length === 0) {
       return Response.json({ error: "A IA não retornou legendas." }, { status: 502 });
     }
-    return Response.json({ captions, model: CAPTION_MODEL });
+
+    const slides =
+      wantSlides && Array.isArray(data.slides)
+        ? (data.slides as unknown[])
+            .filter((s): s is string => typeof s === "string" && !!s.trim())
+            .slice(0, 20)
+            .map((s) => s.trim())
+        : undefined;
+
+    return Response.json({ captions, slides, model: CAPTION_MODEL });
   } catch (e) {
     console.error("[ai/caption]", e);
     const msg = e instanceof Error ? e.message : "Erro ao gerar legenda";

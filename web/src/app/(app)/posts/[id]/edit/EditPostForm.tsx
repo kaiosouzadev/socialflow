@@ -263,6 +263,7 @@ export default function EditPostForm({
           slides: slides.filter((s) => s.trim()),
         })}
         onApplyCaption={applyAssistantCaption}
+        onApplyTitle={setTheme}
       />
     </div>
   );

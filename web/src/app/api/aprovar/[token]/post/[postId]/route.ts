@@ -4,14 +4,18 @@ import { prisma } from "@/lib/prisma";
 import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { MAX_AI_EDITS } from "@/lib/approval";
+import { raiseAlert, teamEmails, notifyEmailHtml, escapeHtml } from "@/lib/notify";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 
 const OPEN = ["enviado_cliente", "em_revisao"];
 
+// comentário de ajuste precisa dizer O QUE mudar — mínimo de 30 caracteres
+export const MIN_ADJUST_CHARS = 30;
+
 const schema = z.object({
-  action: z.enum(["edit", "regenerate", "note"]),
+  action: z.enum(["edit", "regenerate", "note", "adjust"]),
   captions: z
     .object({
       instagram: z.string().optional(),
@@ -20,8 +24,10 @@ const schema = z.object({
     })
     .optional(),
   notes: z.string().max(500).optional(),
-  // comentário do cliente pedindo ajuste neste post ("" limpa)
+  // comentário do cliente pedindo ajuste neste post ("" limpa) — action "note"
   clientNote: z.string().max(1000).optional(),
+  // pedido de ajuste formal (mín. 30 chars, bloqueia aprovação) — action "adjust"
+  comment: z.string().max(2000).optional(),
 });
 
 // padrão do sistema: FB+IG compartilham a MESMA legenda; LinkedIn tem a própria
@@ -65,7 +71,7 @@ export async function POST(
     ? prisma.schedule.update({ where: { id: schedule.id }, data: { status: "em_revisao" } })
     : null;
 
-  // comentário do cliente pedindo ajuste neste post
+  // comentário livre do cliente neste post (rascunho local do modal)
   if (parsed.data.action === "note") {
     const note = (parsed.data.clientNote ?? "").trim();
     await prisma.$transaction([
@@ -76,6 +82,56 @@ export async function POST(
       ...(markReview ? [markReview] : []),
     ]);
     return Response.json({ ok: true, clientNote: note || null });
+  }
+
+  // ---- pedido de ajuste (fase cronograma): comentário do cliente no post ----
+  if (parsed.data.action === "adjust") {
+    const comment = (parsed.data.comment ?? "").trim();
+    if (comment.length < MIN_ADJUST_CHARS) {
+      return Response.json(
+        { error: `Descreva o ajuste com pelo menos ${MIN_ADJUST_CHARS} caracteres.` },
+        { status: 400 }
+      );
+    }
+
+    const [adjustment] = await prisma.$transaction([
+      prisma.postAdjustment.create({
+        data: { postId, comment },
+        select: { id: true, comment: true, status: true, createdAt: true },
+      }),
+      prisma.schedule.update({
+        where: { id: schedule.id },
+        data: { status: "em_revisao", changesAskedAt: new Date() },
+      }),
+    ]);
+
+    // avisa a equipe na hora — ajuste do cliente não pode passar batido
+    const to = await teamEmails();
+    await raiseAlert({
+      kind: "ajuste_solicitado",
+      audience: "equipe",
+      message: `${schedule.client.name} pediu ajuste em "${post.theme ?? "post"}": ${comment.slice(0, 140)}`,
+      dedupeKey: `ajuste_solicitado:${adjustment.id}`,
+      clientId: post.clientId,
+      scheduleId: schedule.id,
+      postId,
+      email: {
+        to,
+        subject: `Ajuste solicitado — ${schedule.client.name}`,
+        html: notifyEmailHtml(
+          "Cliente pediu ajuste no cronograma",
+          [
+            `<strong>${escapeHtml(schedule.client.name)}</strong> comentou no post <strong>${escapeHtml(post.theme ?? "")}</strong>:`,
+            `“${escapeHtml(comment)}”`,
+            "Resolva o ajuste em Aprovações para liberar a aprovação do cronograma.",
+          ],
+          `${process.env.SYSTEM_BASE_URL ?? ""}/aprovacoes`,
+          "Abrir aprovações"
+        ),
+      },
+    });
+
+    return Response.json({ ok: true, adjustment });
   }
 
   if (parsed.data.action === "edit") {

@@ -49,6 +49,7 @@ model Client {
   socialAccounts SocialAccount[]
   schedules      Schedule[]
   posts          Post[]
+  weeklyReviews  WeeklyReview[]
 
   @@map("clients")
 }
@@ -97,11 +98,12 @@ model Schedule {
   // rascunho | aprovado_interno | enviado_cliente | em_revisao | aprovado_cliente
   status    String   @default("rascunho")
   approvalToken String?   @unique @map("approval_token") // link público de aprovação
-  sentAt        DateTime? @map("sent_at") @db.Timestamptz(6)
-  approvedAt    DateTime? @map("approved_at") @db.Timestamptz(6)
   // comentário geral do cliente ao pedir ajustes (status vira em_revisao)
   clientNote    String?   @map("client_note")
+  // quando o cliente pediu ajustes pela última vez (usado no fluxo de prazos)
   changesAskedAt DateTime? @map("changes_asked_at") @db.Timestamptz(6)
+  sentAt        DateTime? @map("sent_at") @db.Timestamptz(6)
+  approvedAt    DateTime? @map("approved_at") @db.Timestamptz(6)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -115,6 +117,8 @@ model Post {
   scheduleId  String?   @map("schedule_id") @db.Uuid
   clientId    String    @map("client_id") @db.Uuid
   theme       String?
+  // breve explicação do tema (fase cronograma — é o que o cliente aprova)
+  explanation String?
   caption     String?
   captions    Json?     // legenda por rede: { instagram?, facebook?, linkedin? }
   mediaUrl    String?   @map("media_url")
@@ -136,16 +140,77 @@ model Post {
   // cheia fica no R2 por 30 dias e depois é excluída (não ocupa Cloudflare)
   mediaThumb  String?   @map("media_thumb")
   // comentário do cliente pedindo ajuste neste post (link de aprovação)
-  clientNote  String?   @map("client_note")
+  clientNote       String?   @map("client_note")
+  // aprovação semanal do post completo pelo cliente ("aprovado" | null)
+  clientApproval   String?   @map("client_approval")
+  clientApprovedAt DateTime? @map("client_approved_at") @db.Timestamptz(6)
+  weeklyReviewId   String?   @map("weekly_review_id") @db.Uuid
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   client       Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
   schedule     Schedule?     @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  weeklyReview WeeklyReview? @relation(fields: [weeklyReviewId], references: [id], onDelete: SetNull)
   publications Publication[]
+  adjustments  PostAdjustment[]
 
   @@index([scheduledAt], map: "idx_posts_due")
   @@index([clientId], map: "idx_posts_client")
   @@map("posts")
+}
+
+// Pedido de ajuste do cliente em um post (fase cronograma OU semanal).
+// Enquanto houver ajuste "pendente" no cronograma, a aprovação fica bloqueada.
+model PostAdjustment {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  postId     String    @map("post_id") @db.Uuid
+  comment    String
+  status     String    @default("pendente") // pendente | resolvido
+  reply      String? // resposta da redatora ao resolver
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz(6)
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId], map: "idx_adjustments_post")
+  @@index([status], map: "idx_adjustments_status")
+  @@map("post_adjustments")
+}
+
+// Link semanal de aprovação de posts completos (título + legenda + arte),
+// enviado quarta/quinta com os posts da semana seguinte.
+model WeeklyReview {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId   String    @map("client_id") @db.Uuid
+  token      String    @unique
+  weekStart  DateTime  @map("week_start") @db.Date // domingo da semana revisada
+  status     String    @default("enviado") // enviado | concluido
+  sentAt     DateTime  @default(now()) @map("sent_at") @db.Timestamptz(6)
+  approvedAt DateTime? @map("approved_at") @db.Timestamptz(6)
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  posts  Post[]
+
+  @@unique([clientId, weekStart], map: "uq_weekly_client_week")
+  @@map("weekly_reviews")
+}
+
+// Trilha de notificações/alertas (equipe e cliente) — nada passa despercebido.
+// dedupeKey evita alerta duplicado no mesmo dia (ex: "sem-resposta:<postId>:2026-09-10").
+model Alert {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind      String // prazo_cronograma | ajuste_solicitado | ajuste_resolvido | cronograma_auto_aprovado | sem_resposta | sem_arte | semanal_enviado
+  audience  String // equipe | cliente
+  message   String
+  clientId  String?   @map("client_id") @db.Uuid
+  scheduleId String?  @map("schedule_id") @db.Uuid
+  postId    String?   @map("post_id") @db.Uuid
+  dedupeKey String    @unique @map("dedupe_key")
+  emailed   Boolean   @default(false)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+
+  @@index([createdAt], map: "idx_alerts_created")
+  @@map("alerts")
 }
 
 model Publication {

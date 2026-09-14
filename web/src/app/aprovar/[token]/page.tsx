@@ -35,7 +35,15 @@ export default async function ApprovalPage({
     where: { approvalToken: token },
     include: {
       client: { select: { name: true, logoUrl: true, brandColor: true } },
-      posts: { orderBy: { scheduledAt: "asc" } },
+      posts: {
+        orderBy: { scheduledAt: "asc" },
+        include: {
+          adjustments: {
+            orderBy: { createdAt: "asc" },
+            select: { id: true, comment: true, status: true, reply: true },
+          },
+        },
+      },
     },
   });
 
@@ -66,10 +74,11 @@ export default async function ApprovalPage({
     return {
       id: p.id,
       theme: p.theme ?? "",
+      explanation: p.explanation ?? "",
       format: p.format,
+      captions: (p.captions as Record<string, string> | null) ?? {},
       mediaUrl: p.mediaUrl,
       mediaItems: (p.mediaItems as { url: string; type?: string }[] | null) ?? null,
-      captions: (p.captions as Record<string, string> | null) ?? {},
       targets: p.targets,
       when: formatDateTime(p.scheduledAt),
       fullWhen: fullWhen(p.scheduledAt),
@@ -80,6 +89,7 @@ export default async function ApprovalPage({
       slides: Array.isArray(p.slides)
         ? (p.slides as { text?: string }[]).map((s) => s?.text ?? "").filter(Boolean)
         : [],
+      adjustments: p.adjustments,
     };
   });
 

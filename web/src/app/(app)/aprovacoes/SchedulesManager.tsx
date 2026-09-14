@@ -122,13 +122,14 @@ function RowItem({ row, notify }: { row: Row; notify: (t: ToastState) => void })
       }
       setFreshLink(d.link);
       setOk(d.emailed === true);
+      const windowSuffix = d.windowWarning ? ` · ${d.windowWarning}` : "";
       if (d.emailed) {
         notify({ kind: "success", text: `E-mail enviado para ${d.to ?? "o cliente"}` });
-        setMsg(`E-mail enviado para ${d.to ?? "o cliente"}`);
+        setMsg(`E-mail enviado para ${d.to ?? "o cliente"}${windowSuffix}`);
       } else {
         const text = `E-mail NÃO enviado: ${d.emailError ?? "erro desconhecido"} — copie o link e mande manualmente`;
         notify({ kind: "error", text });
-        setMsg(text);
+        setMsg(text + windowSuffix);
       }
       router.refresh();
     } catch {

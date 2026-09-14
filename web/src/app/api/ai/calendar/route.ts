@@ -53,7 +53,7 @@ function pickDates(year: number, month: number, count: number, time: string): Da
 type Idea = {
   theme: string;
   format?: string;
-  captions?: { shared?: string; linkedin?: string };
+  explanation?: string;
 };
 
 export async function POST(req: NextRequest) {
@@ -106,30 +106,24 @@ export async function POST(req: NextRequest) {
     timeZone: "America/Sao_Paulo",
   }).format(new Date(Date.UTC(year, mon - 1, 15)));
 
+  // FASE CRONOGRAMA: o cliente aprova só TÍTULO + breve explicação do tema.
+  // Legenda/slides são gerados depois, quando o cronograma for aprovado.
   const system =
     "Você é um estrategista de conteúdo de social media de uma agência brasileira. " +
-    "Cria calendários editoriais mensais variados e coerentes com o tom de voz do cliente. " +
-    "Facebook e Instagram usam SEMPRE a mesma legenda (uma só). " +
+    "Cria cronogramas editoriais mensais variados e coerentes com o tom de voz do cliente. " +
     "Responda SOMENTE com JSON válido, sem texto fora do JSON.";
 
-  const hasLinkedin = targets.includes("linkedin");
-  const captionKeys = hasLinkedin
-    ? '"shared":"<legenda FB+IG>","linkedin":"<legenda LinkedIn>"'
-    : '"shared":"<legenda FB+IG>"';
   const prompt = [
     `Cliente: ${client.name}.`,
     client.toneOfVoice ? `Tom de voz: ${client.toneOfVoice}.` : "Tom de voz: não informado, use um tom profissional e próximo.",
     `Mês de referência: ${monthName}.`,
-    `Plataformas: ${targets.join(", ")}.`,
     `Gere EXATAMENTE ${n} ideias de post para o mês, variando os tipos de conteúdo `,
     "(educativo, bastidores, prova social/depoimento, promocional, engajamento/pergunta, dica rápida, institucional). ",
-    "Evite repetir temas. Para cada post forneça: theme (título curto do tema), ",
+    "Evite repetir temas. Para cada post forneça: ",
+    "theme (título curto e forte, pronto para ser o título da postagem), ",
     "format (um de: 'feed', 'carrossel', 'reels' — todo post ganha um story de apoio automaticamente, não gere posts só de story) ",
-    "e captions: 'shared' é UMA legenda única pronta usada igual no Facebook e no Instagram ",
-    "(envolvente, call-to-action, 3-6 hashtags, emojis moderados)",
-    hasLinkedin ? "; 'linkedin' é a versão profissional para o LinkedIn" : "",
-    ". Tudo em pt-BR, no tom do cliente. ",
-    `Responda em JSON no formato: {"posts":[{"theme":"...","format":"...","captions":{${captionKeys}}}]} com ${n} itens.`,
+    "e explanation (1-2 frases, em pt-BR, explicando para o CLIENTE o que essa postagem vai abordar e por quê — sem jargão, sem legenda pronta). ",
+    `Responda em JSON no formato: {"posts":[{"theme":"...","format":"...","explanation":"..."}]} com ${n} itens.`,
   ].join("");
 
   let ideas: Idea[];
@@ -160,27 +154,16 @@ export async function POST(req: NextRequest) {
 
   // Preview: NÃO salva nada. Devolve os rascunhos gerados para o usuário
   // revisar/ajustar e só então aprovar (POST /api/ai/calendar/commit).
-  const previewPosts = items.map((idea, i) => {
-    // FB+IG recebem a mesma legenda ('shared'); LinkedIn a própria (fallback shared)
-    const captions: Record<string, string> = {};
-    const shared =
-      typeof idea.captions?.shared === "string" ? idea.captions.shared.trim() : "";
-    const li =
-      typeof idea.captions?.linkedin === "string" ? idea.captions.linkedin.trim() : "";
-    if (shared) {
-      if (targets.includes("instagram")) captions.instagram = shared;
-      if (targets.includes("facebook")) captions.facebook = shared;
-    }
-    if (targets.includes("linkedin") && (li || shared)) captions.linkedin = li || shared;
-    return {
-      theme: (idea.theme ?? `Post ${i + 1}`).slice(0, 200),
-      format: idea.format ?? "feed",
-      captions,
-      scheduledAt: dates[i].toISOString(),
-      targets,
-      mediaUrl: "",
-    };
-  });
+  const previewPosts = items.map((idea, i) => ({
+    theme: (idea.theme ?? `Post ${i + 1}`).slice(0, 200),
+    format: idea.format ?? "feed",
+    explanation:
+      typeof idea.explanation === "string" ? idea.explanation.trim().slice(0, 600) : "",
+    captions: {} as Record<string, string>,
+    scheduledAt: dates[i].toISOString(),
+    targets,
+    mediaUrl: "",
+  }));
 
   return Response.json(
     {

@@ -74,8 +74,27 @@ function StatCard({
   );
 }
 
+function getRecentAlerts() {
+  return prisma.alert.findMany({
+    where: { createdAt: { gte: new Date(Date.now() - 14 * 86_400_000) } },
+    orderBy: { createdAt: "desc" },
+    take: 12,
+  });
+}
+
+const ALERT_KIND_LABEL: Record<string, string> = {
+  prazo_cronograma: "Prazo",
+  ajuste_solicitado: "Ajuste",
+  ajuste_resolvido: "Ajuste ✓",
+  cronograma_auto_aprovado: "Auto-aprovado",
+  cronograma_aprovado: "Aprovado",
+  sem_resposta: "Sem resposta",
+  sem_arte: "Sem arte",
+  semanal_enviado: "Semanal",
+};
+
 export default async function DashboardPage() {
-  const [stats, posts, summary, todayPosts, queue] = await Promise.all([
+  const [stats, posts, summary, todayPosts, queue, alerts] = await Promise.all([
     getStats(),
     prisma.post.findMany({
       take: 8,
@@ -85,6 +104,7 @@ export default async function DashboardPage() {
     getCachedSummary(),
     getTodayPosts(),
     getQueueHealth(),
+    getRecentAlerts(),
   ]);
 
   const todayPending = todayPosts.filter(
@@ -158,6 +178,39 @@ export default async function DashboardPage() {
             {stats.expiringTokens === 1 ? "conta com token expirando" : "contas com tokens expirando"}{" "}
             em menos de 7 dias. O WF-02 renova automaticamente a cada 12h.
           </p>
+        </div>
+      )}
+
+      {/* trilha de notificações do fluxo de aprovação — nada passa despercebido */}
+      {alerts.length > 0 && (
+        <div className="card overflow-hidden mb-6">
+          <div className="px-5 py-3.5 border-b border-[var(--color-border)] flex items-center gap-2">
+            <Icon.alert className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className="font-semibold text-sm">Notificações do fluxo de aprovação</h2>
+            <span className="text-xs text-[var(--color-text-faint)]">últimos 14 dias</span>
+          </div>
+          <div className="divide-y divide-[var(--color-border)] max-h-72 overflow-y-auto">
+            {alerts.map((a) => (
+              <div key={a.id} className="px-5 py-2.5 flex items-start gap-3">
+                <span
+                  className={`shrink-0 mt-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
+                    a.kind === "sem_resposta" || a.kind === "sem_arte" || a.kind === "prazo_cronograma"
+                      ? "text-amber-300 bg-amber-500/10 border-amber-500/25"
+                      : a.kind === "ajuste_solicitado"
+                        ? "text-red-300 bg-red-500/10 border-red-500/25"
+                        : "text-emerald-300 bg-emerald-500/10 border-emerald-500/25"
+                  }`}
+                >
+                  {ALERT_KIND_LABEL[a.kind] ?? a.kind}
+                </span>
+                <p className="text-sm flex-1 min-w-0 leading-snug">{a.message}</p>
+                <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">
+                  {fmtHora(a.createdAt)}
+                  {!a.emailed && a.audience === "cliente" ? " · sem e-mail" : ""}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

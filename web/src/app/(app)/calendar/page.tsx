@@ -189,7 +189,7 @@ export default async function CalendarPage({
   }
 
   return (
-    <div className="p-8 max-w-6xl mx-auto animate-fade-up">
+    <div className="p-8 max-w-[100rem] mx-auto animate-fade-up">
       <PageHeader
         title="Calendário"
         subtitle="Posts agendados"

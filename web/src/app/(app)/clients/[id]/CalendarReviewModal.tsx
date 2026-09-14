@@ -6,11 +6,13 @@ import { BrandBadge, BRAND } from "@/components/BrandIcons";
 import { DateTimePicker } from "@/components/DatePickers";
 import { AssistantPanel } from "@/components/AssistantPanel";
 import { MediaField } from "@/components/MediaField";
+import { SlidesEditor } from "@/components/SlidesEditor";
 import { spLocalInputFromISO, spLocalInputToISO } from "@/lib/format-date";
 
 export type PreviewPost = {
   theme: string;
   format: string;
+  explanation?: string;
   captions: Record<string, string>;
   scheduledAt: string; // ISO
   targets: string[];
@@ -21,7 +23,10 @@ type ReviewPost = {
   uid: string;
   theme: string;
   format: string;
+  // breve explicação do tema — é o que o cliente aprova na fase cronograma
+  explanation: string;
   captions: Record<string, string>;
+  slides: string[];
   scheduledLocal: string; // "YYYY-MM-DDTHH:MM"
   targets: string[];
   mediaUrl: string;
@@ -58,7 +63,9 @@ export default function CalendarReviewModal({
         uid: `r${uidSeq++}`,
         theme: p.theme,
         format,
+        explanation: p.explanation ?? "",
         captions: p.captions ?? {},
+        slides: [],
         scheduledLocal: spLocalInputFromISO(p.scheduledAt),
         targets: p.targets,
         mediaUrl: p.mediaUrl ?? "",
@@ -77,7 +84,7 @@ export default function CalendarReviewModal({
   // um clique fora não pode descartar 12 posts gerados sem confirmar
   function confirmClose() {
     if (busy) return;
-    if (posts.length === 0 || window.confirm("Descartar este calendário e todas as edições?")) {
+    if (posts.length === 0 || window.confirm("Descartar este cronograma e todas as edições?")) {
       onClose();
     }
   }
@@ -156,11 +163,17 @@ export default function CalendarReviewModal({
 
     try {
       if (post.theme.trim()) {
-        // título definido pelo usuário → regenera o conteúdo a partir dele
+        // título definido pelo usuário → regenera legenda (e slides, se
+        // carrossel/reels) a partir dele
         const res = await fetch("/api/ai/caption", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clientId, theme: post.theme.trim(), targets: post.targets }),
+          body: JSON.stringify({
+            clientId,
+            theme: post.theme.trim(),
+            targets: post.targets,
+            format: post.format,
+          }),
         });
         const data = await res.json().catch(() => null);
         if (!res.ok) {
@@ -172,6 +185,7 @@ export default function CalendarReviewModal({
         setLiDirty((d) => ({ ...d, [uid]: !!g.linkedin && g.linkedin !== shared }));
         update(uid, {
           captions: { instagram: shared, facebook: shared, linkedin: g.linkedin ?? shared },
+          ...(Array.isArray(data.slides) && data.slides.length ? { slides: data.slides } : {}),
         });
         return;
       }
@@ -191,7 +205,9 @@ export default function CalendarReviewModal({
       update(uid, {
         theme: data.theme ?? post.theme,
         format: data.format ?? post.format,
-        captions: data.captions ?? {},
+        explanation: data.explanation ?? "",
+        captions: {},
+        slides: [],
         mediaUrl: "",
       });
     } catch {
@@ -204,6 +220,34 @@ export default function CalendarReviewModal({
   function removePost(uid: string) {
     setPosts((prev) => prev.filter((p) => p.uid !== uid));
     if (assistantUid === uid) setAssistantUid(null);
+  }
+
+  /** nova postagem em branco: 2 dias após a última, 18h (dentro do mês) */
+  function addPost() {
+    const last = posts[posts.length - 1];
+    let scheduledLocal: string;
+    if (last?.scheduledLocal) {
+      const d = new Date(`${last.scheduledLocal}:00`);
+      d.setDate(d.getDate() + 2);
+      const pad2 = (n: number) => String(n).padStart(2, "0");
+      scheduledLocal = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T18:00`;
+    } else {
+      scheduledLocal = `${month}-05T18:00`;
+    }
+    const fresh: ReviewPost = {
+      uid: `r${uidSeq++}`,
+      theme: "",
+      format: "feed",
+      explanation: "",
+      captions: {},
+      slides: [],
+      scheduledLocal,
+      targets: platforms,
+      mediaUrl: "",
+      withStory: true,
+    };
+    setPosts((prev) => [...prev, fresh]);
+    setExpanded((e) => ({ ...e, [fresh.uid]: true }));
   }
 
   async function approve() {
@@ -232,11 +276,22 @@ export default function CalendarReviewModal({
         const baseIso = spLocalInputToISO(p.scheduledLocal);
         const base = {
           theme: p.theme,
+          explanation: p.explanation.trim() || undefined,
           captions,
           mediaUrl: p.mediaUrl.trim(),
           targets: p.targets,
         };
-        const out = [{ ...base, format: p.format, scheduledAt: baseIso }];
+        const slides = p.slides.filter((s) => s.trim()).map((text) => ({ text }));
+        const out: Record<string, unknown>[] = [
+          {
+            ...base,
+            format: p.format,
+            scheduledAt: baseIso,
+            ...(slides.length && (p.format === "carrossel" || p.format === "reels")
+              ? { slides }
+              : {}),
+          },
+        ];
         if (p.withStory && p.format !== "story") {
           const storyIso = new Date(new Date(baseIso).getTime() + 15 * 60_000).toISOString();
           out.push({ ...base, format: "story", mediaUrl: "", scheduledAt: storyIso });
@@ -273,7 +328,7 @@ export default function CalendarReviewModal({
         {/* Header */}
         <div className="flex items-start justify-between gap-4 p-5 border-b border-[var(--color-border)]">
           <div>
-            <h2 className="text-lg font-semibold">Revisar calendário</h2>
+            <h2 className="text-lg font-semibold">Revisar cronograma</h2>
             <p className="text-sm text-[var(--color-text-muted)] mt-0.5">
               {clientName} · <span className="capitalize">{monthLabel}</span> · {posts.length} post
               {posts.length !== 1 ? "s" : ""}
@@ -302,8 +357,9 @@ export default function CalendarReviewModal({
         {/* Intro */}
         <div className="px-5 pt-4">
           <p className="text-xs text-[var(--color-text-muted)] bg-white/[0.03] border border-[var(--color-border)] rounded-lg px-3 py-2">
-            Ajuste tema, data, redes, legendas e a arte de cada post. Ao aprovar, tudo é salvo como
-            <strong> rascunho</strong> — depois é só adicionar a arte que falta e agendar.
+            O cliente aprova <strong>título + explicação</strong> de cada postagem. Ajuste o que
+            precisar e salve — legendas e slides completos são gerados depois que o cronograma for
+            aprovado.
           </p>
         </div>
 
@@ -311,7 +367,7 @@ export default function CalendarReviewModal({
         <div className="flex-1 overflow-y-auto p-5 space-y-3">
           {posts.length === 0 && (
             <p className="text-center text-sm text-[var(--color-text-muted)] py-10">
-              Nenhum post. Cancele e gere novamente.
+              Nenhuma postagem. Adicione uma abaixo ou cancele e gere novamente.
             </p>
           )}
           {posts.map((p, i) => {
@@ -327,8 +383,16 @@ export default function CalendarReviewModal({
                     <input
                       value={p.theme}
                       onChange={(e) => update(p.uid, { theme: e.target.value })}
-                      placeholder="Tema do post"
+                      placeholder="Título da postagem"
                       className="input font-medium"
+                    />
+
+                    <textarea
+                      value={p.explanation}
+                      onChange={(e) => update(p.uid, { explanation: e.target.value })}
+                      rows={2}
+                      className="input resize-y text-sm"
+                      placeholder="Breve explicação do tema para o cliente (aparece no link de aprovação)…"
                     />
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -419,6 +483,13 @@ export default function CalendarReviewModal({
 
                     {open && (
                       <div className="space-y-3 pt-1">
+                        {(p.format === "carrossel" || p.format === "reels") && (
+                          <SlidesEditor
+                            format={p.format}
+                            slides={p.slides}
+                            onChange={(slides) => update(p.uid, { slides })}
+                          />
+                        )}
                         {p.targets.length === 0 && (
                           <p className="text-xs text-amber-300">Selecione uma rede para editar a legenda.</p>
                         )}
@@ -498,6 +569,16 @@ export default function CalendarReviewModal({
               </div>
             );
           })}
+
+          {/* nova postagem manual no cronograma */}
+          <button
+            type="button"
+            onClick={addPost}
+            disabled={busy}
+            className="w-full rounded-xl border border-dashed border-[var(--color-border-strong)] px-4 py-3.5 text-sm text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors disabled:opacity-50"
+          >
+            + Adicionar postagem
+          </button>
         </div>
 
         {/* Footer */}
@@ -553,9 +634,11 @@ export default function CalendarReviewModal({
                     targets: p?.targets,
                     caption: p?.captions.instagram ?? p?.captions.facebook ?? "",
                     scheduledAt: p?.scheduledLocal,
+                    slides: p?.slides.filter((s) => s.trim()),
                   };
                 }}
                 onApplyCaption={(text) => updateShared(assistantUid, text)}
+                onApplyTitle={(title) => update(assistantUid, { theme: title })}
               />
             </div>
           </div>

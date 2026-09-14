@@ -92,8 +92,9 @@ export async function POST(req: NextRequest) {
           .join("\n")
       : "",
     "REGRAS DE RESPOSTA — responda SOMENTE com JSON válido neste formato:",
-    '{"reply":"<sua resposta curta e útil>","caption":"<legenda pronta, só quando propôs uma nova legenda>","artPrompt":"<descrição de arte para gerador de imagem, só quando propôs uma arte>"}',
+    '{"reply":"<sua resposta curta e útil>","title":"<novo título, só quando propôs mudar o título>","caption":"<legenda pronta, só quando propôs uma nova legenda>","artPrompt":"<descrição de arte para gerador de imagem, só quando propôs uma arte>"}',
     "- reply: sempre presente; direto, sem enrolação; pode usar listas curtas.",
+    "- title: inclua apenas quando o pedido envolve mudar/criar o TÍTULO da postagem — curto, forte, pronto para usar.",
     "- caption: inclua apenas quando o pedido envolve reescrever/criar legenda. Legenda ÚNICA para Facebook+Instagram, pronta para publicar, com hashtags quando fizer sentido.",
     "- artPrompt: inclua apenas quando sugerir uma arte/imagem; escreva em inglês, descritivo, para um gerador de imagem.",
     "- Não invente dados do cliente (telefones, preços, promoções).",
@@ -135,10 +136,11 @@ export async function POST(req: NextRequest) {
         .join("") ?? "";
     if (!text.trim()) throw new Error("resposta vazia");
 
-    const out = parseModelJson<{ reply?: string; caption?: string; artPrompt?: string }>(text);
+    const out = parseModelJson<{ reply?: string; title?: string; caption?: string; artPrompt?: string }>(text);
     const reply = typeof out.reply === "string" && out.reply.trim() ? out.reply.trim() : text.trim();
     return Response.json({
       reply,
+      title: typeof out.title === "string" && out.title.trim() ? out.title.trim().slice(0, 200) : undefined,
       caption: typeof out.caption === "string" && out.caption.trim() ? out.caption.trim() : undefined,
       artPrompt:
         typeof out.artPrompt === "string" && out.artPrompt.trim() ? out.artPrompt.trim() : undefined,

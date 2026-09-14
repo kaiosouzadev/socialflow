@@ -15,6 +15,7 @@ export type AssistantPostContext = {
 type Msg = {
   role: "user" | "assistant";
   content: string;
+  title?: string;
   caption?: string;
   artPrompt?: string;
 };
@@ -37,11 +38,13 @@ export function AssistantPanel({
   clientId,
   getPost,
   onApplyCaption,
+  onApplyTitle,
   className = "",
 }: {
   clientId: string;
   getPost: () => AssistantPostContext;
   onApplyCaption?: (caption: string) => void;
+  onApplyTitle?: (title: string) => void;
   className?: string;
 }) {
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -98,6 +101,7 @@ export function AssistantPanel({
         {
           role: "assistant",
           content: typeof data.reply === "string" ? data.reply : "…",
+          title: typeof data.title === "string" ? data.title : undefined,
           caption: typeof data.caption === "string" ? data.caption : undefined,
           artPrompt: typeof data.artPrompt === "string" ? data.artPrompt : undefined,
         },
@@ -174,6 +178,25 @@ export function AssistantPanel({
               className="max-w-[95%] rounded-2xl rounded-bl-md border border-[var(--color-accent)]/25 bg-[var(--color-accent)]/[0.06] px-3.5 py-2.5 space-y-2.5"
             >
               <p className="text-sm whitespace-pre-wrap leading-relaxed">{m.content}</p>
+
+              {m.title && (
+                <div className="rounded-xl border border-[var(--color-border)] bg-black/25 p-3 space-y-2">
+                  <p className="text-[11px] font-medium text-[var(--color-accent)]">
+                    Sugestão de título
+                  </p>
+                  <p className="text-sm font-semibold leading-relaxed">{m.title}</p>
+                  {onApplyTitle && (
+                    <button
+                      type="button"
+                      onClick={() => onApplyTitle(m.title!)}
+                      className="btn-ghost !py-1.5 !px-3 text-xs"
+                    >
+                      <Icon.check className="w-3.5 h-3.5" />
+                      Usar este título
+                    </button>
+                  )}
+                </div>
+              )}
 
               {m.caption && (
                 <div className="rounded-xl border border-[var(--color-border)] bg-black/25 p-3 space-y-2">

@@ -6,6 +6,8 @@ import { Icon } from "@/components/Icons";
 import { Logo } from "@/components/Logo";
 
 const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+// pedido de ajuste formal precisa dizer O QUE mudar
+const MIN_ADJUST = 30;
 
 /** Cada tipo de post tem cor e rótulo próprios — é isso que diferencia os
  *  cards quando ainda não existe arte (antes tudo virava um retângulo preto). */
@@ -17,9 +19,17 @@ const FORMAT: Record<string, { label: string; color: string }> = {
 };
 const fmtOf = (f: string) => FORMAT[f] ?? { label: f, color: "#a1a1aa" };
 
+type Adjustment = {
+  id: string;
+  comment: string;
+  status: string; // pendente | resolvido
+  reply: string | null;
+};
+
 type Post = {
   id: string;
   theme: string;
+  explanation: string;
   format: string;
   mediaUrl: string | null;
   mediaItems: { url: string; type?: string }[] | null;
@@ -32,6 +42,7 @@ type Post = {
   aiEditsUsed: number;
   clientNote: string | null;
   slides: string[];
+  adjustments: Adjustment[];
 };
 
 /** Feed + Story do mesmo tema no mesmo dia viram UM card. Antes apareciam
@@ -47,6 +58,8 @@ type Group = {
 function isVid(u: string) {
   return /\.(mp4|mov|webm|m4v)$/i.test(u);
 }
+
+const pendingOf = (p: Post) => p.adjustments.filter((a) => a.status === "pendente").length;
 
 /* ------------------ "já vi este post" (por navegador) ------------------ */
 
@@ -113,11 +126,12 @@ function mediaOf(post: Post) {
       : [];
 }
 
-/** Primeira linha útil da legenda — prévia do conteúdo no card. */
+/** Prévia do conteúdo no card: primeira linha da legenda ou, na fase
+ *  cronograma (sem legenda ainda), a explicação do tema. */
 function captionPreview(post: Post): string {
   const raw = post.captions.instagram ?? post.captions.facebook ?? post.captions.linkedin ?? "";
   const firstLine = raw.split("\n").find((l) => l.trim().length > 0) ?? "";
-  return firstLine.trim();
+  return firstLine.trim() || post.explanation.trim();
 }
 
 function groupPosts(posts: Post[]): Group[] {
@@ -206,6 +220,7 @@ function PostModal({
   onClose,
   onSaved,
   onNoted,
+  onAdjustmentAdded,
   readOnly = false,
 }: {
   token: string;
@@ -213,6 +228,7 @@ function PostModal({
   onClose: () => void;
   onSaved: (postId: string, captions: Record<string, string>) => void;
   onNoted: (postId: string, note: string | null) => void;
+  onAdjustmentAdded: (postId: string, adjustment: Adjustment) => void;
   readOnly?: boolean;
 }) {
   const [postId, setPostId] = useState(group.primary.id);
@@ -223,6 +239,8 @@ function PostModal({
   const [caps, setCaps] = useState<Record<string, string>>(post.captions);
   const [note, setNote] = useState(post.clientNote ?? "");
   const [noteOpen, setNoteOpen] = useState(!!post.clientNote);
+  const [adjustComment, setAdjustComment] = useState("");
+  const [adjustOpen, setAdjustOpen] = useState(false);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -233,10 +251,13 @@ function PostModal({
     setCaps(post.captions);
     setNote(post.clientNote ?? "");
     setNoteOpen(!!post.clientNote);
+    setAdjustComment("");
+    setAdjustOpen(false);
     setActive(0);
     setMsg("");
   }
 
+  const hasCaption = !!(post.captions.instagram ?? post.captions.facebook ?? post.captions.linkedin);
   const hasMeta = post.targets.includes("instagram") || post.targets.includes("facebook");
   const hasLinkedin = post.targets.includes("linkedin");
   const shared = caps.instagram ?? caps.facebook ?? "";
@@ -317,6 +338,34 @@ function PostModal({
     }
   }
 
+  const adjustRemaining = MIN_ADJUST - adjustComment.trim().length;
+
+  async function requestAdjust() {
+    if (adjustComment.trim().length < MIN_ADJUST || busy) return;
+    setBusy("adjust");
+    setMsg("");
+    try {
+      const r = await fetch(`/api/aprovar/${token}/post/${post.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "adjust", comment: adjustComment.trim() }),
+      });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) {
+        setMsg(typeof d?.error === "string" ? d.error : "Erro ao enviar o pedido de ajuste.");
+        return;
+      }
+      onAdjustmentAdded(post.id, d.adjustment);
+      setAdjustComment("");
+      setAdjustOpen(false);
+      setMsg("Pedido de ajuste enviado ✓ — a equipe foi avisada.");
+    } catch {
+      setMsg("Falha de conexão. Tente novamente.");
+    } finally {
+      setBusy("");
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm"
@@ -359,7 +408,7 @@ function PostModal({
                   }}
                 >
                   {f.label} · {p.time}
-                  {p.clientNote && " ✎"}
+                  {(p.clientNote || pendingOf(p) > 0) && " ✎"}
                 </button>
               );
             })}
@@ -367,6 +416,16 @@ function PostModal({
         )}
 
         <div className="p-5 space-y-4">
+          {/* explicação do tema — é isso que o cliente aprova na fase cronograma */}
+          {post.explanation && (
+            <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] p-4">
+              <p className="text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
+                Sobre esta postagem
+              </p>
+              <p className="text-sm leading-relaxed whitespace-pre-wrap">{post.explanation}</p>
+            </div>
+          )}
+
           {/* mídia (ou placeholder do tipo, quando a arte ainda não existe) */}
           <div className="space-y-2">
             <div className="rounded-xl overflow-hidden bg-black/40 aspect-square flex items-center justify-center">
@@ -426,82 +485,178 @@ function PostModal({
             </div>
           )}
 
-          {/* legendas: FB+IG compartilham um campo; LinkedIn é próprio */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[var(--color-text-muted)]">Legendas</span>
-              {!readOnly && (
-                <button
-                  onClick={save}
-                  disabled={busy !== ""}
-                  className="text-xs font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40"
-                >
-                  {busy === "save" ? "Salvando..." : "Salvar alterações"}
-                </button>
+          {/* legendas: só quando o conteúdo já foi produzido (fase 2). Na fase
+              cronograma o cliente aprova o tema; a legenda vem depois. */}
+          {hasCaption && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-[var(--color-text-muted)]">Legendas</span>
+                {!readOnly && (
+                  <button
+                    onClick={save}
+                    disabled={busy !== ""}
+                    className="text-xs font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40"
+                  >
+                    {busy === "save" ? "Salvando..." : "Salvar alterações"}
+                  </button>
+                )}
+              </div>
+
+              {hasMeta && (
+                <div>
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
+                    <span className="flex items-center gap-1">
+                      {post.targets.includes("facebook") && <BrandBadge platform="facebook" size={18} />}
+                      {post.targets.includes("instagram") && <BrandBadge platform="instagram" size={18} />}
+                    </span>
+                    {post.targets.includes("facebook") && post.targets.includes("instagram")
+                      ? "Facebook + Instagram (legenda única)"
+                      : BRAND[post.targets.includes("facebook") ? "facebook" : "instagram"]?.label}
+                  </span>
+                  <textarea
+                    value={shared}
+                    onChange={(e) => setShared(e.target.value)}
+                    rows={7}
+                    readOnly={readOnly}
+                    className="input resize-y min-h-24 text-sm leading-relaxed read-only:opacity-70"
+                  />
+                </div>
+              )}
+
+              {hasLinkedin && (
+                <div>
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
+                    <BrandBadge platform="linkedin" size={18} /> LinkedIn
+                    {!liDirty && hasMeta && (
+                      <span className="text-[var(--color-text-faint)] font-normal">· espelhando FB+IG</span>
+                    )}
+                  </span>
+                  <textarea
+                    value={caps.linkedin ?? shared}
+                    onChange={(e) => setLinkedin(e.target.value)}
+                    rows={5}
+                    readOnly={readOnly}
+                    className="input resize-y min-h-20 text-sm leading-relaxed read-only:opacity-70"
+                  />
+                </div>
               )}
             </div>
+          )}
 
-            {hasMeta && (
-              <div>
-                <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
-                  <span className="flex items-center gap-1">
-                    {post.targets.includes("facebook") && <BrandBadge platform="facebook" size={18} />}
-                    {post.targets.includes("instagram") && <BrandBadge platform="instagram" size={18} />}
-                  </span>
-                  {post.targets.includes("facebook") && post.targets.includes("instagram")
-                    ? "Facebook + Instagram (legenda única)"
-                    : BRAND[post.targets.includes("facebook") ? "facebook" : "instagram"]?.label}
-                </span>
-                <textarea
-                  value={shared}
-                  onChange={(e) => setShared(e.target.value)}
-                  rows={7}
-                  readOnly={readOnly}
-                  className="input resize-y min-h-24 text-sm leading-relaxed read-only:opacity-70"
-                />
-              </div>
-            )}
-
-            {hasLinkedin && (
-              <div>
-                <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
-                  <BrandBadge platform="linkedin" size={18} /> LinkedIn
-                  {!liDirty && hasMeta && (
-                    <span className="text-[var(--color-text-faint)] font-normal">· espelhando FB+IG</span>
+          {/* pedidos de ajuste formais (bloqueiam a aprovação até a equipe concluir) */}
+          {post.adjustments.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-[var(--color-text-muted)]">Pedidos de ajuste</p>
+              {post.adjustments.map((a) => (
+                <div
+                  key={a.id}
+                  className={`rounded-xl border p-3 text-sm space-y-1.5 ${
+                    a.status === "pendente"
+                      ? "border-amber-500/30 bg-amber-500/[0.06]"
+                      : "border-emerald-500/25 bg-emerald-500/[0.05]"
+                  }`}
+                >
+                  <p className="whitespace-pre-wrap leading-relaxed">{a.comment}</p>
+                  {a.status === "pendente" ? (
+                    <p className="text-[11px] text-amber-300 font-medium">
+                      Aguardando a equipe concluir este ajuste
+                    </p>
+                  ) : (
+                    <div className="text-[11px] text-emerald-300 font-medium">
+                      Concluído ✓
+                      {a.reply ? (
+                        <span className="block font-normal text-emerald-200/80 mt-0.5">
+                          Resposta: {a.reply}
+                        </span>
+                      ) : null}
+                    </div>
                   )}
-                </span>
-                <textarea
-                  value={caps.linkedin ?? shared}
-                  onChange={(e) => setLinkedin(e.target.value)}
-                  rows={5}
-                  readOnly={readOnly}
-                  className="input resize-y min-h-20 text-sm leading-relaxed read-only:opacity-70"
-                />
-              </div>
-            )}
-          </div>
+                </div>
+              ))}
+            </div>
+          )}
 
-          {/* comentar em vez de editar: muitos clientes não querem mexer no texto */}
+          {/* pedir ajuste formal neste post */}
+          {!readOnly && (
+            <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] p-4">
+              {!adjustOpen ? (
+                <button
+                  onClick={() => setAdjustOpen(true)}
+                  className="text-xs font-medium text-[var(--color-accent)] hover:underline"
+                >
+                  Solicitar ajuste nesta postagem
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-[var(--color-text-muted)]">
+                    O que você quer mudar nesta postagem?
+                  </label>
+                  <textarea
+                    value={adjustComment}
+                    onChange={(e) => setAdjustComment(e.target.value)}
+                    rows={4}
+                    maxLength={2000}
+                    placeholder="Descreva o ajuste (mínimo 30 caracteres). Ex: trocar o tema por algo sobre resultados; não citar preço."
+                    className="input resize-y min-h-20 text-sm"
+                  />
+                  <div className="flex items-center justify-between gap-3">
+                    <span
+                      className={`text-[11px] ${
+                        adjustRemaining > 0 ? "text-[var(--color-text-faint)]" : "text-emerald-300"
+                      }`}
+                    >
+                      {adjustRemaining > 0
+                        ? `Faltam ${adjustRemaining} caracteres`
+                        : "Pronto para enviar ✓"}
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setAdjustOpen(false);
+                          setAdjustComment("");
+                        }}
+                        className="text-xs text-[var(--color-text-muted)] hover:text-white"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        onClick={requestAdjust}
+                        disabled={busy !== "" || adjustComment.trim().length < MIN_ADJUST}
+                        className="btn-primary !py-1.5 !px-3.5 text-xs disabled:opacity-40"
+                      >
+                        {busy === "adjust" ? "Enviando..." : "Enviar pedido de ajuste"}
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-[var(--color-text-faint)]">
+                    A aprovação do cronograma fica bloqueada até a equipe concluir seus ajustes.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* comentário livre (não bloqueia — observação para a agência) */}
           {!readOnly && (
             <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] p-4">
               {!noteOpen ? (
                 <button
                   onClick={() => setNoteOpen(true)}
-                  className="text-xs font-medium text-[var(--color-accent)] hover:underline"
+                  className="text-xs text-[var(--color-text-muted)] hover:text-white hover:underline"
                 >
-                  Prefere que a agência ajuste? Deixe um comentário neste post
+                  Deixar uma observação livre neste post (não trava a aprovação)
                 </button>
               ) : (
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-[var(--color-text-muted)]">
-                    Comentário para a agência sobre este post
+                    Observação para a agência sobre este post
                   </label>
                   <textarea
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
                     rows={3}
                     maxLength={1000}
-                    placeholder="Ex: trocar a foto por uma da equipe; tirar o preço da legenda."
+                    placeholder="Ex: gostei do tema; se possível usar foto da equipe."
                     className="input resize-y min-h-16 text-sm"
                   />
                   <div className="flex items-center gap-3">
@@ -510,7 +665,7 @@ function PostModal({
                       disabled={busy !== ""}
                       className="btn-ghost !py-1.5 text-xs disabled:opacity-40"
                     >
-                      {busy === "note" ? "Enviando..." : "Enviar comentário"}
+                      {busy === "note" ? "Enviando..." : "Enviar observação"}
                     </button>
                     <span className="text-[11px] text-[var(--color-text-faint)]">
                       {note.length}/1000
@@ -553,13 +708,16 @@ function GroupCard({
   const extras = group.posts.filter((p) => p.id !== primary.id);
   const preview = captionPreview(primary);
   const noted = group.posts.some((p) => p.clientNote);
+  const pending = group.posts.reduce((n, p) => n + pendingOf(p), 0);
   const f = fmtOf(primary.format);
 
   return (
     <button
       onClick={onOpen}
       className="group relative w-full text-left rounded-lg overflow-hidden bg-white/[0.03] border transition-colors hover:border-[var(--color-accent)]"
-      style={{ borderColor: seen ? `${f.color}55` : "var(--color-border)" }}
+      style={{
+        borderColor: pending > 0 ? "#f59e0b88" : seen ? `${f.color}55` : "var(--color-border)",
+      }}
     >
       {/* faixa de cor do tipo — diferencia Feed/Story/Carrossel/Reels de relance */}
       <span className="absolute left-0 top-0 bottom-0 w-[3px] z-10" style={{ background: f.color }} />
@@ -590,7 +748,7 @@ function GroupCard({
           ))}
         </div>
 
-        {/* o conteúdo que faltava: tema e prévia da legenda */}
+        {/* o conteúdo que faltava: tema e prévia (legenda ou explicação) */}
         <p className={`font-medium leading-tight line-clamp-2 ${compact ? "text-[10px]" : "text-xs"}`}>
           {group.theme || "Sem tema"}
         </p>
@@ -608,10 +766,15 @@ function GroupCard({
         </div>
       </div>
 
-      {/* marcações: visto e comentado */}
+      {/* marcações: ajuste pendente, comentado e visto */}
       <span className="absolute top-1 right-1 z-10 flex gap-1">
-        {noted && (
+        {pending > 0 && (
           <span className="w-4 h-4 rounded-full bg-amber-400 text-black flex items-center justify-center text-[9px] font-bold">
+            !
+          </span>
+        )}
+        {noted && pending === 0 && (
+          <span className="w-4 h-4 rounded-full bg-amber-400/70 text-black flex items-center justify-center text-[9px] font-bold">
             ✎
           </span>
         )}
@@ -654,6 +817,7 @@ export default function ApprovalView({
 }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [view, setView] = useState<"calendario" | "feed">("calendario");
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
   const [error, setError] = useState("");
@@ -690,6 +854,22 @@ export default function ApprovalView({
   function handleNoted(postId: string, note: string | null) {
     setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, clientNote: note } : p)));
   }
+  function handleAdjustmentAdded(postId: string, adjustment: Adjustment) {
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === postId ? { ...p, adjustments: [...p.adjustments, adjustment] } : p
+      )
+    );
+  }
+
+  // ajustes formais pendentes bloqueiam a aprovação até a equipe concluir
+  const pendingCount = useMemo(() => posts.reduce((n, p) => n + pendingOf(p), 0), [posts]);
+
+  // pré-visualização estilo feed: temas não-story com arte, mais recente primeiro
+  const feedGroups = useMemo(
+    () => groups.filter((g) => g.primary.format !== "story" && mediaOf(g.primary).length > 0),
+    [groups]
+  );
 
   async function approve() {
     setApproving(true);
@@ -771,7 +951,9 @@ export default function ApprovalView({
         <div className="card p-8 max-w-md text-center">
           <h1 className="text-xl font-semibold mb-1">Aprovado ✓</h1>
           <p className="text-sm text-[var(--color-text-muted)]">
-            Obrigado! Seu cronograma de {monthLabel} foi aprovado e entrará na fila de publicação.
+            Obrigado! Seu cronograma de {monthLabel} foi aprovado. Agora a equipe produz as
+            legendas e artes — você recebe toda semana as postagens completas da semana seguinte
+            para revisão final.
           </p>
         </div>
       </div>
@@ -826,7 +1008,7 @@ export default function ApprovalView({
 
         {readOnly && (
           <p className="text-sm text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-center">
-            Cronograma aprovado ✓ — os posts entrarão na fila de publicação nas datas marcadas.
+            Cronograma aprovado ✓ — as postagens completas chegam para sua revisão toda semana.
           </p>
         )}
 
@@ -838,6 +1020,13 @@ export default function ApprovalView({
               A agência está revisando. Você pode continuar comentando ou aprovar quando estiver ok.
             </p>
           </div>
+        )}
+
+        {!readOnly && pendingCount > 0 && (
+          <p className="text-sm text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 text-center">
+            {pendingCount} pedido(s) de ajuste aguardando a equipe — a aprovação libera assim que
+            forem concluídos.
+          </p>
         )}
 
         {/* progresso da revisão */}
@@ -863,67 +1052,127 @@ export default function ApprovalView({
           </div>
         )}
 
+        {/* alternância calendário / feed (feed só quando já há artes) */}
+        {feedGroups.length > 0 && (
+          <div className="flex justify-center">
+            <div className="flex items-center rounded-lg border border-[var(--color-border)] overflow-hidden text-sm">
+              <button
+                onClick={() => setView("calendario")}
+                className={`px-3.5 py-1.5 font-medium transition-colors ${
+                  view === "calendario"
+                    ? "bg-[var(--color-accent)] text-white"
+                    : "text-[var(--color-text-muted)] hover:text-white"
+                }`}
+              >
+                Calendário
+              </button>
+              <button
+                onClick={() => setView("feed")}
+                className={`px-3.5 py-1.5 font-medium transition-colors ${
+                  view === "feed"
+                    ? "bg-[var(--color-accent)] text-white"
+                    : "text-[var(--color-text-muted)] hover:text-white"
+                }`}
+              >
+                Ver como feed
+              </button>
+            </div>
+          </div>
+        )}
+
         {!ready && (
           <p className="text-xs text-center text-[var(--color-text-faint)]">Preparando cronograma…</p>
         )}
 
-        {/* ---------- lista (celular): o cliente abre isso do WhatsApp ---------- */}
-        <div className={`sm:hidden space-y-3 ${ready ? "" : "opacity-50 pointer-events-none"}`}>
-          {[...byDay.entries()]
-            .sort((a, b) => a[0] - b[0])
-            .map(([day, dayGroups]) => {
-              const weekday = WEEKDAYS[new Date(Date.UTC(year, month, day)).getUTCDay()];
-              return (
-                <div key={day} className="card p-3">
-                  <p className="text-xs font-semibold text-[var(--color-text-muted)] mb-2">
-                    {weekday}, {day} de {monthLabel}
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {dayGroups.map((g) => (
-                      <GroupCard
-                        key={g.key}
-                        group={g}
-                        seen={seen.has(g.key)}
-                        onOpen={() => openGroup(g.key)}
-                        compact={false}
-                      />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-        </div>
+        {view === "feed" && feedGroups.length > 0 ? (
+          /* pré-visualização estilo feed do Instagram: grade 3xN, mais recente primeiro */
+          <div className={`card p-2 sm:p-3 ${ready ? "" : "opacity-50 pointer-events-none"}`}>
+            <div className="grid grid-cols-3 gap-0.5 sm:gap-1">
+              {[...feedGroups].reverse().map((g) => {
+                const m = mediaOf(g.primary)[0];
+                return (
+                  <button
+                    key={g.key}
+                    onClick={() => openGroup(g.key)}
+                    className="relative aspect-square overflow-hidden group"
+                  >
+                    <Thumb url={m.url} className="w-full h-full group-hover:opacity-80 transition-opacity" />
+                    {g.primary.format === "carrossel" && (
+                      <span className="absolute top-1.5 right-1.5 text-white drop-shadow">
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h13a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1Zm-3 9V4a1 1 0 0 1 1-1h12v2H6v11H4Z"/></svg>
+                      </span>
+                    )}
+                    {g.primary.format === "reels" && (
+                      <span className="absolute top-1.5 right-1.5 text-white drop-shadow">
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7L8 5Z"/></svg>
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* ---------- lista (celular): o cliente abre isso do WhatsApp ---------- */}
+            <div className={`sm:hidden space-y-3 ${ready ? "" : "opacity-50 pointer-events-none"}`}>
+              {[...byDay.entries()]
+                .sort((a, b) => a[0] - b[0])
+                .map(([day, dayGroups]) => {
+                  const weekday = WEEKDAYS[new Date(Date.UTC(year, month, day)).getUTCDay()];
+                  return (
+                    <div key={day} className="card p-3">
+                      <p className="text-xs font-semibold text-[var(--color-text-muted)] mb-2">
+                        {weekday}, {day} de {monthLabel}
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {dayGroups.map((g) => (
+                          <GroupCard
+                            key={g.key}
+                            group={g}
+                            seen={seen.has(g.key)}
+                            onOpen={() => openGroup(g.key)}
+                            compact={false}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
 
-        {/* ---------- calendário (tablet/desktop) ---------- */}
-        <div className={`hidden sm:block card p-4 ${ready ? "" : "opacity-50 pointer-events-none"}`}>
-          <div className="grid grid-cols-7 gap-2 mb-1">
-            {WEEKDAYS.map((w) => (
-              <div key={w} className="text-center text-xs font-medium text-[var(--color-text-faint)] py-1">
-                {w}
+            {/* ---------- calendário (tablet/desktop) ---------- */}
+            <div className={`hidden sm:block card p-4 ${ready ? "" : "opacity-50 pointer-events-none"}`}>
+              <div className="grid grid-cols-7 gap-2 mb-1">
+                {WEEKDAYS.map((w) => (
+                  <div key={w} className="text-center text-xs font-medium text-[var(--color-text-faint)] py-1">
+                    {w}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-7 gap-2">
-            {cells.map((d, i) => {
-              if (d === null) return <div key={`e${i}`} />;
-              const dayGroups = byDay.get(d) ?? [];
-              return (
-                <div key={d} className="min-h-[3rem] flex flex-col gap-1">
-                  <span className="text-xs text-[var(--color-text-faint)] leading-none pl-0.5">{d}</span>
-                  {dayGroups.map((g) => (
-                    <GroupCard
-                      key={g.key}
-                      group={g}
-                      seen={seen.has(g.key)}
-                      onOpen={() => openGroup(g.key)}
-                      compact
-                    />
-                  ))}
-                </div>
-              );
-            })}
-          </div>
-        </div>
+              <div className="grid grid-cols-7 gap-2">
+                {cells.map((d, i) => {
+                  if (d === null) return <div key={`e${i}`} />;
+                  const dayGroups = byDay.get(d) ?? [];
+                  return (
+                    <div key={d} className="min-h-[3rem] flex flex-col gap-1">
+                      <span className="text-xs text-[var(--color-text-faint)] leading-none pl-0.5">{d}</span>
+                      {dayGroups.map((g) => (
+                        <GroupCard
+                          key={g.key}
+                          group={g}
+                          seen={seen.has(g.key)}
+                          onOpen={() => openGroup(g.key)}
+                          compact
+                        />
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
 
         {error && (
           <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
@@ -942,10 +1191,17 @@ export default function ApprovalView({
             </button>
             <button
               onClick={() => setConfirming(true)}
-              disabled={approving || !ready}
+              disabled={approving || !ready || pendingCount > 0}
+              title={
+                pendingCount > 0
+                  ? "Aguardando a equipe concluir os ajustes solicitados"
+                  : undefined
+              }
               className="btn-primary w-full !py-3 text-base shadow-2xl disabled:opacity-40"
             >
-              Aprovar cronograma
+              {pendingCount > 0
+                ? `Aguardando ${pendingCount} ajuste(s) da equipe`
+                : "Aprovar cronograma"}
             </button>
           </div>
         )}
@@ -957,6 +1213,7 @@ export default function ApprovalView({
             onClose={() => setOpenKey(null)}
             onSaved={handleSaved}
             onNoted={handleNoted}
+            onAdjustmentAdded={handleAdjustmentAdded}
             readOnly={readOnly}
           />
         )}
@@ -973,7 +1230,8 @@ export default function ApprovalView({
             >
               <h2 className="text-lg font-semibold mb-1">Aprovar cronograma?</h2>
               <p className="text-sm text-[var(--color-text-muted)] mb-4">
-                Depois de aprovado, os posts entram na fila e serão publicados nas datas marcadas.
+                Depois de aprovado, a equipe produz o conteúdo completo e você revisa as postagens
+                semana a semana antes da publicação.
               </p>
 
               <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] divide-y divide-[var(--color-border)] mb-4 text-sm">
@@ -1005,8 +1263,8 @@ export default function ApprovalView({
               )}
               {notedCount > 0 && (
                 <p className="text-xs text-amber-200/90 bg-amber-500/[0.07] border border-amber-500/20 rounded-lg px-3 py-2 mb-4">
-                  Há {notedCount} {notedCount === 1 ? "post" : "posts"} com comentário pendente. Se
-                  aprovar agora, o cronograma vai para a fila como está.
+                  Há {notedCount} {notedCount === 1 ? "post" : "posts"} com observação. Se aprovar
+                  agora, o cronograma segue como está.
                 </p>
               )}
 

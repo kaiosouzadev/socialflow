@@ -54,7 +54,7 @@ export default function GenerateCalendarButton({ clientId }: { clientId: string 
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(typeof data?.error === "string" ? data.error : "Falha ao gerar o calendário.");
+        setError(typeof data?.error === "string" ? data.error : "Falha ao gerar o cronograma.");
         return;
       }
       setOpen(false);
@@ -65,7 +65,7 @@ export default function GenerateCalendarButton({ clientId }: { clientId: string 
         posts: data.posts ?? [],
       });
     } catch {
-      setError("Falha de conexão ao gerar o calendário. Tente novamente.");
+      setError("Falha de conexão ao gerar o cronograma. Tente novamente.");
     } finally {
       setBusy(false);
     }
@@ -75,7 +75,7 @@ export default function GenerateCalendarButton({ clientId }: { clientId: string 
     <div className="relative">
       <button onClick={() => setOpen((v) => !v)} className="btn-ghost">
         <SparkleIcon className="w-4 h-4" />
-        Calendário com IA
+        Cronograma com IA
       </button>
 
       {open && (
@@ -87,11 +87,11 @@ export default function GenerateCalendarButton({ clientId }: { clientId: string 
           >
             <div className="flex items-center gap-2 mb-3">
               <SparkleIcon className="w-4 h-4 text-[var(--color-accent)]" />
-              <h3 className="font-semibold text-sm">Gerar calendário do mês</h3>
+              <h3 className="font-semibold text-sm">Gerar cronograma do mês</h3>
             </div>
             <p className="text-xs text-[var(--color-text-muted)] mb-4">
-              A IA cria <strong>12 posts</strong> (3 por semana) como rascunho, no tom de voz do
-              cliente, para você revisar.
+              A IA cria <strong>12 postagens</strong> (título + explicação do tema) no tom de voz
+              do cliente. O cliente aprova os temas; legendas e artes vêm depois.
             </p>
 
             <div className="space-y-3">

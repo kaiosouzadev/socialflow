@@ -18,11 +18,13 @@ const captionsSchema = z
 
 const postSchema = z.object({
   theme: z.string().max(200).optional(),
+  explanation: z.string().max(600).optional(),
   captions: captionsSchema,
   mediaUrl: z.string().url().optional().or(z.literal("")),
   format: z.enum(["feed", "story", "carrossel", "reels"]).default("feed"),
   scheduledAt: z.string().datetime(),
   targets: z.array(z.enum(["instagram", "facebook", "linkedin"])).min(1),
+  slides: z.array(z.object({ text: z.string().max(2000) })).max(20).optional(),
 });
 
 const schema = z.object({
@@ -107,8 +109,12 @@ export async function POST(req: NextRequest) {
               scheduleId: schedule.id,
               clientId,
               theme: (p.theme ?? `Post ${i + 1}`).slice(0, 200),
+              explanation: p.explanation?.trim() || null,
               captions: Object.keys(captions).length
                 ? (captions as Prisma.InputJsonValue)
+                : undefined,
+              slides: p.slides?.length
+                ? (p.slides as unknown as Prisma.InputJsonValue)
                 : undefined,
               mediaUrl: p.mediaUrl || null,
               format: p.format,
