@@ -9,6 +9,8 @@
 secrets/
 # briefings de cliente (contêm logins/senhas) — nunca versionar
 *.docx
+# exports de planilhas/clientes: nunca versionar
+*.zip
 *.pem
 *.key
 *-service-account*.json
