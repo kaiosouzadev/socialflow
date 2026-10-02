@@ -1,8 +1,11 @@
 import type { NextRequest } from "next/server";
 import { requireAuth } from "@/lib/api-auth";
 import { r2Configured, uploadToR2 } from "@/lib/r2";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 export const dynamic = "force-dynamic";
+
+const FALLBACK = "Não foi possível enviar o arquivo. Tente de novo em instantes.";
 
 // SVG proibido: pode embutir <script> (XSS armazenado ao abrir a URL pública)
 const EXT: Record<string, string> = {
@@ -23,7 +26,9 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   if (!r2Configured()) {
-    return Response.json({ error: "R2 não configurado" }, { status: 500 });
+    const cause = "R2 não configurado (variáveis R2_* ausentes)";
+    console.error("[upload]", cause);
+    return Response.json({ error: toUserMessage(cause, FALLBACK) }, { status: 500 });
   }
 
   const form = await req.formData().catch(() => null);
@@ -64,7 +69,7 @@ export async function POST(req: NextRequest) {
     const url = await uploadToR2(key, buffer, file.type);
     return Response.json({ url });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Falha no upload";
-    return Response.json({ error: msg }, { status: 502 });
+    console.error("[upload]", e);
+    return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
   }
 }

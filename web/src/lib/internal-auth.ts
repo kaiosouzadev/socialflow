@@ -23,7 +23,8 @@ export function checkInternalKey(req: NextRequest): Response | null {
   const b = createHash("sha256").update(expected).digest();
 
   if (!timingSafeEqual(a, b)) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+    // texto pt-BR; o n8n só olha o status
+    return Response.json({ error: "Chave interna ausente ou inválida." }, { status: 401 });
   }
 
   return null;

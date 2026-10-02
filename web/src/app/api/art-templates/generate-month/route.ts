@@ -5,10 +5,13 @@ import { requireAuth } from "@/lib/api-auth";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { generateText, CALENDAR_MODEL } from "@/lib/gemini";
 import { genTemplateCaptions } from "@/lib/basic-plan";
+import { toUserMessage } from "@/lib/user-facing-error";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+const FALLBACK = "Não foi possível gerar os títulos do mês agora. Tente de novo em instantes.";
 
 const schema = z.object({
   month: z.string().regex(/^\d{4}-\d{2}$/),
@@ -93,10 +96,11 @@ export async function POST(req: NextRequest) {
     const raw = await generateText({ model: CALENDAR_MODEL, system, prompt, temperature: 0.95, json: true });
     const data = JSON.parse(raw);
     titles = Array.isArray(data) ? data : data.titles;
-    if (!Array.isArray(titles) || titles.length === 0) throw new Error("formato inesperado");
+    // texto que cai na regra "Gemini não retornou" do toUserMessage
+    if (!Array.isArray(titles) || titles.length === 0) throw new Error("Gemini não retornou a lista de títulos");
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Erro ao gerar títulos";
-    return Response.json({ error: `IA: ${msg}` }, { status: 502 });
+    console.error("[art-templates/generate-month]", e);
+    return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
   }
 
   // legendas padronizadas por título + cria os templates

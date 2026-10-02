@@ -2,8 +2,11 @@ import type { NextRequest } from "next/server";
 import { requireAuth } from "@/lib/api-auth";
 import { listFolders, driveConfigured } from "@/lib/google-drive";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 export const dynamic = "force-dynamic";
+
+const FALLBACK = "Não foi possível listar as pastas do Google Drive agora. Tente de novo em instantes.";
 
 /**
  * Lista as pastas do Drive para o seletor visual ao vincular um cliente.
@@ -27,7 +30,7 @@ export async function GET(req: NextRequest) {
     const folders = await listFolders(parent);
     return Response.json({ configured: true, folders });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Erro ao listar pastas do Drive";
-    return Response.json({ error: msg }, { status: 502 });
+    console.error("[drive/folders]", e);
+    return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
   }
 }

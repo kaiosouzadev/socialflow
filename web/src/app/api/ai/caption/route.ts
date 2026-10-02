@@ -4,10 +4,13 @@ import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { toUserMessage } from "@/lib/user-facing-error";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+
+const FALLBACK = "Não foi possível gerar a legenda agora. Tente de novo em instantes.";
 
 const schema = z.object({
   clientId: uuidString,
@@ -121,7 +124,6 @@ export async function POST(req: NextRequest) {
     return Response.json({ captions, slides, model: CAPTION_MODEL });
   } catch (e) {
     console.error("[ai/caption]", e);
-    const msg = e instanceof Error ? e.message : "Erro ao gerar legenda";
-    return Response.json({ error: msg }, { status: 502 });
+    return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
   }
 }

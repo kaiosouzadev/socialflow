@@ -4,8 +4,39 @@ import { requireAuth } from "@/lib/api-auth";
 import { decryptToken } from "@/lib/crypto";
 import { listAssets } from "@/lib/meta";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 export const dynamic = "force-dynamic";
+
+const TOKEN_UNREADABLE =
+  "Não foi possível ler o token salvo desta conexão. Cole o token de novo para atualizar a conexão.";
+const TOKEN_EXPIRED =
+  "O token desta conexão com a Meta expirou ou foi revogado. Gere um novo token do usuário do sistema no Gerenciador de Negócios da Meta e atualize a conexão.";
+const NO_PERMISSION =
+  "O token desta conexão não tem permissão para listar as Páginas e as contas do Instagram. No Gerenciador de Negócios da Meta, dê ao usuário do sistema acesso a elas, gere um novo token e atualize a conexão.";
+const LIST_FAILED =
+  "Não foi possível listar as Páginas e as contas do Instagram desta conexão. Tente de novo em instantes; se continuar, gere um novo token e atualize a conexão.";
+
+// mensagens da Graph API (lib/meta repassa só o `message` do erro)
+const TOKEN_ERROR =
+  /Error validating access token|Invalid OAuth access token|Malformed access token|access token could not be decrypted|session has expired|\(#190\)|\bHTTP 401\b/i;
+const PERMISSION_ERROR = /\(#(10|2\d\d)\)|permiss|\bHTTP 403\b/i;
+
+/** Texto de uma regra conhecida de `toUserMessage`; null quando a mensagem passaria crua. */
+function knownMessage(e: unknown): string | null {
+  const raw = (e instanceof Error ? e.message : typeof e === "string" ? e : "").trim();
+  const msg = toUserMessage(e, "");
+  return msg && msg !== raw ? msg : null;
+}
+
+/** Erro de listagem → causa provável + ação sugerida, em pt-BR. */
+function listAssetsError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : "";
+  if (TOKEN_ERROR.test(raw)) return TOKEN_EXPIRED;
+  if (PERMISSION_ERROR.test(raw)) return NO_PERMISSION;
+  // timeout da Graph e falha de rede têm texto próprio em toUserMessage
+  return knownMessage(e) ?? LIST_FAILED;
+}
 
 type SafeAsset = {
   pageId: string;
@@ -53,8 +84,10 @@ export async function GET(
   let token: string;
   try {
     token = decryptToken(conn.accessTokenEnc);
-  } catch {
-    return Response.json({ error: "Falha ao ler o token da conexão" }, { status: 500 });
+  } catch (e) {
+    console.error("[meta/assets] falha ao decifrar o token da conexão", id, e);
+    // falha de configuração (503): chave de criptografia ausente tem texto próprio; o resto é token ilegível
+    return Response.json({ error: knownMessage(e) ?? TOKEN_UNREADABLE }, { status: 503 });
   }
 
   try {
@@ -69,7 +102,7 @@ export async function GET(
     assetsCache.set(id, { at: Date.now(), assets: safe });
     return Response.json({ assets: safe });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Erro ao listar ativos";
-    return Response.json({ error: `Meta: ${msg}` }, { status: 502 });
+    console.error("[meta/assets] falha ao listar ativos da conexão", id, e);
+    return Response.json({ error: listAssetsError(e) }, { status: 502 });
   }
 }

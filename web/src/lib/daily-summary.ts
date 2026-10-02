@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { generateText, CAPTION_MODEL } from "@/lib/gemini";
+import { effectiveCaption } from "@/lib/production";
 
 const TZ = "America/Sao_Paulo";
 
@@ -46,7 +47,7 @@ export async function getTodayPosts(day = spToday()): Promise<TodayPost[]> {
     status: p.status,
     scheduledAt: p.scheduledAt,
     hasMedia: !!p.mediaUrl,
-    hasCaption: !!(p.caption || (p.captions && Object.keys(p.captions).length > 0)),
+    hasCaption: effectiveCaption(p) !== null,
   }));
 }
 

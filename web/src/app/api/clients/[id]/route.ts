@@ -2,6 +2,9 @@ import { NextRequest } from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
+import { normalizeEmail, normalizeExtraEmails } from "@/lib/client-emails";
+import { CLIENT_STATUSES, SEGMENTS } from "@/lib/status-meta";
+import { uuidString } from "@/lib/validators";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +21,15 @@ const briefingSchema = z
     designNotes: z.string().optional(),
     plan: z.string().optional(),
     responsibleTech: z.string().optional(),
+    // questionário completo (onboarding da redação)
+    audience: z.string().optional(),
+    competitors: z.string().optional(),
+    differential: z.string().optional(),
+    references: z.string().optional(),
+    anniversary: z.string().optional(),
+    linkedinUrl: z.string().optional(),
+    linkedinRepost: z.string().optional(),
+    positioning: z.string().optional(),
   })
   .optional();
 
@@ -43,7 +55,23 @@ const updateSchema = z.object({
   tier: z.enum(["basica", "completa"]).optional(),
   // exibir dados de contato na arte gerada?
   showContacts: z.boolean().optional(),
+  // a agência agenda e publica? true → false devolve os posts da fila para draft
+  agencyPublishes: z.boolean({ error: "Informe se a agência agenda e publica (sim ou não)." }).optional(),
+  // e-mails adicionais — substitui a lista inteira; normalizados por normalizeExtraEmails (máx. 10)
+  extraEmails: z
+    .array(z.string({ error: "Cada e-mail adicional deve ser um texto." }), {
+      error: "Envie os e-mails adicionais como uma lista.",
+    })
+    .max(100, "Lista de e-mails adicionais longa demais.")
+    .optional(),
+  status: z.enum(CLIENT_STATUSES, { error: "Status inválido: use ativo, pausado ou encerrado." }).optional(),
+  segment: z.enum(SEGMENTS, { error: "Segmento inválido: use CORR, CARE ou COLETIVO." }).nullable().optional(),
+  // redatora responsável (users.id); null limpa
+  responsibleUserId: uuidString.nullable().optional(),
 });
+
+// posts que "Sim → Não" devolve para draft (publishing é barrado no publicador)
+const REVERT_ON_NO_PUBLISH = ["scheduled", "failed"];
 
 // campos texto onde "" deve virar null (limpar)
 const NULLABLE_TEXT = [
@@ -68,6 +96,9 @@ export async function GET(
   if (denied) return denied;
 
   const { id } = await params;
+  if (!uuidString.safeParse(id).success) {
+    return Response.json({ error: "ID inválido" }, { status: 400 });
+  }
   const client = await prisma.client.findUnique({
     where: { id },
     include: {
@@ -88,10 +119,17 @@ export async function GET(
   });
 
   if (!client) return Response.json({ error: "Not found" }, { status: 404 });
+
+  // para a confirmação de "publica? → Não": quantos voltariam a draft e quantos estão publicando agora
+  const [queuedPostsCount, publishingNow] = await Promise.all([
+    prisma.post.count({ where: { clientId: id, status: { in: REVERT_ON_NO_PUBLISH } } }),
+    prisma.post.count({ where: { clientId: id, status: "publishing" } }),
+  ]);
+
   // nunca expor o blob cifrado de credenciais ao browser
   const { credentialsEnc: _c, ...safe } = client;
   void _c;
-  return Response.json(safe);
+  return Response.json({ ...safe, queuedPostsCount, publishingNow });
 }
 
 export async function PATCH(
@@ -102,11 +140,20 @@ export async function PATCH(
   if (denied) return denied;
 
   const { id } = await params;
+  if (!uuidString.safeParse(id).success) {
+    return Response.json({ error: "ID inválido" }, { status: 400 });
+  }
   const body = await req.json().catch(() => null);
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
+
+  const current = await prisma.client.findUnique({
+    where: { id },
+    select: { email: true, extraEmails: true, status: true },
+  });
+  if (!current) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
 
   // "" nos campos texto opcionais = limpar (null)
   const data: Record<string, unknown> = { ...parsed.data };
@@ -116,12 +163,43 @@ export async function PATCH(
     }
   }
 
+  const { extraEmails, email, status, responsibleUserId, agencyPublishes } = parsed.data;
+  if (extraEmails !== undefined) {
+    const normalized = normalizeExtraEmails(email ?? current.email, extraEmails);
+    if (!normalized.ok) {
+      return Response.json({ error: normalized.error, field: "extraEmails" }, { status: 400 });
+    }
+    data.extraEmails = normalized.emails;
+  } else if (email !== undefined) {
+    // o novo principal não pode continuar repetido entre os adicionais
+    const main = normalizeEmail(email);
+    if (current.extraEmails.some((e) => normalizeEmail(e) === main)) {
+      data.extraEmails = current.extraEmails.filter((e) => normalizeEmail(e) !== main);
+    }
+  }
+
+  if (status !== undefined && status !== current.status) data.statusChangedAt = new Date();
+
+  if (responsibleUserId && !(await prisma.user.findUnique({ where: { id: responsibleUserId }, select: { id: true } }))) {
+    return Response.json({ error: "Usuário responsável não encontrado.", field: "responsibleUserId" }, { status: 400 });
+  }
+
   try {
-    const client = await prisma.client.update({ where: { id }, data });
+    // "publica? → Não": cliente e posts da fila (scheduled/failed → draft) na
+    // mesma transação. Idempotente: para quem já era "Não" não sobra nada a reverter.
+    const { client, revertedToDraft } = await prisma.$transaction(async (tx) => {
+      const client = await tx.client.update({ where: { id }, data });
+      if (agencyPublishes !== false) return { client, revertedToDraft: 0 };
+      const reverted = await tx.post.updateMany({
+        where: { clientId: id, status: { in: REVERT_ON_NO_PUBLISH } },
+        data: { status: "draft" },
+      });
+      return { client, revertedToDraft: reverted.count };
+    });
     // não devolve credenciais cifradas
     const { credentialsEnc: _omit, ...safe } = client;
     void _omit;
-    return Response.json(safe);
+    return Response.json({ ...safe, revertedToDraft });
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError) {
       if (e.code === "P2025") return Response.json({ error: "Cliente não encontrado" }, { status: 404 });

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { prepareClientDriveFolders, spMonthKey } from "@/lib/drive-sync";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +38,12 @@ const schema = z.object({
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
+/**
+ * Falha ao gravar (a transação desfaz tudo). Texto fixo: a mensagem do Prisma é técnica e em
+ * inglês, e as curtas (ex.: "Transaction already closed…") passariam intactas pelo toUserMessage.
+ */
+const SAVE_FAILED = "Não foi possível salvar o cronograma agora. Nada foi gravado; tente de novo em instantes.";
+
 /** Salva os posts revisados como rascunhos (draft), num cronograma. */
 export async function POST(req: NextRequest) {
   const denied = await requireAuth();
@@ -55,7 +62,10 @@ export async function POST(req: NextRequest) {
   const [year, mon] = month.split("-").map(Number);
   const monthRef = new Date(`${year}-${pad(mon)}-01T00:00:00-03:00`);
 
-  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { id: true } });
+  const client = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { id: true, name: true, driveFolderId: true },
+  });
   if (!client) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
 
   // cronograma do mês: reaproveita apenas se ainda estiver editável; um mês já
@@ -76,8 +86,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  let result: { scheduleId: string; created: number; duplicates: number };
   try {
-    const result = await prisma.$transaction(async (tx) => {
+    result = await prisma.$transaction(async (tx) => {
       const schedule =
         existing ??
         (await tx.schedule.create({
@@ -128,10 +139,16 @@ export async function POST(req: NextRequest) {
 
       return { scheduleId: schedule.id, created: fresh.length, duplicates: posts.length - fresh.length };
     });
-
-    return Response.json({ ...result, month }, { status: 201 });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Erro ao salvar o calendário";
-    return Response.json({ error: `Banco: ${msg}` }, { status: 500 });
+    // detalhe do banco só no log do servidor
+    console.error("[ai/calendar/commit] falha ao gravar o cronograma", clientId, month, e);
+    return Response.json({ error: SAVE_FAILED }, { status: 500 });
   }
+
+  // Drive (best-effort, depois de gravar): pasta do cliente e Cliente/AAAA/MM - Mês
+  // de cada mês tocado. Nunca derruba o commit: falha vira `driveWarning`.
+  const months = posts.map((p) => spMonthKey(new Date(p.scheduledAt)));
+  const driveInfo = await prepareClientDriveFolders(client, months);
+
+  return Response.json({ ...result, month, ...driveInfo }, { status: 201 });
 }

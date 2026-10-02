@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server";
+import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
+import { QUEUEABLE_CLIENT } from "@/lib/publish-guard";
 import { STUCK_MINUTES } from "@/lib/queue-health";
 import { z } from "zod";
 
@@ -22,6 +24,9 @@ const schema = z.object({
  *
  * O agendamento vai para daqui a 2 minutos para o post ser pego pela próxima
  * execução do WF-01 em vez de disparar no meio desta requisição.
+ *
+ * Cliente só produção (`agencyPublishes = false`) nunca volta à fila, em
+ * nenhum escopo: esses posts são pulados e contados em `skippedNoPublish`.
  */
 export async function POST(req: NextRequest) {
   const denied = await requireAuth();
@@ -38,7 +43,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Nenhum post informado" }, { status: 400 });
   }
 
-  const where =
+  const where: Prisma.PostWhereInput =
     scope === "stuck"
       ? {
           status: "publishing",
@@ -49,15 +54,18 @@ export async function POST(req: NextRequest) {
         ? { status: "failed", ...(clientId ? { clientId } : {}) }
         : { id: { in: ids! }, status: { in: ["failed", "publishing"] } };
 
-  const { count } = await prisma.post.updateMany({
-    where,
-    data: {
-      status: "scheduled",
-      scheduledAt: new Date(Date.now() + 2 * 60_000),
-      retryCount: 0,
-      lastError: null,
-    },
-  });
+  const [{ count }, skippedNoPublish] = await prisma.$transaction([
+    prisma.post.updateMany({
+      where: { ...where, client: QUEUEABLE_CLIENT },
+      data: {
+        status: "scheduled",
+        scheduledAt: new Date(Date.now() + 2 * 60_000),
+        retryCount: 0,
+        lastError: null,
+      },
+    }),
+    prisma.post.count({ where: { ...where, client: { agencyPublishes: false } } }),
+  ]);
 
-  return Response.json({ ok: true, requeued: count });
+  return Response.json({ ok: true, requeued: count, skippedNoPublish });
 }

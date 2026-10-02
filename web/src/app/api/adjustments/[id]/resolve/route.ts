@@ -5,6 +5,7 @@ import { uuidString } from "@/lib/validators";
 import { scheduleClientDeadline } from "@/lib/deadlines";
 import { raiseAlert, teamEmails, notifyEmailHtml, escapeHtml } from "@/lib/notify";
 import { approvalLink } from "@/lib/approval";
+import { clientRecipients } from "@/lib/client-emails";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -52,7 +53,7 @@ export async function POST(
               status: true,
               monthRef: true,
               approvalToken: true,
-              client: { select: { name: true, email: true } },
+              client: { select: { name: true, email: true, extraEmails: true } },
             },
           },
         },
@@ -86,7 +87,8 @@ export async function POST(
       const link = schedule.approvalToken
         ? approvalLink(schedule.approvalToken, req.nextUrl.origin)
         : null;
-      const clientEmail = schedule.client.email?.trim();
+      // todos os e-mails do cliente (principal primeiro), 1 e-mail por destinatário
+      const clientTo = clientRecipients(schedule.client);
 
       if (new Date() > deadline) {
         // prazo do cliente venceu com ajustes em aberto → aprova automaticamente
@@ -115,7 +117,7 @@ export async function POST(
             ),
           },
         });
-        if (clientEmail) {
+        if (clientTo.length > 0) {
           await raiseAlert({
             kind: "cronograma_auto_aprovado",
             audience: "cliente",
@@ -124,7 +126,7 @@ export async function POST(
             clientId: adjustment.post.clientId,
             scheduleId: schedule.id,
             email: {
-              to: [clientEmail],
+              to: clientTo,
               subject: "Seus ajustes foram concluídos — cronograma aprovado",
               html: notifyEmailHtml(
                 "Ajustes concluídos ✓",
@@ -138,7 +140,7 @@ export async function POST(
             },
           });
         }
-      } else if (clientEmail) {
+      } else if (clientTo.length > 0) {
         // prazo ainda aberto → cliente revisa e aprova
         await raiseAlert({
           kind: "ajuste_resolvido",
@@ -148,7 +150,7 @@ export async function POST(
           clientId: adjustment.post.clientId,
           scheduleId: schedule.id,
           email: {
-            to: [clientEmail],
+            to: clientTo,
             subject: "Ajustes concluídos — revise e aprove seu cronograma",
             html: notifyEmailHtml(
               "Seus ajustes foram concluídos ✓",

@@ -5,6 +5,7 @@ import { checkInternalKey } from "@/lib/internal-auth";
 import { scheduleClientDeadline, spTodayKey, postResponseDeadline, shortLabel } from "@/lib/deadlines";
 import { raiseAlert, teamEmails, notifyEmailHtml, escapeHtml } from "@/lib/notify";
 import { approvalLink } from "@/lib/approval";
+import { clientRecipients } from "@/lib/client-emails";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -40,7 +41,7 @@ export async function POST(req: NextRequest) {
       monthRef: true,
       approvalToken: true,
       clientId: true,
-      client: { select: { name: true, email: true } },
+      client: { select: { name: true, email: true, extraEmails: true } },
     },
   });
 
@@ -54,8 +55,8 @@ export async function POST(req: NextRequest) {
     });
 
     if (msLeft > 0 && daysLeft <= 5) {
-      // reta final (dias ~21-25): lembra o cliente (1x por dia)
-      const clientEmail = s.client.email?.trim();
+      // reta final (dias ~21-25): lembra o cliente (1x por dia), em todos os e-mails dele
+      const clientTo = clientRecipients(s.client);
       const r = await raiseAlert({
         kind: "prazo_cronograma",
         audience: "cliente",
@@ -63,9 +64,9 @@ export async function POST(req: NextRequest) {
         dedupeKey: `prazo_cliente:${s.id}:${today}`,
         clientId: s.clientId,
         scheduleId: s.id,
-        email: clientEmail
+        email: clientTo.length > 0
           ? {
-              to: [clientEmail],
+              to: clientTo,
               subject:
                 daysLeft <= 1
                   ? "Último dia para aprovar seu cronograma"
@@ -125,7 +126,7 @@ export async function POST(req: NextRequest) {
       theme: true,
       scheduledAt: true,
       clientId: true,
-      client: { select: { name: true, email: true } },
+      client: { select: { name: true, email: true, extraEmails: true } },
       weeklyReview: { select: { token: true } },
     },
   });
@@ -136,7 +137,7 @@ export async function POST(req: NextRequest) {
     if (now.getTime() < deadline.getTime() - 86_400_000) continue;
     const overdue = now > deadline;
     const link = p.weeklyReview ? `${base}/aprovar-semana/${p.weeklyReview.token}` : `${base}/aprovacoes`;
-    const clientEmail = p.client.email?.trim();
+    const clientTo = clientRecipients(p.client);
 
     const r1 = await raiseAlert({
       kind: "sem_resposta",
@@ -145,9 +146,9 @@ export async function POST(req: NextRequest) {
       dedupeKey: `sem_resposta_cliente:${p.id}:${today}`,
       clientId: p.clientId,
       postId: p.id,
-      email: clientEmail
+      email: clientTo.length > 0
         ? {
-            to: [clientEmail],
+            to: clientTo,
             subject: overdue
               ? `Postagem aguardando sua resposta — prazo vencido`
               : `Hoje é o prazo para aprovar uma postagem`,

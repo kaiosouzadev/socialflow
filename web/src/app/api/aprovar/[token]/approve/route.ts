@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { raiseAlert, teamEmails, notifyEmailHtml, escapeHtml } from "@/lib/notify";
+import { canEnterQueue } from "@/lib/publish-policy";
+import { QUEUEABLE_CLIENT } from "@/lib/publish-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +14,8 @@ const OPEN = ["enviado_cliente", "em_revisao"];
  * - Bloqueado enquanto houver ajuste pendente (a redatora precisa resolver).
  * - Plano com aprovação: posts continuam draft — o conteúdo completo
  *   (legenda/arte) ainda passa pela aprovação semanal antes de agendar.
- * - Plano auto-publicação: comportamento antigo (draft → scheduled).
+ * - Plano sem aprovação: comportamento antigo (draft → scheduled), só se a
+ *   agência publica para o cliente; cliente só produção continua em draft.
  */
 export async function POST(
   req: NextRequest,
@@ -29,7 +32,7 @@ export async function POST(
       status: true,
       clientId: true,
       monthRef: true,
-      client: { select: { name: true, plan: true } },
+      client: { select: { name: true, plan: true, agencyPublishes: true } },
     },
   });
   if (!schedule) return Response.json({ error: "Link inválido" }, { status: 404 });
@@ -50,7 +53,7 @@ export async function POST(
     );
   }
 
-  const autoSchedule = schedule.client.plan === "sem_aprovacao";
+  const autoSchedule = schedule.client.plan === "sem_aprovacao" && canEnterQueue(schedule.client);
   let scheduledCount = 0;
   await prisma.$transaction(async (tx) => {
     await tx.schedule.update({
@@ -59,7 +62,7 @@ export async function POST(
     });
     if (autoSchedule) {
       const r = await tx.post.updateMany({
-        where: { scheduleId: schedule.id, status: "draft" },
+        where: { scheduleId: schedule.id, status: "draft", client: QUEUEABLE_CLIENT },
         data: { status: "scheduled" },
       });
       scheduledCount = r.count;

@@ -5,7 +5,7 @@ import { syncMedia } from "@/lib/drive-sync";
 export const dynamic = "force-dynamic";
 
 /**
- * Verificador de mídia chamado pelo n8n (WF-05) de hora em hora.
+ * Verificador de mídia chamado pelo n8n (WF-05) a cada 30 minutos.
  * Para posts agendados sem mídia, procura a imagem no Drive e a anexa.
  */
 export async function POST(req: NextRequest) {

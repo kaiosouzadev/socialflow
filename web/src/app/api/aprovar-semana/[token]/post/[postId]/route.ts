@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { raiseAlert, teamEmails, notifyEmailHtml, escapeHtml } from "@/lib/notify";
+import { canEnterQueue } from "@/lib/publish-policy";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -15,9 +16,11 @@ const schema = z.object({
 
 /**
  * Resposta do cliente a um post do link SEMANAL:
- * - approve: post aprovado → entra na fila de publicação (scheduled);
+ * - approve: post aprovado → entra na fila de publicação (scheduled); para
+ *   cliente só produção a aprovação é gravada e o post continua draft;
  * - adjust: comentário (mín. 30 chars) → ajuste pendente + alerta à equipe;
- *   o post NÃO publica até a redatora concluir o ajuste.
+ *   o post NÃO publica até a redatora concluir o ajuste. Post que o cliente
+ *   já aprovou não aceita ajuste (409 POST_ALREADY_APPROVED).
  */
 export async function POST(
   req: NextRequest,
@@ -33,7 +36,7 @@ export async function POST(
 
   const review = await prisma.weeklyReview.findUnique({
     where: { token },
-    select: { id: true, clientId: true, client: { select: { name: true } } },
+    select: { id: true, clientId: true, client: { select: { name: true, agencyPublishes: true } } },
   });
   if (!review) return Response.json({ error: "Link inválido" }, { status: 404 });
 
@@ -61,13 +64,23 @@ export async function POST(
       data: {
         clientApproval: "aprovado",
         clientApprovedAt: new Date(),
-        ...(post.status === "draft" ? { status: "scheduled" } : {}),
+        ...(post.status === "draft" && canEnterQueue(review.client) ? { status: "scheduled" } : {}),
       },
     });
     return Response.json({ ok: true, approved: true });
   }
 
-  // adjust
+  // adjust — regra do usuário: aprovou, não pede mais ajuste por este link
+  // (recusa antes de qualquer gravação ou alerta)
+  if (post.clientApproval === "aprovado") {
+    return Response.json(
+      {
+        error: "Esta postagem já foi aprovada. Para mudar algo, fale com a agência.",
+        code: "POST_ALREADY_APPROVED",
+      },
+      { status: 409 }
+    );
+  }
   const comment = (parsed.data.comment ?? "").trim();
   if (comment.length < MIN_ADJUST) {
     return Response.json(
@@ -79,7 +92,8 @@ export async function POST(
     data: { postId, comment },
     select: { id: true, comment: true, status: true, createdAt: true },
   });
-  // ajuste em post já aprovado/agendado: volta para draft até a equipe resolver
+  // post agendado SEM aprovação do cliente (a equipe usou "Aprovar e agendar"
+  // em /posts/[id]): sai da fila e volta para draft até a equipe concluir o ajuste
   if (post.status === "scheduled") {
     await prisma.post.update({
       where: { id: postId },

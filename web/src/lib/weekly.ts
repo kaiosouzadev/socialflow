@@ -10,6 +10,7 @@ import {
   postResponseDeadline,
 } from "@/lib/deadlines";
 import { raiseAlert, teamEmails, notifyEmailHtml, escapeHtml } from "@/lib/notify";
+import { clientRecipients } from "@/lib/client-emails";
 
 /**
  * Fase semanal do fluxo de aprovação:
@@ -154,7 +155,7 @@ export async function runWeeklyReviews(origin?: string): Promise<WeeklyRunResult
         },
       },
     },
-    select: { id: true, name: true, email: true },
+    select: { id: true, name: true, email: true, extraEmails: true },
   });
 
   const base = (process.env.SYSTEM_BASE_URL ?? origin ?? "").replace(/\/$/, "");
@@ -236,7 +237,8 @@ export async function runWeeklyReviews(origin?: string): Promise<WeeklyRunResult
     });
 
     const link = `${base}/aprovar-semana/${review.token}`;
-    const clientEmail = client.email?.trim();
+    // todos os e-mails do cliente (principal primeiro), 1 e-mail por destinatário
+    const clientTo = clientRecipients(client);
     const weekLabel = `${shortLabel(weekStart)} a ${shortLabel(new Date(weekEnd.getTime() - 86_400_000))}`;
 
     await raiseAlert({
@@ -245,9 +247,9 @@ export async function runWeeklyReviews(origin?: string): Promise<WeeklyRunResult
       message: `Link semanal enviado para ${client.name}: ${ready.length} post(s) da semana ${weekLabel}.`,
       dedupeKey: `semanal_enviado:${review.id}`,
       clientId: client.id,
-      email: clientEmail
+      email: clientTo.length > 0
         ? {
-            to: [clientEmail],
+            to: clientTo,
             subject: `Suas postagens da próxima semana estão prontas para revisão`,
             html: notifyEmailHtml(
               "Postagens da próxima semana",

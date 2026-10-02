@@ -15,6 +15,11 @@ model User {
   role         String   @default("staff")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  // redatora responsável (carteira), redatora do post e responsável por pendências
+  responsibleClients      Client[]
+  writtenPosts            Post[]
+  responsiblePendingItems PendingItem[]
+
   @@map("users")
 }
 
@@ -44,12 +49,23 @@ model Client {
   tier          String    @default("completa") // basica | completa
   // exibir dados de contato (phone/whatsapp/site/instagram) na arte gerada?
   showContacts  Boolean   @default(false) @map("show_contacts")
+  // a agência agenda e publica? false = só produção: nenhum post entra na fila
+  agencyPublishes Boolean @default(true) @map("agency_publishes")
+  // e-mails adicionais (normalizados, sem o principal, máx 10; não são únicos entre clientes)
+  extraEmails   String[]  @default([]) @map("extra_emails")
+  status        String    @default("ativo") // ativo | pausado | encerrado (organizacional)
+  statusChangedAt DateTime? @map("status_changed_at") @db.Timestamptz(6)
+  segment       String? // CORR | CARE | COLETIVO
+  // redatora responsável pelo cliente
+  responsibleUserId String? @map("responsible_user_id") @db.Uuid
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  responsible    User?     @relation(fields: [responsibleUserId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   socialAccounts SocialAccount[]
   schedules      Schedule[]
   posts          Post[]
   weeklyReviews  WeeklyReview[]
+  pendingItems   PendingItem[]
 
   @@map("clients")
 }
@@ -145,13 +161,19 @@ model Post {
   clientApproval   String?   @map("client_approval")
   clientApprovedAt DateTime? @map("client_approved_at") @db.Timestamptz(6)
   weeklyReviewId   String?   @map("weekly_review_id") @db.Uuid
+  // redatora do post
+  writerId     String?   @map("writer_id") @db.Uuid
+  // nota interna da equipe (ex.: "NÃO FAZER CAPA") — nunca aparece nas páginas públicas
+  internalNote String?   @map("internal_note")
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   client       Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
   schedule     Schedule?     @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
   weeklyReview WeeklyReview? @relation(fields: [weeklyReviewId], references: [id], onDelete: SetNull)
+  writer       User?         @relation(fields: [writerId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   publications Publication[]
   adjustments  PostAdjustment[]
+  pendingItems PendingItem[]
 
   @@index([scheduledAt], map: "idx_posts_due")
   @@index([clientId], map: "idx_posts_client")
@@ -174,6 +196,28 @@ model PostAdjustment {
   @@index([postId], map: "idx_adjustments_post")
   @@index([status], map: "idx_adjustments_status")
   @@map("post_adjustments")
+}
+
+// Pendências e stand-by: posts sem data, aguardando material do cliente,
+// avulsos. Não usa Post.scheduledAt nulo — o post só nasce ao converter.
+model PendingItem {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId          String    @map("client_id") @db.Uuid
+  postId            String?   @map("post_id") @db.Uuid
+  kind              String    @default("stand_by") // stand_by | aguardando_material | avulso | outro
+  title             String
+  details           String?
+  responsibleUserId String?   @map("responsible_user_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  resolvedAt        DateTime? @map("resolved_at") @db.Timestamptz(6)
+
+  client      Client @relation(fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  post        Post?  @relation(fields: [postId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  responsible User?  @relation(fields: [responsibleUserId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([clientId], map: "idx_pending_items_client")
+  @@index([resolvedAt], map: "idx_pending_items_resolved")
+  @@map("pending_items")
 }
 
 // Link semanal de aprovação de posts completos (título + legenda + arte),

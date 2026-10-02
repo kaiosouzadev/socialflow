@@ -4,11 +4,14 @@ import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { generateText, parseModelJson, CALENDAR_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { toUserMessage } from "@/lib/user-facing-error";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 // 12 posts com legendas é a chamada de texto mais longa do app
 export const maxDuration = 120;
+
+const FALLBACK = "Não foi possível gerar o cronograma agora. Tente de novo em instantes.";
 
 const schema = z.object({
   clientId: uuidString,
@@ -140,11 +143,10 @@ export async function POST(req: NextRequest) {
     });
     const data = parseModelJson<{ posts?: Idea[] } | Idea[]>(raw);
     ideas = Array.isArray(data) ? data : (data.posts as Idea[]);
-    if (!Array.isArray(ideas)) throw new Error("formato inesperado");
+    if (!Array.isArray(ideas)) throw new Error("Gemini não retornou a lista de posts (formato inesperado)");
   } catch (e) {
     console.error("[ai/calendar]", e);
-    const msg = e instanceof Error ? e.message : "Erro ao gerar calendário";
-    return Response.json({ error: `IA: ${msg}` }, { status: 502 });
+    return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
   }
 
   const items = ideas.slice(0, n);

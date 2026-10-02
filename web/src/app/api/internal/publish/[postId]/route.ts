@@ -4,6 +4,8 @@ import { checkInternalKey } from "@/lib/internal-auth";
 import { decryptToken } from "@/lib/crypto";
 import { publishToPlatform, type MediaItem } from "@/lib/meta-publish";
 import { thumbFromUrl } from "@/lib/media-thumb";
+import { canEnterQueue } from "@/lib/publish-policy";
+import { refusePublishing } from "@/lib/publish-guard";
 
 export const dynamic = "force-dynamic";
 // publish de vídeo/carrossel faz polling — pode levar minutos
@@ -13,6 +15,12 @@ export const maxDuration = 300;
  * Publica um post nas redes-alvo (chamado pelo WF-01). Grava `publications`,
  * atualiza o status e salva a miniatura-lembrança. A mídia cheia PERMANECE no
  * R2 por 30 dias (limpeza em /api/internal/cleanup-media, WF-06).
+ *
+ * Guardas, antes de buscar contas ou chamar a Graph API:
+ * - só publica post em `publishing` (o WF-01 marca antes de chamar); qualquer
+ *   outro status → 409 sem alterações;
+ * - cliente só produção → o post volta para draft e a resposta é 409
+ *   `CLIENT_NO_PUBLISH`.
  */
 export async function POST(
   req: NextRequest,
@@ -22,8 +30,18 @@ export async function POST(
   if (denied) return denied;
 
   const { postId } = await params;
-  const post = await prisma.post.findUnique({ where: { id: postId } });
+  const post = await prisma.post.findUnique({
+    where: { id: postId },
+    include: { client: { select: { agencyPublishes: true } } },
+  });
   if (!post) return Response.json({ error: "Post não encontrado" }, { status: 404 });
+  if (post.status !== "publishing") {
+    return Response.json(
+      { error: "O post não está em publicação.", code: "POST_NOT_PUBLISHING" },
+      { status: 409 }
+    );
+  }
+  if (!canEnterQueue(post.client)) return refusePublishing(post.id);
 
   const accounts = await prisma.socialAccount.findMany({
     where: { clientId: post.clientId, status: "active", platform: { in: post.targets } },

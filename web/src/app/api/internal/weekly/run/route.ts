@@ -2,10 +2,13 @@ import type { NextRequest } from "next/server";
 import { auth } from "@/auth";
 import { checkInternalKey } from "@/lib/internal-auth";
 import { runWeeklyReviews } from "@/lib/weekly";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 export const dynamic = "force-dynamic";
 // gera conteúdo IA em lote por cliente — pode passar de 1 min
 export const maxDuration = 300;
+
+const FALLBACK = "Não foi possível enviar os links da semana agora. Tente de novo em instantes.";
 
 /**
  * Monta e envia os links SEMANAIS de aprovação (posts completos da próxima
@@ -25,7 +28,6 @@ export async function POST(req: NextRequest) {
     return Response.json(result);
   } catch (e) {
     console.error("[weekly/run]", e);
-    const msg = e instanceof Error ? e.message : "erro";
-    return Response.json({ error: msg }, { status: 500 });
+    return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 500 });
   }
 }

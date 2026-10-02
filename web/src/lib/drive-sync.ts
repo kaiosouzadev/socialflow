@@ -5,12 +5,27 @@ import {
   findFolderForIndex,
   findCarouselFilesForIndex,
   findMediaForIndex,
+  findStoryInFolder,
+  listFolders,
   listFolderMedia,
   downloadFile,
   driveConfigured,
+  ensureFolder,
+  ensureYearMonthFolders,
 } from "@/lib/google-drive";
+import {
+  buildMonthFileNames,
+  buildMonthIndex,
+  drivePathLabel,
+  parseMonthKey,
+  resolveMonthFolder,
+  type DriveLayout,
+  type MonthFileName,
+  type MonthFolderResolution,
+} from "@/lib/drive-layout";
 import { mediaUrlFor } from "@/lib/media-token";
 import { r2Configured, uploadToR2 } from "@/lib/r2";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 const TZ = "America/Sao_Paulo";
 
@@ -31,8 +46,8 @@ async function hostOnR2(file: DriveFile, clientId: string, postId: string, ord: 
   return { url, driveId: file.id, type: mediaType(file.mimeType) };
 }
 
-function spMonthKey(date: Date): string {
-  // "YYYY-MM" no fuso de São Paulo
+/** "YYYY-MM" no fuso de São Paulo (o mês da pasta onde fica a arte do post). */
+export function spMonthKey(date: Date): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ,
     year: "numeric",
@@ -42,57 +57,87 @@ function spMonthKey(date: Date): string {
     .slice(0, 7);
 }
 
-function monthFolderName(monthKey: string): string {
-  const [y, m] = monthKey.split("-").map(Number);
-  return new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, month: "long" })
-    .format(new Date(Date.UTC(y, m - 1, 15)))
-    .toLowerCase();
-}
+/** Pasta de mês usada pelo sync (uma por cliente + mês). */
+export type SyncMonthFolder = {
+  client: string;
+  /** "AAAA-MM" */
+  month: string;
+  /** "ano/mes" = Cliente/AAAA/<mês>; "legado" = Cliente/<mês>; null = não encontrada */
+  layout: DriveLayout | null;
+  /** caminho da pasta usada (o legado termina em "(estrutura antiga)"); se não encontrada, o esperado */
+  path: string;
+};
+
+/** Mais de uma pasta ou arquivo casou com o esperado; o sync usou `chosen`. */
+export type SyncAmbiguity = {
+  client: string;
+  /** post afetado; ausente quando a dúvida é na pasta do ano/mês */
+  post?: string;
+  /** pasta onde estão as candidatas */
+  path: string;
+  chosen: string;
+  /** todas as candidatas, inclusive a escolhida */
+  candidates: string[];
+};
 
 export type SyncResult = {
   attached: number;
   checked: number;
   skipped: { client: string; reason: string }[];
-  /** posts verificados que continuam sem arte, com o nome de arquivo esperado */
+  /** posts verificados que continuam sem arte, com o caminho completo esperado */
   missing: { client: string; post: string; expected: string }[];
+  layout: SyncMonthFolder[];
+  ambiguous: SyncAmbiguity[];
 };
 
 /**
- * Numeração dos posts do mês para casar com os nomes dos arquivos no Drive:
- * - só posts PRINCIPAIS (não-story) contam: 1, 2, 3… em ordem cronológica;
- * - um story herda o índice do post principal anterior mais próximo (o story
- *   sai junto do post, 15 min depois) → arquivo "Nstory.*".
- * Assim "1.jpg", "1story.jpg", "2.jpg" casam com feed 1 + story 1 + feed 2.
+ * TODOS os posts do cliente no mês (fuso SP), de qualquer status, na ordem da
+ * numeração das artes. Empate de horário: o criado antes vem primeiro (depois
+ * o id), para a ordem não mudar entre uma consulta e outra.
  */
-function buildMonthIndex(
-  monthPosts: { id: string; format: string; scheduledAt: Date }[]
-): Map<string, number> {
-  const byId = new Map<string, number>();
-  let mainIdx = 0;
-  let lastMainIdx = 0;
-  for (const p of monthPosts) {
-    if (p.format === "story") {
-      // sem principal anterior no mês (story avulso no dia 1): usa o próximo índice
-      byId.set(p.id, lastMainIdx > 0 ? lastMainIdx : 1);
-    } else {
-      mainIdx += 1;
-      lastMainIdx = mainIdx;
-      byId.set(p.id, mainIdx);
-    }
-  }
-  return byId;
+async function monthPostsFor(clientId: string, monthKey: string): Promise<{ id: string; format: string }[]> {
+  const { year: y, month: m } = parseMonthKey(monthKey);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const monthStart = new Date(`${y}-${pad(m)}-01T00:00:00-03:00`);
+  const nextMonth = new Date(`${m === 12 ? y + 1 : y}-${pad(m === 12 ? 1 : m + 1)}-01T00:00:00-03:00`);
+  return prisma.post.findMany({
+    where: { clientId, scheduledAt: { gte: monthStart, lt: nextMonth } },
+    orderBy: [{ scheduledAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    select: { id: true, format: true },
+  });
+}
+
+/**
+ * Numeração do mês (o N de cada post; regra em `buildMonthIndex`). Usada pelo
+ * plano básico, que arquiva a arte como "N.ext".
+ */
+export async function monthIndexFor(clientId: string, monthKey: string): Promise<Map<string, number>> {
+  const monthPosts = await monthPostsFor(clientId, monthKey);
+  return buildMonthIndex(monthPosts);
+}
+
+/**
+ * Nome da arte de cada post do mês no Drive ("4", "4story", "4story2"…;
+ * regra em `buildMonthFileNames`), com a mesma numeração de `monthIndexFor`.
+ */
+export async function monthFileNamesFor(clientId: string, monthKey: string): Promise<Map<string, MonthFileName>> {
+  const monthPosts = await monthPostsFor(clientId, monthKey);
+  return buildMonthFileNames(monthPosts);
 }
 
 /**
  * Para posts AGENDADOS sem mídia (na janela), procura a imagem correspondente
- * na pasta do cliente no Drive (cliente → mês → arquivo Nº) e, se achar, grava
- * o ID do arquivo e a URL pública. Não muda o status do post.
+ * na pasta do cliente no Drive (cliente → ano → mês → arquivo Nº; sem a pasta
+ * do ano, ou com o ano sem o mês, vale a estrutura antiga cliente → mês) e, se
+ * achar, grava o ID do arquivo e a URL pública. Não muda o status do post.
  *
- * Convenções aceitas na pasta do mês:
+ * Convenções aceitas na pasta do mês (ver docs/08-DRIVE-ESTRUTURA.md):
  * - single (feed/reels): "N.ext" (também "03.ext", "3 - Título.ext");
- * - story: "Nstory.ext" ("3 story", "3-story", "03_STORY"…);
- * - carrossel: subpasta "N" com as mídias, OU arquivos "N-1.ext", "N-2.ext"…
- *   soltos na pasta do mês (2+ arquivos).
+ * - story: "Nstory.ext" ("3 story", "3-story", "03_STORY"…), na pasta do mês
+ *   ou dentro da subpasta "N/"; o 2º story com o mesmo N usa "Nstory2.ext",
+ *   o 3º "Nstory3.ext"…;
+ * - carrossel: subpasta "N" com as mídias (arquivos de story ficam de fora),
+ *   OU arquivos "N-1.ext", "N-2.ext"… soltos na pasta do mês (2+ arquivos).
  * Vídeo (mp4/mov/webm) vale em qualquer um dos casos.
  */
 export async function syncMedia(opts?: {
@@ -119,7 +164,14 @@ export async function syncMedia(opts?: {
     orderBy: { scheduledAt: "asc" },
   });
 
-  const result: SyncResult = { attached: 0, checked: eligible.length, skipped: [], missing: [] };
+  const result: SyncResult = {
+    attached: 0,
+    checked: eligible.length,
+    skipped: [],
+    missing: [],
+    layout: [],
+    ambiguous: [],
+  };
   if (eligible.length === 0) return result;
 
   // agrupa por cliente + mês
@@ -135,54 +187,92 @@ export async function syncMedia(opts?: {
     else groups.set(key, { client: p.client, monthKey, posts: [p] });
   }
 
-  const folderCache = new Map<string, string | null>();
+  const clientFolderCache = new Map<string, string | null>();
+  // chave com o ano: a mesma pasta de cliente tem um "outubro" por ano
+  const monthFolderCache = new Map<string, MonthFolderResolution>();
 
   for (const { client, monthKey, posts } of groups.values()) {
-    // pasta do cliente (override por ID, ou busca pelo nome exato)
-    let clientFolderId = client.driveFolderId ?? folderCache.get(`c:${client.id}`) ?? null;
+    // pasta do cliente (override por ID, ou busca pelo nome sem caixa nem acento)
+    let clientFolderId = client.driveFolderId ?? clientFolderCache.get(client.id) ?? null;
     if (!clientFolderId) {
       clientFolderId = await findFolder(client.name, rootId);
-      folderCache.set(`c:${client.id}`, clientFolderId);
+      clientFolderCache.set(client.id, clientFolderId);
     }
     if (!clientFolderId) {
-      result.skipped.push({ client: client.name, reason: "pasta do cliente não encontrada no Drive" });
+      result.skipped.push({
+        client: client.name,
+        reason: `pasta do cliente "${client.name}" não encontrada no Drive`,
+      });
       continue;
     }
 
-    const mName = monthFolderName(monthKey);
-    const monthCacheKey = `m:${clientFolderId}:${mName}`;
-    let monthFolderId = folderCache.get(monthCacheKey) ?? null;
-    if (monthFolderId === null && !folderCache.has(monthCacheKey)) {
-      monthFolderId = await findFolder(mName, clientFolderId);
-      folderCache.set(monthCacheKey, monthFolderId);
+    // pasta do mês: Cliente/AAAA/<mês> → estrutura antiga Cliente/<mês>
+    const { year: y, month: m } = parseMonthKey(monthKey);
+    const monthCacheKey = `${clientFolderId}:${monthKey}`;
+    let folder = monthFolderCache.get(monthCacheKey);
+    if (!folder) {
+      folder = await resolveMonthFolder(listFolders, clientFolderId, y, m, client.name);
+      monthFolderCache.set(monthCacheKey, folder);
     }
+    const resolved = folder;
+    const monthFolderId = resolved.folderId;
+    const pathTo = (file: string) => drivePathLabel(client.name, y, m, file, resolved.layout, resolved);
+    result.layout.push({
+      client: client.name,
+      month: monthKey,
+      layout: resolved.layout,
+      path: monthFolderId ? pathTo("") : resolved.path,
+    });
     if (!monthFolderId) {
-      result.skipped.push({ client: client.name, reason: `pasta do mês "${mName}" não encontrada` });
+      result.skipped.push({
+        client: client.name,
+        reason: `pasta do mês não encontrada no Drive (esperado "${resolved.path}")`,
+      });
       continue;
     }
+    if (resolved.ambiguous.length > 0) {
+      result.ambiguous.push({
+        client: client.name,
+        path: client.name,
+        chosen: [resolved.yearFolderName, resolved.monthFolderName].filter(Boolean).join("/"),
+        candidates: resolved.ambiguous,
+      });
+    }
+
+    const noteAmbiguous = (post: string, path: string, pick: { file: DriveFile | null; ambiguous: string[] }) => {
+      if (pick.file && pick.ambiguous.length > 1) {
+        result.ambiguous.push({ client: client.name, post, path, chosen: pick.file.name, candidates: pick.ambiguous });
+      }
+    };
 
     // numeração do mês entre TODOS os posts do cliente (stories não contam —
-    // herdam o índice do post principal que os acompanha)
-    const [y, m] = monthKey.split("-").map(Number);
-    const monthStart = new Date(`${y}-${String(m).padStart(2, "0")}-01T00:00:00-03:00`);
-    const nextMonth = new Date(`${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, "0")}-01T00:00:00-03:00`);
-    const monthPosts = await prisma.post.findMany({
-      where: { clientId: client.id, scheduledAt: { gte: monthStart, lt: nextMonth } },
-      orderBy: { scheduledAt: "asc" },
-      select: { id: true, format: true, scheduledAt: true },
-    });
-    const indexById = buildMonthIndex(monthPosts);
+    // herdam o índice do post principal que os acompanha; o 2º story com o
+    // mesmo N usa "Nstory2", o 3º "Nstory3"…)
+    const fileNameById = await monthFileNamesFor(client.id, monthKey);
 
     for (const post of posts) {
-      const idx = indexById.get(post.id);
-      if (!idx) continue;
+      const fileName = fileNameById.get(post.id);
+      if (!fileName) continue;
+      const idx = fileName.index;
       const label = `post ${idx}${post.theme ? ` (${post.theme.slice(0, 40)})` : ""}`;
 
-      // STORY: sempre arquivo único "Nstory" (nunca vira carrossel)
+      // STORY: sempre arquivo único "Nstory"/"Nstory2"… (nunca vira
+      // carrossel); procura na pasta do mês e, se não achar, dentro da
+      // subpasta "N/"
       if (post.format === "story") {
-        const { file } = await findMediaForIndex(monthFolderId, idx, true);
+        const ordinal = fileName.storyOrdinal ?? 1;
+        let pick = await findMediaForIndex(monthFolderId, idx, true, ordinal);
+        noteAmbiguous(label, pathTo(""), pick);
+        if (!pick.file) {
+          const subId = await findFolderForIndex(monthFolderId, idx);
+          if (subId) {
+            pick = await findStoryInFolder(subId, idx, ordinal);
+            noteAmbiguous(label, pathTo(String(idx)), pick);
+          }
+        }
+        const file = pick.file;
         if (!file) {
-          result.missing.push({ client: client.name, post: label, expected: `${idx}story.*` });
+          result.missing.push({ client: client.name, post: label, expected: pathTo(`${fileName.fileStem}.jpg`) });
           continue;
         }
         const mediaUrl = r2Configured()
@@ -226,9 +316,10 @@ export async function syncMedia(opts?: {
         }
         if (post.format === "carrossel") {
           // sem subpasta e sem N-K: tenta arquivo único antes de reportar
-          const { file } = await findMediaForIndex(monthFolderId, idx, false);
-          if (file) {
-            const item = await hostOnR2(file, client.id, post.id, 1);
+          const pick = await findMediaForIndex(monthFolderId, idx, false);
+          noteAmbiguous(label, pathTo(""), pick);
+          if (pick.file) {
+            const item = await hostOnR2(pick.file, client.id, post.id, 1);
             await prisma.post.update({
               where: { id: post.id },
               data: { mediaDriveId: item.driveId, mediaUrl: item.url, mediaItems: Prisma.JsonNull },
@@ -238,23 +329,28 @@ export async function syncMedia(opts?: {
             result.missing.push({
               client: client.name,
               post: label,
-              expected: `subpasta "${idx}" ou arquivos "${idx}-1.*", "${idx}-2.*"…`,
+              expected: `${pathTo(`${idx}/`)} — subpasta com os slides (ou ${idx}-1.jpg, ${idx}-2.jpg… soltos)`,
             });
           }
           continue;
         }
       } else if (post.format === "carrossel") {
-        result.skipped.push({ client: client.name, reason: `carrossel (post ${idx}) requer R2 configurado` });
+        result.skipped.push({
+          client: client.name,
+          reason: `carrossel (post ${idx}, ${pathTo(`${idx}/`)}) precisa do armazenamento de mídia configurado no servidor`,
+        });
         continue;
       }
 
       // SINGLE (feed / reels): arquivo "N"
-      const { file } = await findMediaForIndex(monthFolderId, idx, false);
+      const pick = await findMediaForIndex(monthFolderId, idx, false);
+      noteAmbiguous(label, pathTo(""), pick);
+      const file = pick.file;
       if (!file) {
         result.missing.push({
           client: client.name,
           post: label,
-          expected: post.format === "reels" ? `${idx}.mp4 (vídeo)` : `${idx}.*`,
+          expected: pathTo(post.format === "reels" ? `${idx}.mp4` : `${idx}.jpg`),
         });
         continue;
       }
@@ -276,4 +372,84 @@ export async function syncMedia(opts?: {
   }
 
   return result;
+}
+
+/**
+ * Pasta do cliente no Drive: ID salvo no cadastro > pasta com o mesmo nome na
+ * raiz (sem caixa nem acento) > cria. O ID resolvido fica salvo no cliente,
+ * para não consultar o Drive de novo.
+ */
+export async function ensureClientDriveFolder(client: {
+  id: string;
+  name: string;
+  driveFolderId: string | null;
+}): Promise<string> {
+  if (client.driveFolderId) return client.driveFolderId;
+  const clientFolderId = await ensureFolder(client.name, process.env.DRIVE_ROOT_FOLDER_ID!);
+  await prisma.client.update({ where: { id: client.id }, data: { driveFolderId: clientFolderId } });
+  return clientFolderId;
+}
+
+/** Pasta de mês preparada ao gravar um cronograma. */
+export type PreparedMonthFolder = {
+  /** "AAAA-MM" */
+  month: string;
+  layout: DriveLayout;
+  /** "Cliente/2026/10 - Outubro" ou "Cliente/outubro (estrutura antiga)" */
+  path: string;
+  /** pastas criadas agora ("2026", "10 - Outubro"); vazio se já existiam */
+  created: string[];
+};
+
+export type DriveFoldersStatus =
+  | { status: "indisponivel" }
+  | { status: "ok" | "falhou"; folders: PreparedMonthFolder[] };
+
+const DRIVE_PREPARE_TIMEOUT_MS = 15_000;
+
+/**
+ * Best-effort, depois de gravar um cronograma: garante a pasta do cliente e as
+ * pastas ano/mês de cada mês tocado, para a equipe já saber onde pôr as artes.
+ * NUNCA lança: sem Drive → "indisponivel"; falha ou demora → "falhou" com um
+ * `driveWarning` amigável (o detalhe técnico vai só para o log).
+ */
+export async function prepareClientDriveFolders(
+  client: { id: string; name: string; driveFolderId: string | null },
+  monthKeys: readonly string[]
+): Promise<{ drive: DriveFoldersStatus; driveWarning?: string }> {
+  if (!driveConfigured()) return { drive: { status: "indisponivel" } };
+
+  const folders: PreparedMonthFolder[] = [];
+  const work = (async () => {
+    const clientFolderId = await ensureClientDriveFolder(client);
+    for (const month of [...new Set(monthKeys)].sort()) {
+      const r = await ensureYearMonthFolders(clientFolderId, month, client.name);
+      folders.push({ month, layout: r.layout, path: r.path, created: r.created });
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new Error("O Google Drive demorou a responder."));
+    }, DRIVE_PREPARE_TIMEOUT_MS);
+  });
+
+  try {
+    await Promise.race([work, timeout]);
+    return { drive: { status: "ok", folders: [...folders] } };
+  } catch (e) {
+    console.error(`[drive] falha ao preparar as pastas do cliente ${client.id}:`, e);
+    if (timedOut) {
+      // o trabalho segue em segundo plano; uma falha posterior também vai para o log
+      work.catch((late) => console.error(`[drive] pastas do cliente ${client.id} (após o tempo-limite):`, late));
+    }
+    return {
+      drive: { status: "falhou", folders: [...folders] },
+      driveWarning: `Cronograma salvo, mas as pastas do mês não foram preparadas no Google Drive. ${toUserMessage(e)}`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }

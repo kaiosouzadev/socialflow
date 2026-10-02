@@ -1,7 +1,10 @@
 import { requireAuth } from "@/lib/api-auth";
 import { generateDailySummary } from "@/lib/daily-summary";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 export const dynamic = "force-dynamic";
+
+const FALLBACK = "Não foi possível gerar o resumo do dia agora. Tente de novo em instantes.";
 
 /** Regenera o resumo do dia (fuso SP) via IA e persiste. */
 export async function POST() {
@@ -12,7 +15,7 @@ export async function POST() {
     const result = await generateDailySummary();
     return Response.json(result);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Erro ao gerar resumo";
-    return Response.json({ error: msg }, { status: 500 });
+    console.error("[ai/daily-summary]", e);
+    return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 500 });
   }
 }

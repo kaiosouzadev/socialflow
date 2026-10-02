@@ -81,3 +81,29 @@ export function spLocalInputToISO(value: string): string {
   const v = value.length === 16 ? `${value}:00` : value;
   return new Date(`${v}${SP_OFFSET}`).toISOString();
 }
+
+/** Primeira letra maiúscula (pt-BR), o resto intacto: "setembro de 2026" → "Setembro de 2026". */
+export function capitalizeFirst(s: string): string {
+  return s ? s.charAt(0).toLocaleUpperCase("pt-BR") + s.slice(1) : s;
+}
+
+/**
+ * Rótulo do mês com inicial maiúscula (no lugar do `capitalize` do CSS, que
+ * capitalizaria também o "de"): "Setembro de 2026"; `{ withYear: false }` → "Setembro".
+ * - "AAAA-MM" e "AAAA-MM-DD" são datas civis (sem fuso);
+ * - Date e ISO com hora são lidos no fuso SP.
+ * Para `Schedule.monthRef` (@db.Date, meia-noite UTC) passe a chave civil:
+ * `formatMonthLabel(monthRef.toISOString().slice(0, 7))`.
+ */
+export function formatMonthLabel(value: Date | string, opts?: { withYear?: boolean }): string {
+  const key = typeof value === "string" ? /^(\d{4})-(\d{2})(?:-\d{2})?$/.exec(value) : null;
+  // dia 15 ao meio-dia UTC: nunca muda de mês em SP
+  const d = key ? new Date(Date.UTC(Number(key[1]), Number(key[2]) - 1, 15, 12)) : asDate(value);
+  const withYear = opts?.withYear ?? true;
+  const label = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: TZ,
+    month: "long",
+    ...(withYear ? { year: "numeric" } : {}),
+  }).format(d);
+  return capitalizeFirst(label);
+}

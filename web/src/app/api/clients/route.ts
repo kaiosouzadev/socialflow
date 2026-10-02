@@ -3,6 +3,9 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { scheduleAllBasicMonths } from "@/lib/basic-plan";
+import { normalizeExtraEmails } from "@/lib/client-emails";
+import { CLIENT_STATUSES, SEGMENTS } from "@/lib/status-meta";
+import { uuidString } from "@/lib/validators";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -22,9 +25,22 @@ const createSchema = z.object({
   website: z.string().max(200).optional(),
   instagramUrl: z.string().max(200).optional(),
   city: z.string().max(120).optional(),
+  // a agência agenda e publica? false = só produção (os posts ficam em draft)
+  agencyPublishes: z.boolean({ error: "Informe se a agência agenda e publica (sim ou não)." }).default(true),
+  // e-mails adicionais — normalizados por normalizeExtraEmails (máx. 10)
+  extraEmails: z
+    .array(z.string({ error: "Cada e-mail adicional deve ser um texto." }), {
+      error: "Envie os e-mails adicionais como uma lista.",
+    })
+    .max(100, "Lista de e-mails adicionais longa demais.")
+    .optional(),
+  status: z.enum(CLIENT_STATUSES, { error: "Status inválido: use ativo, pausado ou encerrado." }).default("ativo"),
+  segment: z.enum(SEGMENTS, { error: "Segmento inválido: use CORR, CARE ou COLETIVO." }).nullable().optional(),
+  // redatora responsável (users.id)
+  responsibleUserId: uuidString.nullable().optional(),
 });
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const denied = await requireAuth();
   if (denied) return denied;
 
@@ -48,8 +64,31 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const { extraEmails, responsibleUserId, ...rest } = parsed.data;
+
+  let extras: string[] = [];
+  if (extraEmails) {
+    const normalized = normalizeExtraEmails(rest.email, extraEmails);
+    if (!normalized.ok) {
+      return Response.json({ error: normalized.error, field: "extraEmails" }, { status: 400 });
+    }
+    extras = normalized.emails;
+  }
+
+  if (responsibleUserId && !(await prisma.user.findUnique({ where: { id: responsibleUserId }, select: { id: true } }))) {
+    return Response.json({ error: "Usuário responsável não encontrado.", field: "responsibleUserId" }, { status: 400 });
+  }
+
   try {
-    const client = await prisma.client.create({ data: parsed.data });
+    const client = await prisma.client.create({
+      data: {
+        ...rest,
+        extraEmails: extras,
+        ...(responsibleUserId !== undefined ? { responsibleUserId } : {}),
+        // nasce com status diferente do padrão: a mudança é registrada agora
+        ...(rest.status !== "ativo" ? { statusChangedAt: new Date() } : {}),
+      },
+    });
 
     // cliente básico: agenda na hora o calendário de artes básicas de todos os
     // meses disponíveis (posts draft sem arte — as imagens ficam pendentes)

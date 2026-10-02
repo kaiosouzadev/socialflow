@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { sendEmail } from "@/lib/email";
+import { sendEmailEach } from "@/lib/email";
 
 /**
  * Notificações do fluxo de aprovação: cada evento vira um Alert (trilha no
@@ -8,6 +8,7 @@ import { sendEmail } from "@/lib/email";
  *
  * Destino "equipe" = todos os usuários internos (redatora incluída); override
  * opcional com TEAM_NOTIFY_EMAIL (lista separada por vírgula).
+ * Destino "cliente" = todos os e-mails do cliente (`clientRecipients`).
  */
 
 export type AlertKind =
@@ -39,17 +40,18 @@ export function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/** HTML das notificações (cores da marca; hex fixo porque é e-mail). */
 export function notifyEmailHtml(title: string, lines: string[], link?: string, cta = "Abrir"): string {
   return `
-  <div style="font-family:system-ui,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+  <div style="font-family:'DM Sans',Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a;border-top:4px solid #ee7228;padding-top:16px">
     <h2 style="margin:0 0 8px">${title}</h2>
     ${lines.map((l) => `<p style="margin:6px 0">${l}</p>`).join("")}
     ${
       link
         ? `<p style="margin:24px 0">
-      <a href="${link}" style="background:#7c5cff;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block">${cta}</a>
+      <a href="${link}" style="background:#171510;color:#fffdf7;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block">${cta}</a>
     </p>
-    <p style="font-size:12px;color:#666">Se o botão não funcionar, copie e cole: <br>${link}</p>`
+    <p style="font-size:12px;color:#666">Se o botão não funcionar, copie e cole: <br><a href="${link}" style="color:#2f49d6;word-break:break-all">${link}</a></p>`
         : ""
     }
   </div>`;
@@ -74,12 +76,12 @@ export async function raiseAlert(opts: {
 
   let emailed = false;
   if (opts.email && opts.email.to.length > 0) {
-    // best-effort: falha de e-mail não derruba o fluxo; o Alert fica no painel
-    const results = await Promise.all(
-      opts.email.to.map((to) =>
-        sendEmail({ to, subject: opts.email!.subject, html: opts.email!.html })
-      )
-    );
+    // best-effort: falha de e-mail não derruba o fluxo; o Alert fica no painel.
+    // 1 e-mail por destinatário (ninguém vê o endereço do outro).
+    const results = await sendEmailEach(opts.email.to, {
+      subject: opts.email.subject,
+      html: opts.email.html,
+    });
     emailed = results.some((r) => r.sent);
   }
 

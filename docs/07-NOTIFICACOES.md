@@ -39,7 +39,11 @@ Ambas também aceitam sessão logada — em `/aprovacoes` há o botão
 
 ## Destinatários
 
-- **Cliente**: e-mail do cadastro do cliente.
+- **Cliente**: todos os e-mails do cliente — o principal e os adicionais do
+  cadastro (até 10). Vale para o link mensal, o link semanal e os avisos ao
+  cliente. Sai **1 e-mail por destinatário** (ninguém vê o endereço do outro),
+  um de cada vez, para respeitar o limite de envio do Resend. No envio do
+  cronograma, a tela mostra para quem foi e quais endereços falharam.
 - **Equipe/redatora**: todos os usuários do sistema, ou a lista da env
   `TEAM_NOTIFY_EMAIL` (e-mails separados por vírgula) quando definida.
 - Toda notificação também vira uma linha no card **“Notificações do fluxo de

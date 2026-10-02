@@ -5,11 +5,12 @@ import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
 import { r2Configured, uploadToR2 } from "@/lib/r2";
 import {
   driveConfigured,
-  findFolder,
-  ensureFolder,
+  ensureYearMonthFolders,
   uploadToDrive,
   serviceAccountEmail,
 } from "@/lib/google-drive";
+import { ensureClientDriveFolder, monthIndexFor } from "@/lib/drive-sync";
+import { legacyMonthFolderName, parseMonthKey } from "@/lib/drive-layout";
 
 /**
  * Plano básico — mesmo fluxo do calendário dos clientes completos:
@@ -22,19 +23,19 @@ import {
  * Idempotente: cada post guarda o artTemplateId de origem.
  */
 
-const TZ = "America/Sao_Paulo";
 const SP_OFFSET = "-03:00";
 const pad = (n: number) => String(n).padStart(2, "0");
 
 /** Legendas padronizadas do template: { shared, linkedin }. */
 type TemplateCaptions = { shared?: string; linkedin?: string };
 
-/** "julho" a partir de "2026-07" (mesma convenção do drive-sync). */
-function monthFolderName(monthKey: string): string {
-  const [y, m] = monthKey.split("-").map(Number);
-  return new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, month: "long" })
-    .format(new Date(Date.UTC(y, m - 1, 15)))
-    .toLowerCase();
+/** "julho" a partir de "2026-07"; chave fora do padrão AAAA-MM aparece como está. */
+function monthLabel(monthKey: string): string {
+  try {
+    return legacyMonthFolderName(parseMonthKey(monthKey).month);
+  } catch {
+    return monthKey;
+  }
 }
 
 /** Linhas de contato para a arte, respeitando showContacts. */
@@ -161,7 +162,7 @@ export async function listBasicMonths(clientId: string): Promise<BasicMonth[]> {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([month, ids]) => ({
       month,
-      label: monthFolderName(month),
+      label: monthLabel(month),
       templates: ids.length,
       scheduled: ids.filter((id) => scheduledSet.has(id)).length,
       withArt: ids.filter((id) => artSet.has(id)).length,
@@ -334,24 +335,18 @@ export async function generateBasicArtsMonth(
 
   const contacts = contactLines(client);
 
-  // pasta do cliente no Drive (cria se faltar) — best-effort
+  // pasta Cliente/AAAA/MM - Mês no Drive (cria o que faltar) — best-effort
   let monthFolderId: string | null = null;
+  let indexById: Map<string, number> | null = null;
   if (driveConfigured()) {
     try {
-      const rootId = process.env.DRIVE_ROOT_FOLDER_ID!;
-      const clientFolderId =
-        client.driveFolderId ??
-        (await findFolder(client.name, rootId)) ??
-        (await ensureFolder(client.name, rootId));
-      // persiste o id resolvido para não re-consultar o Drive a cada lote
-      if (!client.driveFolderId && clientFolderId) {
-        await prisma.client.update({
-          where: { id: client.id },
-          data: { driveFolderId: clientFolderId },
-        });
-      }
-      monthFolderId = await ensureFolder(monthFolderName(monthKey), clientFolderId);
+      // pasta do cliente: ID salvo > mesmo nome > cria (e persiste o ID resolvido)
+      const clientFolderId = await ensureClientDriveFolder(client);
+      monthFolderId = (await ensureYearMonthFolders(clientFolderId, monthKey, client.name)).folderId;
+      // o arquivo leva o N da ordem do mês, o mesmo que o sync procura
+      indexById = await monthIndexFor(client.id, monthKey);
     } catch (e) {
+      monthFolderId = null;
       result.warnings.push(`Drive indisponível: ${driveHint(e)}`);
     }
   }
@@ -384,10 +379,12 @@ export async function generateBasicArtsMonth(
       });
       result.created++;
 
-      // arquiva no Drive com nome padronizado ("07 - Titulo.png")
-      if (monthFolderId) {
+      // arquiva no Drive como "N.ext" (N = ordem do post no mês). O nome antigo
+      // "DD - Título" era lido pelo sync como N = DD.
+      const n = indexById?.get(post.id);
+      if (monthFolderId && n) {
         try {
-          await uploadToDrive(`${pad(day)} - ${tpl.name}.${ext}`, monthFolderId, art.buffer, art.mimeType);
+          await uploadToDrive(`${n}.${ext}`, monthFolderId, art.buffer, art.mimeType);
         } catch (e) {
           result.warnings.push(`Drive: falha ao salvar "${tpl.name}" (${driveHint(e)})`);
         }

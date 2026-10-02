@@ -5,10 +5,13 @@ import { r2Configured, uploadToR2 } from "@/lib/r2";
 import { generateArt } from "@/lib/art-gen";
 import { contactLines } from "@/lib/basic-plan";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 export const dynamic = "force-dynamic";
 // geração de imagem + verificação pode passar de 60s
 export const maxDuration = 300;
+
+const FALLBACK = "Não foi possível gerar a arte agora. Tente de novo em instantes.";
 
 const TZ = "America/Sao_Paulo";
 const monthKey = (d: Date) =>
@@ -26,7 +29,11 @@ export async function POST(
 ) {
   const denied = await requireAuth();
   if (denied) return denied;
-  if (!r2Configured()) return Response.json({ error: "R2 não configurado" }, { status: 500 });
+  if (!r2Configured()) {
+    const cause = "R2 não configurado (variáveis R2_* ausentes)";
+    console.error("[posts/generate-art]", cause);
+    return Response.json({ error: toUserMessage(cause, FALLBACK) }, { status: 500 });
+  }
 
   // rota mais cara de IA (imagem): 6 gerações/min por IP
   const limited = enforceRateLimit(`generate-art:${clientIp(req)}`, 6, 60_000);
@@ -95,7 +102,7 @@ export async function POST(
 
     return Response.json({ url, template: template.name });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Falha ao gerar arte";
-    return Response.json({ error: msg }, { status: 502 });
+    console.error("[posts/generate-art]", e);
+    return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
   }
 }

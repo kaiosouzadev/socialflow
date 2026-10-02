@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
+import { guardQueueTransition } from "@/lib/publish-guard";
 import { uuidString } from "@/lib/validators";
 import { z } from "zod";
 
@@ -28,6 +29,9 @@ const createSchema = z.object({
   status: z.enum(["scheduled", "draft"]).default("scheduled"),
   // roteiro por tela (carrossel/reels)
   slides: z.array(z.object({ text: z.string().max(2000) })).max(20).optional(),
+  // redatora do post e nota interna da equipe (nunca aparece nas páginas públicas)
+  writerId: uuidString.nullable().optional(),
+  internalNote: z.string().max(2000, "A nota interna aceita no máximo 2000 caracteres.").optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -64,7 +68,16 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { mediaUrl, captions, scheduledAt, slides, ...rest } = parsed.data;
+  const { mediaUrl, captions, scheduledAt, slides, writerId, internalNote, ...rest } = parsed.data;
+
+  if (writerId && !(await prisma.user.findUnique({ where: { id: writerId }, select: { id: true } }))) {
+    return Response.json({ error: "Redatora não encontrada.", field: "writerId" }, { status: 400 });
+  }
+
+  // cliente só produção não entra na fila: "scheduled" (o default) → 409; draft passa
+  const blocked = await guardQueueTransition(rest.clientId, rest.status);
+  if (blocked) return blocked;
+
   try {
     const post = await prisma.post.create({
       data: {
@@ -73,6 +86,8 @@ export async function POST(req: NextRequest) {
         slides: slides?.length ? (slides as unknown as Prisma.InputJsonValue) : undefined,
         mediaUrl: mediaUrl || null,
         scheduledAt: new Date(scheduledAt),
+        ...(writerId !== undefined ? { writerId } : {}),
+        ...(internalNote !== undefined ? { internalNote: internalNote.trim() || null } : {}),
       },
     });
     return Response.json(post, { status: 201 });

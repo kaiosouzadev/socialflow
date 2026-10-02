@@ -4,10 +4,13 @@ import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { geminiFetch, parseModelJson, GEMINI_BASE, CAPTION_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { toUserMessage } from "@/lib/user-facing-error";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+
+const FALLBACK = "O assistente não conseguiu responder agora. Tente de novo em instantes.";
 
 /**
  * Assistente interno (equipe da agência): chat com contexto do post/cronograma.
@@ -49,7 +52,11 @@ export async function POST(req: NextRequest) {
   if (limited) return limited;
 
   const key = process.env.GEMINI_API_KEY;
-  if (!key) return Response.json({ error: "GEMINI_API_KEY não configurada" }, { status: 500 });
+  if (!key) {
+    const cause = "GEMINI_API_KEY não configurada";
+    console.error("[ai/assistant]", cause);
+    return Response.json({ error: toUserMessage(cause, FALLBACK) }, { status: 500 });
+  }
 
   const body = await req.json().catch(() => null);
   const parsed = schema.safeParse(body);
@@ -71,7 +78,7 @@ export async function POST(req: NextRequest) {
       : "";
 
   const system = [
-    "Você é o SocialFlow AI Assistant: estrategista e redator de social media de uma agência brasileira.",
+    "Você é o assistente de IA da agência Grupo Coletivo, agência brasileira de social media: estrategista e redator.",
     "Ajuda a equipe interna a melhorar posts e cronogramas. Sempre em português do Brasil.",
     `Cliente: ${client.name}.`,
     client.toneOfVoice ? `Tom de voz do cliente: ${client.toneOfVoice}.` : "",
@@ -134,7 +141,7 @@ export async function POST(req: NextRequest) {
       data?.candidates?.[0]?.content?.parts
         ?.map((p: { text?: string }) => p.text ?? "")
         .join("") ?? "";
-    if (!text.trim()) throw new Error("resposta vazia");
+    if (!text.trim()) throw new Error("Gemini não retornou texto (resposta vazia)");
 
     const out = parseModelJson<{ reply?: string; title?: string; caption?: string; artPrompt?: string }>(text);
     const reply = typeof out.reply === "string" && out.reply.trim() ? out.reply.trim() : text.trim();
@@ -147,7 +154,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (e) {
     console.error("[ai/assistant]", e);
-    const msg = e instanceof Error ? e.message : "Erro no assistente";
-    return Response.json({ error: `IA: ${msg}` }, { status: 502 });
+    return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
   }
 }
