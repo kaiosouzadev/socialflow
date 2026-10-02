@@ -14,7 +14,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH destrava AS (\n  UPDATE posts\n  SET status='failed', last_error='destravado: preso em publishing por 20+ min'\n  WHERE status='publishing' AND scheduled_at < now() - interval '20 minutes'\n  RETURNING id\n)\nUPDATE posts\nSET status='scheduled',\n    scheduled_at = now() + (CASE retry_count WHEN 0 THEN interval '5 minutes' WHEN 1 THEN interval '30 minutes' ELSE interval '2 hours' END),\n    retry_count = retry_count + 1\nWHERE status='failed' AND retry_count < 3\nRETURNING id, client_id, retry_count, last_error",
+        "query": "WITH destrava AS (\n  UPDATE posts\n  SET status='failed', last_error='destravado: travado ao publicar por 20+ min'\n  WHERE status='publishing' AND scheduled_at < now() - interval '20 minutes'\n  RETURNING id\n)\nUPDATE posts\nSET status='scheduled',\n    scheduled_at = now() + (CASE retry_count WHEN 0 THEN interval '5 minutes' WHEN 1 THEN interval '30 minutes' ELSE interval '2 hours' END),\n    retry_count = retry_count + 1\nWHERE status='failed' AND retry_count < 3\n  AND EXISTS (SELECT 1 FROM clients c WHERE c.id = posts.client_id AND c.agency_publishes = true)\nRETURNING id, client_id, retry_count, last_error",
         "options": {}
       },
       "id": "ed966c90-1d25-4780-b438-670394059100",

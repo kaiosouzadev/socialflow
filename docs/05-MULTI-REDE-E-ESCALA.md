@@ -58,15 +58,24 @@ query de `Busca fila (lock)` faz **lock otimista**:
 
 ```sql
 UPDATE posts SET status='publishing'
-WHERE id IN (SELECT id FROM posts
-             WHERE status='scheduled' AND scheduled_at <= now()
-             ORDER BY scheduled_at LIMIT 10)
-RETURNING ...;
+WHERE id IN (SELECT p.id FROM posts p
+             JOIN clients c ON c.id = p.client_id
+             WHERE p.status='scheduled' AND p.scheduled_at <= now()
+               AND c.agency_publishes = true
+             ORDER BY p.scheduled_at LIMIT 10)
+RETURNING id;
 ```
 
 Marca como `publishing` e já retorna. A próxima execução do Schedule não vê esses
 posts (não estão mais `scheduled`). No fim: `published`. Em erro de API: `failed` +
 `retry_count`, que o WF-03 (retry) recupera com backoff.
+
+Só entram na fila posts de clientes com `clients.agency_publishes = true` (opção
+"A agência agenda e publica?" no cadastro do cliente). Cliente "só produção"
+(`false`) nunca tem post travado nem publicado pelo WF-01, e o WF-03 não reagenda as
+falhas dele (o destrava de `publishing` preso continua valendo para todos). A coluna
+vem da migração `system/migrations/2026-10-01-producao-e-publicacao.sql`, que precisa
+estar aplicada antes de atualizar o SQL na instância (ver `workflows/README.md`).
 
 ## Roadmap de ativação (casa com seu "aumentar aos poucos")
 

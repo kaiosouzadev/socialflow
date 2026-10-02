@@ -14,7 +14,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE posts SET status='publishing' WHERE id IN (SELECT id FROM posts WHERE status='scheduled' AND scheduled_at <= now() ORDER BY scheduled_at LIMIT 10) RETURNING id",
+        "query": "UPDATE posts SET status='publishing' WHERE id IN (SELECT p.id FROM posts p JOIN clients c ON c.id = p.client_id WHERE p.status='scheduled' AND p.scheduled_at <= now() AND c.agency_publishes = true ORDER BY p.scheduled_at LIMIT 10) RETURNING id",
         "options": {}
       },
       "id": "5806a1ce-a384-4361-934f-7d6cb4c75f01",

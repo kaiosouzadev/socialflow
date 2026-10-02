@@ -21,7 +21,8 @@ branches presentes em `targets`.
 ### WF-01 — Publicação (o core)
 ```
 Trigger (webhook OU schedule poll a cada 5min)
-  └─ Busca posts com status=scheduled e scheduled_at <= now()  [Postgres]
+  └─ Busca posts com status=scheduled e scheduled_at <= now(),
+     só de clientes com clients.agency_publishes = true  [Postgres]
       └─ Para cada post:
           ├─ Checa rate limit da conta (content_publishing_limit)
           ├─ Branch Instagram (se 'instagram' in targets)
@@ -46,9 +47,14 @@ Schedule (1x/dia)
 ### WF-03 — Retry de falhas
 ```
 Schedule (a cada 15min)
-  └─ Busca posts com status=failed e retry_count < 3
+  ├─ Destrava posts em status=publishing há 20+ min → failed (todos os clientes)
+  └─ Busca posts com status=failed e retry_count < 3,
+     só de clientes com clients.agency_publishes = true
       └─ Reagenda com backoff (5min, 30min, 2h)
 ```
+
+A query real de cada workflow está no JSON em `workflows/` e em
+`workflows/README.md` ("Como atualizar na instância").
 
 ## Sua base atual: vídeo YouTube → Instagram
 
