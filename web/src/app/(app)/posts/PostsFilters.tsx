@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { buttonClasses } from "@/components/Button";
+import { Field, Input, Select } from "@/components/Field";
 import { Icon } from "@/components/Icons";
 import { shiftRef, rangeLabel, spDateKey, type RangeKind } from "@/lib/date-range";
+import { formatMonthLabel } from "@/lib/format-date";
 
 type Client = { id: string; name: string };
 
@@ -22,6 +25,25 @@ const RANGE_FILTERS: { label: string; value: RangeKind }[] = [
   { label: "Semana", value: "week" },
   { label: "Mês", value: "month" },
 ];
+
+/** Nome acessível das setas de período (A-014). */
+const STEP_LABELS: Record<Exclude<RangeKind, "all">, { prev: string; next: string }> = {
+  day: { prev: "Dia anterior", next: "Próximo dia" },
+  week: { prev: "Semana anterior", next: "Próxima semana" },
+  month: { prev: "Mês anterior", next: "Próximo mês" },
+};
+
+/* Pílulas de status: ativa = `selected` + `on-selected` (contraste verificado no DESIGN b; A-005). */
+const PILL =
+  "inline-flex min-h-10 items-center rounded-control border px-3 text-sm font-medium transition-colors duration-(--sf-dur-fast) sm:min-h-8";
+const PILL_ON = "border-selected bg-selected text-on-selected";
+const PILL_OFF = "border-line-strong bg-surface text-fg-muted hover:bg-hover hover:text-fg";
+
+/* Período: mesmo visual do SegmentedControl sm (DESIGN e.5), mas com links (estado na URL). */
+const SEGMENT =
+  "inline-flex min-h-10 min-w-10 items-center justify-center rounded-chip px-3 text-sm font-medium transition-colors duration-(--sf-dur-fast) focus-visible:outline-offset-1 sm:min-h-7";
+const SEGMENT_ON = "bg-selected text-on-selected";
+const SEGMENT_OFF = "text-fg-muted hover:bg-hover hover:text-fg";
 
 export default function PostsFilters({
   clients,
@@ -77,57 +99,66 @@ export default function PostsFilters({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
+  const step = currentRange !== "all" ? STEP_LABELS[currentRange] : null;
+
   return (
-    <div className="space-y-3 mb-6">
-      {/* Row 1 — status + client + search */}
-      <div className="flex gap-2 flex-wrap items-center">
+    <div className="mb-6 grid gap-3">
+      {/* Busca (tema ou cliente) + cliente. Com um cliente escolhido, a busca é só por tema (A-031). */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Field label="Buscar posts" labelHidden className="min-w-0 flex-1 basis-64">
+          <Input
+            type="search"
+            size="sm"
+            leadingIcon={<Icon.search />}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={currentClientId ? "Buscar por tema" : "Buscar por tema ou cliente"}
+            autoComplete="off"
+          />
+        </Field>
+
+        {clients.length > 0 && (
+          <Field label="Cliente" labelHidden className="w-full sm:w-60">
+            <Select
+              size="sm"
+              placeholderOption="Todos os clientes"
+              value={currentClientId ?? ""}
+              onChange={(e) => router.push(build({ clientId: e.target.value || undefined, page: undefined }))}
+            >
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+      </div>
+
+      {/* Status */}
+      <div role="group" aria-label="Status" className="flex flex-wrap gap-2">
         {STATUS_FILTERS.map((f) => {
           const active = (currentStatus ?? "") === f.value;
           return (
             <Link
               key={f.value}
               href={build({ status: f.value || undefined, page: undefined })}
-              className={`px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                active
-                  ? "text-white border border-transparent"
-                  : "text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:text-white"
-              }`}
-              style={active ? { background: "linear-gradient(135deg,#7c5cff,#a855f7)" } : undefined}
+              aria-current={active ? "true" : undefined}
+              className={`${PILL} ${active ? PILL_ON : PILL_OFF}`}
             >
               {f.label}
             </Link>
           );
         })}
-
-        <div className="relative ml-auto">
-          <Icon.users className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-faint)] pointer-events-none" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar por cliente…"
-            className="input !py-1.5 !pl-9 text-sm w-56"
-          />
-        </div>
-
-        {clients.length > 0 && (
-          <select
-            className="input w-auto !py-1.5 text-sm"
-            value={currentClientId ?? ""}
-            onChange={(e) => router.push(build({ clientId: e.target.value || undefined, page: undefined }))}
-          >
-            <option value="">Todos os clientes</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        )}
       </div>
 
-      {/* Row 2 — date range */}
-      <div className="flex gap-2 flex-wrap items-center">
-        <div className="flex items-center rounded-lg border border-[var(--color-border)] overflow-hidden text-sm">
+      {/* Período */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div
+          role="group"
+          aria-label="Período"
+          className="inline-flex gap-0.5 rounded-control border border-line-strong bg-surface p-0.5"
+        >
           {RANGE_FILTERS.map((r) => {
             const active = currentRange === r.value;
             return (
@@ -138,9 +169,8 @@ export default function PostsFilters({
                   ref: r.value !== "all" ? (currentRange === "all" ? spDateKey() : currentRef) : undefined,
                   page: undefined,
                 })}
-                className={`px-3.5 py-1.5 font-medium transition-colors ${
-                  active ? "bg-[var(--color-accent)] text-white" : "text-[var(--color-text-muted)] hover:text-white"
-                }`}
+                aria-current={active ? "true" : undefined}
+                className={`${SEGMENT} ${active ? SEGMENT_ON : SEGMENT_OFF}`}
               >
                 {r.label}
               </Link>
@@ -148,25 +178,33 @@ export default function PostsFilters({
           })}
         </div>
 
-        {currentRange !== "all" && (
-          <div className="flex items-center gap-2">
+        {step && (
+          <div className="flex flex-wrap items-center gap-2">
             <Link
               href={build({ ref: shiftRef(currentRange, currentRef, -1), page: undefined })}
-              className="flex items-center justify-center w-8 h-8 rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-border-strong)] transition-colors"
+              aria-label={step.prev}
+              title={step.prev}
+              className={buttonClasses({ variant: "secondary", size: "sm", iconOnly: true })}
             >
-              <Icon.chevronLeft className="w-4 h-4" />
+              <Icon.chevronLeft className="size-4" />
             </Link>
             <Link
               href={build({ ref: shiftRef(currentRange, currentRef, 1), page: undefined })}
-              className="flex items-center justify-center w-8 h-8 rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-border-strong)] transition-colors"
+              aria-label={step.next}
+              title={step.next}
+              className={buttonClasses({ variant: "secondary", size: "sm", iconOnly: true })}
             >
-              <Icon.chevronRight className="w-4 h-4" />
+              <Icon.chevronRight className="size-4" />
             </Link>
-            <Link href={build({ ref: spDateKey(), page: undefined })} className="btn-ghost !py-1.5 text-sm">
+            <Link
+              href={build({ ref: spDateKey(), page: undefined })}
+              className={buttonClasses({ variant: "secondary", size: "sm" })}
+            >
               Hoje
             </Link>
-            <span className="ml-1 text-sm font-medium capitalize text-[var(--color-text-muted)]">
-              {rangeLabel(currentRange, currentRef)}
+            <span aria-live="polite" className="ml-1 text-sm font-medium text-fg">
+              {/* inicial maiúscula só no mês (A-019, sem CSS): dia e semana começam com número */}
+              {currentRange === "month" ? formatMonthLabel(currentRef) : rangeLabel(currentRange, currentRef)}
             </span>
           </div>
         )}

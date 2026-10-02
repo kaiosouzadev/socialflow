@@ -1,19 +1,34 @@
+import type { Metadata } from "next";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
-import { PageHeader, StatusBadge, PlatformChip } from "@/components/ui";
+import { PageHeader, StatusBadge, PlatformChip, EmptyState, ToneBadge } from "@/components/ui";
+import { buttonClasses } from "@/components/Button";
+import { Callout } from "@/components/Callout";
 import { Icon } from "@/components/Icons";
 import { formatDateTime } from "@/lib/format-date";
-import { getCachedSummary, getTodayPosts } from "@/lib/daily-summary";
-import { getQueueHealth } from "@/lib/queue-health";
+import { getCachedSummary, getTodayPosts, type TodayPost } from "@/lib/daily-summary";
+import { getQueueHealth, STUCK_MINUTES } from "@/lib/queue-health";
+import { QUEUEABLE_CLIENT } from "@/lib/publish-guard";
+import type { Tone } from "@/lib/status-meta";
 import DailySummaryCard from "./DailySummaryCard";
 import QueueHealthCard from "./QueueHealthCard";
 import RetryPostButton from "./RetryPostButton";
 
 export const dynamic = "force-dynamic";
 
+export const metadata: Metadata = { title: "Dashboard" };
+
 const TZ = "America/Sao_Paulo";
 const fmtHora = (d: Date) =>
   new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }).format(d);
+/** "02/10 às 14:30" (datas curtas, DESIGN "Conteúdo"). */
+const fmtDiaHora = (d: Date) => {
+  const dia = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "2-digit" }).format(d);
+  return `${dia} às ${fmtHora(d)}`;
+};
+
+/** Link solto (fora de frase) com alvo ≥ 40 px (DESIGN, A11y "Alvos"). */
+const LOOSE_LINK = "inline-flex min-h-11 items-center text-sm font-medium text-link hover:text-link-hover hover:underline sm:min-h-10";
 
 async function getStats() {
   const [clients, postsScheduled, postsPublished, postsFailed, expiringTokens] =
@@ -33,43 +48,71 @@ async function getStats() {
   return { clients, postsScheduled, postsPublished, postsFailed, expiringTokens };
 }
 
+/**
+ * Quantos posts as ações em massa realmente recolocam na fila: o servidor pula
+ * os clientes só produção (S13), então o resumo do ConfirmDialog os desconta.
+ */
+async function getRequeueable() {
+  const stuckBefore = new Date(Date.now() - STUCK_MINUTES * 60_000);
+  const [stuck, failed] = await Promise.all([
+    prisma.post.count({
+      where: { status: "publishing", scheduledAt: { lt: stuckBefore }, client: QUEUEABLE_CLIENT },
+    }),
+    prisma.post.count({ where: { status: "failed", client: QUEUEABLE_CLIENT } }),
+  ]);
+  return { stuck, failed };
+}
+
+/**
+ * Posts de hoje que mostram "Reenviar": com falha ou presos em publicação (mesmo
+ * limite do WF-03) e de cliente que publica — o critério do detalhe do post (S25).
+ * Publicando há menos de 20 min fica de fora: ainda pode estar saindo agora.
+ */
+async function getRetryableToday(todayPosts: TodayPost[]): Promise<Set<string>> {
+  const stuckBefore = Date.now() - STUCK_MINUTES * 60_000;
+  const candidates = todayPosts
+    .filter((p) => p.status === "failed" || (p.status === "publishing" && p.scheduledAt.getTime() < stuckBefore))
+    .map((p) => p.id);
+  if (candidates.length === 0) return new Set();
+  const rows = await prisma.post.findMany({
+    where: { id: { in: candidates }, client: QUEUEABLE_CLIENT },
+    select: { id: true },
+  });
+  return new Set(rows.map((p) => p.id));
+}
+
+/* Mapa estático de classes (H-03): tom → ícone do KPI. */
+const KPI_ICON: Record<Extract<Tone, "accent" | "info" | "success" | "danger">, string> = {
+  accent: "bg-brand-bg text-brand-solid",
+  info: "bg-info-bg text-info-solid",
+  success: "bg-success-bg text-success-solid",
+  danger: "bg-danger-bg text-danger-solid",
+};
+
 function StatCard({
   label,
   value,
   href,
   icon,
-  accent,
+  tone,
 }: {
   label: string;
   value: number;
   href: string;
   icon: React.ReactNode;
-  accent: string;
+  tone: keyof typeof KPI_ICON;
 }) {
   return (
-    <Link href={href} className="card glass-hover p-5 group relative overflow-hidden">
-      {/* accent glow */}
-      <div
-        className="absolute -top-12 -right-12 w-32 h-32 rounded-full opacity-20 group-hover:opacity-40 transition-opacity blur-2xl pointer-events-none"
-        style={{ background: accent }}
-      />
-      <div className="relative flex items-start justify-between">
-        <div>
-          <p className="text-sm text-[var(--color-text-muted)]">{label}</p>
-          <p className="text-4xl font-semibold mt-2 tracking-tight tabular-nums">{value}</p>
-        </div>
-        <div
-          className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
-          style={{
-            background: `${accent}1f`,
-            border: `1px solid ${accent}40`,
-            color: accent,
-            boxShadow: `0 6px 18px -8px ${accent}80`,
-          }}
-        >
-          {icon}
-        </div>
-      </div>
+    <Link href={href} className="card glass-hover flex items-start justify-between gap-3 p-4 sm:p-5">
+      <span className="min-w-0">
+        <span className="block text-sm text-fg-muted">{label}</span>
+        <span className="mt-2 block font-display text-3xl font-semibold tracking-display tabular-nums text-fg">
+          {value}
+        </span>
+      </span>
+      <span aria-hidden="true" className={`grid size-11 shrink-0 place-items-center rounded-control ${KPI_ICON[tone]}`}>
+        {icon}
+      </span>
     </Link>
   );
 }
@@ -82,19 +125,20 @@ function getRecentAlerts() {
   });
 }
 
-const ALERT_KIND_LABEL: Record<string, string> = {
-  prazo_cronograma: "Prazo",
-  ajuste_solicitado: "Ajuste",
-  ajuste_resolvido: "Ajuste ✓",
-  cronograma_auto_aprovado: "Auto-aprovado",
-  cronograma_aprovado: "Aprovado",
-  sem_resposta: "Sem resposta",
-  sem_arte: "Sem arte",
-  semanal_enviado: "Semanal",
+const ALERT_KIND: Record<string, { label: string; tone: Tone }> = {
+  prazo_cronograma: { label: "Prazo", tone: "warning" },
+  ajuste_solicitado: { label: "Ajuste", tone: "danger" },
+  ajuste_resolvido: { label: "Ajuste resolvido", tone: "success" },
+  cronograma_auto_aprovado: { label: "Auto-aprovado", tone: "success" },
+  cronograma_aprovado: { label: "Aprovado", tone: "success" },
+  sem_resposta: { label: "Sem resposta", tone: "warning" },
+  sem_arte: { label: "Sem arte", tone: "warning" },
+  semanal_enviado: { label: "Semanal", tone: "success" },
 };
+const UNKNOWN_ALERT = { label: "Aviso", tone: "neutral" as Tone };
 
 export default async function DashboardPage() {
-  const [stats, posts, summary, todayPosts, queue, alerts] = await Promise.all([
+  const [stats, posts, summary, todayPosts, queue, requeueable, alerts] = await Promise.all([
     getStats(),
     prisma.post.findMany({
       take: 8,
@@ -104,6 +148,7 @@ export default async function DashboardPage() {
     getCachedSummary(),
     getTodayPosts(),
     getQueueHealth(),
+    getRequeueable(),
     getRecentAlerts(),
   ]);
 
@@ -111,18 +156,18 @@ export default async function DashboardPage() {
     (p) => p.status === "scheduled" || p.status === "draft"
   ).length;
 
+  const retryable = await getRetryableToday(todayPosts);
+
+  const newPostLink = (
+    <Link href="/posts/new" className={buttonClasses({ variant: "primary" })}>
+      <Icon.plus className="size-4.5 shrink-0" />
+      Novo post
+    </Link>
+  );
+
   return (
-    <div className="p-8 max-w-6xl mx-auto animate-fade-up">
-      <PageHeader
-        title="Dashboard"
-        subtitle="Visão geral da automação"
-        action={
-          <Link href="/posts/new" className="btn-primary">
-            <Icon.plus className="w-4 h-4" />
-            Novo post
-          </Link>
-        }
-      />
+    <div className="page animate-fade-up">
+      <PageHeader title="Dashboard" subtitle="Visão geral da automação" action={newPostLink} />
 
       <DailySummaryCard
         content={summary?.content ?? null}
@@ -135,206 +180,236 @@ export default async function DashboardPage() {
         overdue={queue.overdue}
         exhausted={queue.exhausted}
         failed={queue.failed}
+        stuckRequeueable={requeueable.stuck}
+        failedRequeueable={requeueable.failed}
         lastPublishedLabel={queue.lastPublishedAt ? formatDateTime(queue.lastPublishedAt) : null}
         healthy={queue.healthy}
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard
-          label="Clientes"
-          value={stats.clients}
-          href="/clients"
-          accent="#7c5cff"
-          icon={<Icon.users className="w-5 h-5" />}
-        />
+      <section aria-label="Números gerais" className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <StatCard label="Clientes" value={stats.clients} href="/clients" tone="accent" icon={<Icon.users className="size-5" />} />
         <StatCard
           label="Agendados"
           value={stats.postsScheduled}
           href="/posts?status=scheduled"
-          accent="#38bdf8"
-          icon={<Icon.clock className="w-5 h-5" />}
+          tone="info"
+          icon={<Icon.clock className="size-5" />}
         />
         <StatCard
           label="Publicados"
           value={stats.postsPublished}
           href="/posts?status=published"
-          accent="#34d399"
-          icon={<Icon.check className="w-5 h-5" />}
+          tone="success"
+          icon={<Icon.check className="size-5" />}
         />
         <StatCard
           label="Falharam"
           value={stats.postsFailed}
           href="/posts?status=failed"
-          accent="#f87171"
-          icon={<Icon.alert className="w-5 h-5" />}
+          tone="danger"
+          icon={<Icon.alert className="size-5" />}
         />
-      </div>
+      </section>
 
       {stats.expiringTokens > 0 && (
-        <div className="mb-6 flex items-center gap-3 rounded-xl px-4 py-3 bg-amber-500/[0.07] border border-amber-500/20">
-          <Icon.alert className="w-5 h-5 text-amber-400 shrink-0" />
-          <p className="text-sm text-amber-200/90">
-            <span className="font-semibold">{stats.expiringTokens}</span>{" "}
-            {stats.expiringTokens === 1 ? "conta com token expirando" : "contas com tokens expirando"}{" "}
-            em menos de 7 dias. O WF-02 renova automaticamente a cada 12h.
-          </p>
-        </div>
+        <Callout tone="warning" className="mb-6">
+          {stats.expiringTokens === 1
+            ? "1 conta com token expirando em menos de 7 dias."
+            : `${stats.expiringTokens} contas com tokens expirando em menos de 7 dias.`}{" "}
+          A renovação automática roda a cada 12 horas.
+        </Callout>
       )}
 
       {/* trilha de notificações do fluxo de aprovação — nada passa despercebido */}
       {alerts.length > 0 && (
-        <div className="card overflow-hidden mb-6">
-          <div className="px-5 py-3.5 border-b border-[var(--color-border)] flex items-center gap-2">
-            <Icon.alert className="w-4 h-4 text-[var(--color-accent)]" />
-            <h2 className="font-semibold text-sm">Notificações do fluxo de aprovação</h2>
-            <span className="text-xs text-[var(--color-text-faint)]">últimos 14 dias</span>
+        <section aria-labelledby="notificacoes-titulo" className="card mb-6 overflow-hidden">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-line px-4 py-3 sm:px-5">
+            <h2 id="notificacoes-titulo" className="text-base font-semibold text-fg">
+              Notificações do fluxo de aprovação
+            </h2>
+            <span className="text-xs text-fg-muted">últimos 14 dias</span>
           </div>
-          <div className="divide-y divide-[var(--color-border)] max-h-72 overflow-y-auto">
-            {alerts.map((a) => (
-              <div key={a.id} className="px-5 py-2.5 flex items-start gap-3">
-                <span
-                  className={`shrink-0 mt-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
-                    a.kind === "sem_resposta" || a.kind === "sem_arte" || a.kind === "prazo_cronograma"
-                      ? "text-amber-300 bg-amber-500/10 border-amber-500/25"
-                      : a.kind === "ajuste_solicitado"
-                        ? "text-red-300 bg-red-500/10 border-red-500/25"
-                        : "text-emerald-300 bg-emerald-500/10 border-emerald-500/25"
-                  }`}
-                >
-                  {ALERT_KIND_LABEL[a.kind] ?? a.kind}
-                </span>
-                <p className="text-sm flex-1 min-w-0 leading-snug">{a.message}</p>
-                <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">
-                  {fmtHora(a.createdAt)}
-                  {!a.emailed && a.audience === "cliente" ? " · sem e-mail" : ""}
-                </span>
-              </div>
-            ))}
+          {/* contêiner de rolagem: focável pelo teclado */}
+          <div role="region" aria-label="Lista de notificações" tabIndex={0} className="max-h-72 overflow-y-auto">
+            <ul className="divide-y divide-line">
+              {alerts.map((a) => {
+                const kind = ALERT_KIND[a.kind] ?? UNKNOWN_ALERT;
+                return (
+                  <li key={a.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3 sm:flex-nowrap sm:px-5">
+                    <span className="shrink-0 sm:w-36">
+                      <ToneBadge tone={kind.tone}>{kind.label}</ToneBadge>
+                    </span>
+                    <p className="min-w-0 flex-1 basis-full text-sm leading-snug text-fg sm:basis-auto">{a.message}</p>
+                    <span className="shrink-0 text-xs tabular-nums text-fg-muted">
+                      {fmtDiaHora(a.createdAt)}
+                      {!a.emailed && a.audience === "cliente" ? " · sem e-mail" : ""}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
-        </div>
+        </section>
       )}
 
-      <div className="card overflow-hidden mb-6">
-        <div className="px-6 py-4 border-b border-[var(--color-border)] flex items-center justify-between">
-          <h2 className="font-semibold">
+      <section aria-labelledby="hoje-titulo" className="card mb-6 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 border-b border-line px-4 py-1 sm:px-5">
+          <h2 id="hoje-titulo" className="py-2 text-base font-semibold text-fg">
             Hoje{" "}
-            <span className="text-[var(--color-text-faint)] font-normal text-sm">
+            <span className="text-sm font-normal text-fg-muted">
               · {todayPosts.length} {todayPosts.length === 1 ? "post" : "posts"}
               {todayPending > 0 && `, ${todayPending} pendente${todayPending === 1 ? "" : "s"}`}
             </span>
           </h2>
-          <Link href="/calendar" className="text-sm text-[var(--color-accent)] hover:underline">
+          <Link href="/calendar" className={LOOSE_LINK}>
             Ver calendário
           </Link>
         </div>
 
         {todayPosts.length === 0 ? (
-          <div className="px-6 py-10 text-center text-sm text-[var(--color-text-muted)]">
-            Nada agendado para hoje.
-          </div>
+          <EmptyState
+            size="inline"
+            headingLevel={3}
+            icon={<Icon.calendar />}
+            title="Nada agendado para hoje"
+            description="Nenhum post tem data para hoje. Veja os próximos dias no calendário ou crie um post novo."
+          />
         ) : (
-          <div className="divide-y divide-[var(--color-border)]">
-            {todayPosts.map((p) => (
-              <div key={p.id} className="flex items-center gap-4 px-6 py-3.5">
-                <div className="w-14 shrink-0 text-sm font-medium tabular-nums text-[var(--color-text-muted)]">
-                  {fmtHora(p.scheduledAt)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">
-                    {p.clientName}
-                    <span className="text-[var(--color-text-faint)] font-normal">
-                      {" "}· {p.theme ?? "sem tema"}
-                    </span>
-                  </p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <div className="flex gap-1">
-                      {p.targets.map((t) => (
-                        <PlatformChip key={t} platform={t} />
-                      ))}
+          <ul className="divide-y divide-line">
+            {todayPosts.map((p) => {
+              const missingMedia = !p.hasMedia && p.status !== "published";
+              const missingCaption = !p.hasCaption && p.status !== "published";
+              return (
+                <li
+                  key={p.id}
+                  className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 px-4 py-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_auto] sm:items-center sm:px-5"
+                >
+                  <span className="pt-0.5 text-sm font-medium tabular-nums text-fg-muted sm:pt-0">
+                    {fmtHora(p.scheduledAt)}
+                  </span>
+                  <div className="min-w-0">
+                    <p
+                      className="line-clamp-2 text-sm font-medium text-fg wrap-break-word sm:line-clamp-1"
+                      title={`${p.clientName} · ${p.theme ?? "sem tema"}`}
+                    >
+                      {p.clientName}
+                      <span className="font-normal text-fg-muted"> · {p.theme ?? "sem tema"}</span>
+                    </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <span className="flex gap-1">
+                        {p.targets.map((t) => (
+                          <PlatformChip key={t} platform={t} decorative={false} />
+                        ))}
+                      </span>
+                      {/* alertas só fazem sentido antes de publicar */}
+                      {missingMedia && (
+                        <ToneBadge tone="warning" icon={<Icon.alert />}>
+                          Sem arte
+                        </ToneBadge>
+                      )}
+                      {missingCaption && (
+                        <ToneBadge tone="warning" icon={<Icon.alert />}>
+                          Sem legenda
+                        </ToneBadge>
+                      )}
                     </div>
-                    {/* alertas só fazem sentido antes de publicar */}
-                    {!p.hasMedia && p.status !== "published" && (
-                      <span className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
-                        sem mídia
-                      </span>
-                    )}
-                    {!p.hasCaption && p.status !== "published" && (
-                      <span className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
-                        sem legenda
-                      </span>
-                    )}
                   </div>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  {(p.status === "failed" || p.status === "publishing") && (
-                    <RetryPostButton postId={p.id} />
-                  )}
-                  <StatusBadge status={p.status} />
-                </div>
-              </div>
-            ))}
-          </div>
+                  <div className="col-start-2 flex flex-wrap items-center gap-x-3 gap-y-2 sm:col-start-auto sm:justify-end">
+                    {retryable.has(p.id) && <RetryPostButton postId={p.id} />}
+                    <StatusBadge kind="post" status={p.status} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
-      </div>
+      </section>
 
-      <div className="card overflow-hidden">
-        <div className="px-6 py-4 border-b border-[var(--color-border)] flex items-center justify-between">
-          <h2 className="font-semibold">Posts recentes</h2>
-          <Link href="/posts" className="text-sm text-[var(--color-accent)] hover:underline">
+      <section aria-labelledby="recentes-titulo" className="card overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 border-b border-line px-4 py-1 sm:px-5">
+          <h2 id="recentes-titulo" className="py-2 text-base font-semibold text-fg">
+            Posts recentes
+          </h2>
+          <Link href="/posts" className={LOOSE_LINK}>
             Ver todos
           </Link>
         </div>
 
         {posts.length === 0 ? (
-          <div className="px-6 py-12 text-center text-sm text-[var(--color-text-muted)]">
-            Nenhum post ainda.{" "}
-            <Link href="/posts/new" className="text-[var(--color-accent)] hover:underline">
-              Criar o primeiro
-            </Link>
-          </div>
+          <EmptyState
+            size="inline"
+            headingLevel={3}
+            title="Nenhum post ainda"
+            description="Crie um post aqui ou gere o cronograma do mês na página do cliente."
+            action={newPostLink}
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--color-border)]">
-                {["Cliente", "Tema", "Redes", "Agendado para", "Status"].map((h) => (
-                  <th
-                    key={h}
-                    className="text-left px-6 py-3 text-xs font-medium text-[var(--color-text-faint)] uppercase tracking-wider"
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {posts.map((post) => (
-                <tr
-                  key={post.id}
-                  className="border-b border-[var(--color-border)] last:border-0 hover:bg-white/[0.02] transition-colors"
-                >
-                  <td className="px-6 py-3.5 font-medium">{post.client.name}</td>
-                  <td className="px-6 py-3.5 text-[var(--color-text-muted)] max-w-xs truncate">
-                    {post.theme ?? "—"}
-                  </td>
-                  <td className="px-6 py-3.5">
-                    <div className="flex gap-1">
-                      {post.targets.map((t) => (
-                        <PlatformChip key={t} platform={t} />
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-6 py-3.5 text-[var(--color-text-muted)]">
-                    {formatDateTime(post.scheduledAt)}
-                  </td>
-                  <td className="px-6 py-3.5">
-                    <StatusBadge status={post.status} />
-                  </td>
+          <>
+            {/* ≥ lg: tabela */}
+            <table className="hidden w-full text-sm lg:table">
+              <thead className="bg-sunken">
+                <tr>
+                  {["Cliente", "Tema", "Redes", "Agendado para", "Status"].map((h) => (
+                    <th
+                      key={h}
+                      scope="col"
+                      className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-overline text-fg-muted"
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
+              </thead>
+              <tbody>
+                {posts.map((post) => (
+                  <tr key={post.id} className="border-t border-line">
+                    <td className="px-5 py-3 font-medium text-fg">{post.client.name}</td>
+                    <td className="max-w-xs truncate px-5 py-3 text-fg-muted" title={post.theme ?? undefined}>
+                      {post.theme ?? "—"}
+                    </td>
+                    <td className="px-5 py-3">
+                      <div className="flex gap-1">
+                        {post.targets.map((t) => (
+                          <PlatformChip key={t} platform={t} decorative={false} />
+                        ))}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3 tabular-nums text-fg-muted">
+                      {formatDateTime(post.scheduledAt)}
+                    </td>
+                    <td className="px-5 py-3">
+                      <StatusBadge kind="post" status={post.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* < lg: lista */}
+            <ul className="divide-y divide-line lg:hidden">
+              {posts.map((post) => (
+                <li key={post.id} className="grid gap-1.5 px-4 py-3 sm:px-5">
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                    <span className="min-w-0 truncate text-sm font-medium text-fg">{post.client.name}</span>
+                    <StatusBadge kind="post" status={post.status} />
+                  </div>
+                  <p className="line-clamp-2 text-sm text-fg-muted wrap-break-word" title={post.theme ?? undefined}>
+                    {post.theme ?? "Sem tema"}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted">
+                    <span className="tabular-nums">{formatDateTime(post.scheduledAt)}</span>
+                    <span className="flex gap-1">
+                      {post.targets.map((t) => (
+                        <PlatformChip key={t} platform={t} decorative={false} />
+                      ))}
+                    </span>
+                  </div>
+                </li>
               ))}
-            </tbody>
-          </table>
+            </ul>
+          </>
         )}
-      </div>
+      </section>
     </div>
   );
 }

@@ -1,8 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/Icons";
+import { Avatar } from "@/components/Avatar";
+import { Button } from "@/components/Button";
+import { Callout } from "@/components/Callout";
+
+const FALLBACK_ERROR = "Não foi possível gerar o resumo do dia agora. Tente de novo em instantes.";
+const NETWORK_ERROR = "Falha de conexão. Verifique a internet e tente de novo.";
 
 export default function DailySummaryCard({
   content,
@@ -14,68 +20,83 @@ export default function DailySummaryCard({
   postCount: number;
 }) {
   const router = useRouter();
+  const errorId = useId();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [refreshing, startRefresh] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
+  // A-043: try/catch/finally — com a rede caindo o botão volta ao normal, com mensagem.
+  // A-026: mostra o `error` do servidor (texto amigável do S17) quando é string (N-14).
   async function regenerate() {
     setBusy(true);
-    setError("");
-    const res = await fetch("/api/ai/daily-summary", { method: "POST" });
-    setBusy(false);
-    if (!res.ok) {
-      setError("Falha ao gerar resumo.");
-      return;
+    setError(null);
+    try {
+      const res = await fetch("/api/ai/daily-summary", { method: "POST" });
+      const d = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(
+          res.status === 401
+            ? "Sua sessão expirou. Entre de novo para continuar."
+            : typeof d?.error === "string"
+              ? d.error
+              : FALLBACK_ERROR,
+        );
+        return;
+      }
+      startRefresh(() => router.refresh());
+    } catch {
+      setError(NETWORK_ERROR);
+    } finally {
+      setBusy(false);
     }
-    router.refresh();
   }
 
+  const loading = busy || refreshing;
+
   return (
-    <div className="card p-6 mb-6 relative overflow-hidden">
-      <div
-        className="absolute -top-16 -right-10 w-48 h-48 rounded-full opacity-20 blur-3xl pointer-events-none"
-        style={{ background: "linear-gradient(135deg,#7c5cff,#ec4899)" }}
-      />
-      <div className="relative flex items-start justify-between gap-4 mb-3">
-        <div className="flex items-center gap-2">
-          <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-            style={{ background: "#7c5cff1f", border: "1px solid #7c5cff40", color: "#a78bfa" }}
-          >
-            <Icon.zap className="w-4 h-4" />
-          </div>
-          <div>
-            <h2 className="font-semibold leading-tight">Resumo do dia</h2>
-            <p className="text-xs text-[var(--color-text-faint)]">
+    <section aria-labelledby="resumo-titulo" className="card mb-6 p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+        <div className="flex min-w-0 items-center gap-3">
+          {/* "IA": o resumo é escrito pela inteligência artificial */}
+          <Avatar name="Inteligência Artificial" shape="square" />
+          <div className="min-w-0">
+            <h2 id="resumo-titulo" className="font-display text-lg font-semibold tracking-title text-fg">
+              Resumo do dia
+            </h2>
+            <p className="text-xs text-fg-muted">
               {postCount} {postCount === 1 ? "post hoje" : "posts hoje"}
               {generatedAt && ` · atualizado ${generatedAt}`}
             </p>
           </div>
         </div>
-        <button
+        <Button
+          size="sm"
+          variant="secondary"
+          leadingIcon={<Icon.refresh />}
+          loading={loading}
+          loadingText="Gerando…"
           onClick={regenerate}
-          disabled={busy}
-          className="btn-ghost !py-1.5 !px-3 text-xs shrink-0"
-          title="Gerar novamente"
+          aria-describedby={error ? errorId : undefined}
         >
-          <Icon.refresh className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} />
-          {busy ? "Gerando…" : "Atualizar"}
-        </button>
+          {content ? "Atualizar resumo" : "Gerar resumo"}
+        </Button>
       </div>
 
       {content ? (
-        <p className="relative text-sm text-[var(--color-text-muted)] whitespace-pre-wrap leading-relaxed">
-          {content}
-        </p>
+        <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-fg">{content}</p>
       ) : (
-        <p className="relative text-sm text-[var(--color-text-muted)]">
-          Nenhum resumo gerado ainda hoje.{" "}
-          <button onClick={regenerate} disabled={busy} className="text-[var(--color-accent)] hover:underline">
-            Gerar agora
-          </button>
+        <p className="mt-3 text-sm text-fg-muted">
+          Nenhum resumo gerado ainda hoje. Use “Gerar resumo” para a inteligência artificial resumir os posts do dia.
         </p>
       )}
 
-      {error && <p className="relative mt-2 text-xs text-red-400">{error}</p>}
-    </div>
+      {error && (
+        <div id={errorId} className="mt-3">
+          <Callout tone="danger" live="assertive">
+            {error}
+          </Callout>
+        </div>
+      )}
+    </section>
   );
 }

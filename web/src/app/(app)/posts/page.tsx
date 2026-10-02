@@ -1,17 +1,24 @@
+import type { Metadata } from "next";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
 import Link from "next/link";
 import PostsFilters from "./PostsFilters";
 import PostsPagination from "./PostsPagination";
 import DeletePostButton from "./DeletePostButton";
-import { PageHeader, StatusBadge, PlatformChip, EmptyState } from "@/components/ui";
+import { PageHeader, StatusBadge, PlatformChip, EmptyState, ToneBadge } from "@/components/ui";
+import { buttonClasses } from "@/components/Button";
 import { Icon } from "@/components/Icons";
 import { dateWindow, isRangeKind, spDateKey, rangeLabel, type RangeKind } from "@/lib/date-range";
 import { formatDateTime } from "@/lib/format-date";
 
 export const dynamic = "force-dynamic";
 
+export const metadata: Metadata = { title: "Posts" };
+
 const PAGE_SIZE = 25;
+
+/** Link solto (fora de frase) com alvo ≥ 40 px (DESIGN, A11y "Alvos"). */
+const LOOSE_LINK = "inline-flex min-h-11 items-center sm:min-h-10";
 
 export default async function PostsPage({
   searchParams,
@@ -38,13 +45,22 @@ export default async function PostsPage({
 
   const win = dateWindow(range, ref);
 
+  // Busca por tema OU cliente (A-031). Com um cliente já escolhido no select, o nome do
+  // cliente casaria todos os posts dele: aí a busca é só pelo tema.
+  const contains = { contains: q, mode: "insensitive" as const };
+  const search: Prisma.PostWhereInput | null = !q
+    ? null
+    : clientId
+      ? { theme: contains }
+      : { OR: [{ theme: contains }, { client: { is: { name: contains } } }] };
+
   const where: Prisma.PostWhereInput = {
     ...(clientId ? { clientId } : {}),
     ...(status ? { status } : {}),
     ...(scheduleId ? { scheduleId } : {}),
     ...(onlyNoted ? { clientNote: { not: null } } : {}),
     ...(win ? { scheduledAt: { gte: win.gte, lt: win.lt } } : {}),
-    ...(q ? { client: { is: { name: { contains: q, mode: "insensitive" } } } } : {}),
+    ...(search ?? {}),
   };
 
   const [total, posts, clients] = await Promise.all([
@@ -64,24 +80,44 @@ export default async function PostsPage({
   // posts that haven't gone out yet can be safely edited/removed
   const deletable = (s: string) => s === "scheduled" || s === "failed" || s === "draft";
 
+  const hasFilters = !!(clientId || status || q || scheduleId || onlyNoted || range !== "all");
+
   const subtitle =
     `${total} post${total !== 1 ? "s" : ""}` +
     (range !== "all" ? ` · ${rangeLabel(range, ref)}` : "") +
     (onlyNoted ? " · com ajuste pedido pelo cliente" : "") +
     (scheduleId && !onlyNoted ? " · de um cronograma" : "");
 
+  const newPostLink = (
+    <Link href="/posts/new" className={buttonClasses({ variant: "primary" })}>
+      <Icon.plus className="size-4.5 shrink-0" />
+      Novo post
+    </Link>
+  );
+
+  const rows = posts.map((post) => {
+    const label = post.theme?.trim() || `post de ${post.client.name} em ${formatDateTime(post.scheduledAt)}`;
+    const hasMedia = !!post.mediaUrl || (Array.isArray(post.mediaItems) && post.mediaItems.length > 0);
+    const flags = (
+      <>
+        {post.clientNote && (
+          <ToneBadge tone="accent" icon={<Icon.edit />} title={post.clientNote}>
+            Ajuste pedido
+          </ToneBadge>
+        )}
+        {!hasMedia && post.status !== "published" && (
+          <ToneBadge tone="warning" icon={<Icon.alert />}>
+            Sem arte
+          </ToneBadge>
+        )}
+      </>
+    );
+    return { post, label, flags, hasFlags: !!post.clientNote || (!hasMedia && post.status !== "published") };
+  });
+
   return (
-    <div className="p-8 max-w-6xl mx-auto animate-fade-up">
-      <PageHeader
-        title="Posts"
-        subtitle={subtitle}
-        action={
-          <Link href="/posts/new" className="btn-primary">
-            <Icon.plus className="w-4 h-4" />
-            Novo post
-          </Link>
-        }
-      />
+    <div className="page animate-fade-up">
+      <PageHeader title="Posts" subtitle={subtitle} action={newPostLink} />
 
       <PostsFilters
         clients={clients}
@@ -93,113 +129,154 @@ export default async function PostsPage({
       />
 
       {posts.length === 0 ? (
-        <EmptyState
-          title="Nenhum post encontrado"
-          description="Ajuste os filtros ou crie um novo agendamento."
-          action={
-            <Link href="/posts/new" className="btn-primary">
-              <Icon.plus className="w-4 h-4" />
-              Novo post
-            </Link>
-          }
-        />
+        hasFilters ? (
+          <EmptyState
+            headingLevel={2}
+            title="Nenhum post com esses filtros"
+            description={q ? `Nada encontrado para “${q}”. Confira a grafia ou limpe os filtros.` : "Mude os filtros ou limpe todos para ver a lista completa."}
+            action={
+              <Link href="/posts" className={buttonClasses({ variant: "ghost" })}>
+                Limpar filtros
+              </Link>
+            }
+          />
+        ) : (
+          <EmptyState
+            headingLevel={2}
+            title="Nenhum post ainda"
+            description="Crie um post aqui ou gere o cronograma do mês na página do cliente."
+            action={newPostLink}
+          />
+        )
       ) : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--color-border)]">
-                {["Cliente", "Tema", "Redes", "Agendado para", "Status", ""].map((h, i) => (
-                  <th
-                    key={i}
-                    className="text-left px-6 py-3 text-xs font-medium text-[var(--color-text-faint)] uppercase tracking-wider"
-                  >
-                    {h}
+        <>
+          {/* ≥ lg: tabela */}
+          <div className="card hidden overflow-hidden lg:block">
+            <table className="w-full text-sm">
+              <thead className="bg-sunken">
+                <tr>
+                  {["Cliente", "Tema", "Redes", "Data", "Status"].map((h) => (
+                    <th
+                      key={h}
+                      scope="col"
+                      className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-overline text-fg-muted"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                  <th scope="col" className="w-28 px-4 py-3">
+                    <span className="sr-only">Ações</span>
                   </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {posts.map((post) => (
-                <tr
-                  key={post.id}
-                  className="group border-b border-[var(--color-border)] last:border-0 hover:bg-white/[0.02] transition-colors"
-                >
-                  <td className="px-6 py-3.5">
-                    <Link
-                      href={`/clients/${post.clientId}`}
-                      className="font-medium hover:text-[var(--color-accent)] transition-colors"
-                    >
-                      {post.client.name}
-                    </Link>
-                  </td>
-                  <td className="px-6 py-3.5 max-w-xs">
-                    <Link
-                      href={`/posts/${post.id}`}
-                      className="block truncate text-[var(--color-text-muted)] hover:text-white transition-colors"
-                    >
-                      {post.theme ?? "—"}
-                    </Link>
-                    <div className="flex items-center gap-1.5 mt-1">
-                      {post.clientNote && (
-                        <span
-                          title={post.clientNote}
-                          className="inline-flex items-center gap-1 text-[10px] font-medium text-violet-200 bg-violet-500/10 border border-violet-500/25 rounded px-1.5 py-0.5"
-                        >
-                          <Icon.edit className="w-2.5 h-2.5" />
-                          ajuste pedido
-                        </span>
-                      )}
-                      {!post.mediaUrl &&
-                        !(Array.isArray(post.mediaItems) && post.mediaItems.length > 0) &&
-                        post.status !== "published" && (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-200/90 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
-                            <Icon.alert className="w-2.5 h-2.5" />
-                            sem arte
-                          </span>
-                        )}
-                    </div>
-                  </td>
-                  <td className="px-6 py-3.5">
-                    <div className="flex gap-1">
-                      {post.targets.map((t) => (
-                        <PlatformChip key={t} platform={t} />
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-6 py-3.5 text-[var(--color-text-muted)]">
-                    {formatDateTime(post.scheduledAt)}
-                  </td>
-                  <td className="px-6 py-3.5">
-                    <StatusBadge status={post.status} />
-                  </td>
-                  <td className="px-6 py-3.5 text-right w-28">
-                    {deletable(post.status) && (
-                      <div className="flex items-center justify-end gap-1">
-                        <Link
-                          href={`/posts/${post.id}/edit`}
-                          className="p-1.5 rounded-lg text-[var(--color-text-faint)] hover:text-white hover:bg-white/5 transition-colors opacity-0 group-hover:opacity-100"
-                          title="Editar"
-                        >
-                          <Icon.edit className="w-4 h-4" />
-                        </Link>
-                        <DeletePostButton postId={post.id} />
-                      </div>
-                    )}
-                  </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map(({ post, label, flags, hasFlags }) => (
+                  <tr
+                    key={post.id}
+                    className="group border-t border-line transition-colors duration-(--sf-dur-fast) hover:bg-hover"
+                  >
+                    <td className="px-4 py-2 align-middle">
+                      <Link
+                        href={`/clients/${post.clientId}`}
+                        className={`${LOOSE_LINK} min-w-11 font-medium text-fg hover:text-link sm:min-w-10`}
+                      >
+                        {post.client.name}
+                      </Link>
+                    </td>
+                    <td className="max-w-xs px-4 py-2 align-middle">
+                      <Link
+                        href={`/posts/${post.id}`}
+                        title={post.theme ?? undefined}
+                        className={`${LOOSE_LINK} text-fg-muted hover:text-fg`}
+                      >
+                        <span className="line-clamp-2">{post.theme?.trim() || "Sem título"}</span>
+                      </Link>
+                      {hasFlags && <div className="mb-1 flex flex-wrap items-center gap-1.5">{flags}</div>}
+                    </td>
+                    <td className="px-4 py-2 align-middle">
+                      <div className="flex gap-1">
+                        {post.targets.map((t) => (
+                          <PlatformChip key={t} platform={t} decorative={false} />
+                        ))}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2 align-middle tabular-nums text-fg-muted">
+                      {formatDateTime(post.scheduledAt)}
+                    </td>
+                    <td className="px-4 py-2 align-middle">
+                      <StatusBadge kind="post" status={post.status} />
+                    </td>
+                    <td className="px-4 py-2 text-right align-middle">
+                      {deletable(post.status) && (
+                        <div className="flex items-center justify-end gap-1">
+                          <Link
+                            href={`/posts/${post.id}/edit`}
+                            aria-label={`Editar post: ${label}`}
+                            title="Editar post"
+                            className={`${buttonClasses({ variant: "ghost", size: "sm", iconOnly: true })} opacity-0 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100`}
+                          >
+                            <Icon.edit className="size-4" />
+                          </Link>
+                          <DeletePostButton postId={post.id} postLabel={label} status={post.status} />
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* < lg: cartões */}
+          <ul className="grid gap-3 lg:hidden">
+            {rows.map(({ post, label, flags, hasFlags }) => (
+              <li key={post.id} className="card grid gap-2 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <Link
+                    href={`/clients/${post.clientId}`}
+                    className={`${LOOSE_LINK} min-w-11 text-sm font-medium text-fg-muted hover:text-link sm:min-w-10`}
+                  >
+                    <span className="min-w-0 truncate">{post.client.name}</span>
+                  </Link>
+                  <StatusBadge kind="post" status={post.status} />
+                </div>
+                <Link
+                  href={`/posts/${post.id}`}
+                  title={post.theme ?? undefined}
+                  className={`${LOOSE_LINK} text-base font-semibold text-fg hover:text-link`}
+                >
+                  <span className="line-clamp-2 wrap-break-word">{post.theme?.trim() || "Sem título"}</span>
+                </Link>
+                {hasFlags && <div className="flex flex-wrap items-center gap-1.5">{flags}</div>}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-fg-muted">
+                  <span className="tabular-nums">{formatDateTime(post.scheduledAt)}</span>
+                  <span className="flex gap-1">
+                    {post.targets.map((t) => (
+                      <PlatformChip key={t} platform={t} decorative={false} />
+                    ))}
+                  </span>
+                </div>
+                {deletable(post.status) && (
+                  <div className="flex flex-wrap gap-2 border-t border-line pt-3">
+                    <Link
+                      href={`/posts/${post.id}/edit`}
+                      aria-label={`Editar post: ${label}`}
+                      className={buttonClasses({ variant: "secondary", size: "sm" })}
+                    >
+                      <Icon.edit className="size-4 shrink-0" />
+                      Editar
+                    </Link>
+                    <DeletePostButton postId={post.id} postLabel={label} status={post.status} variant="text" />
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
       )}
 
       {totalPages > 1 && (
-        <PostsPagination
-          page={page}
-          totalPages={totalPages}
-          total={total}
-          pageSize={PAGE_SIZE}
-        />
+        <PostsPagination page={page} totalPages={totalPages} total={total} pageSize={PAGE_SIZE} />
       )}
     </div>
   );

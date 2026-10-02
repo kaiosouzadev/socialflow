@@ -1,9 +1,15 @@
-import { prisma } from "@/lib/prisma";
+import type { Metadata } from "next";
+import { cache } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { PageHeader, StatusBadge, PlatformChip } from "@/components/ui";
+import { prisma } from "@/lib/prisma";
+import { Avatar } from "@/components/Avatar";
+import { buttonClasses } from "@/components/Button";
 import { Icon } from "@/components/Icons";
+import { EmptyState, PageHeader, PlatformChip, StatusBadge, ToneBadge } from "@/components/ui";
 import { formatDateTime } from "@/lib/format-date";
+import { uuidString } from "@/lib/validators";
+import { listBasicMonths } from "@/lib/basic-plan";
 import ClientChecklist from "./ClientChecklist";
 import ClientInfoEditor from "./ClientInfoEditor";
 import ClientBriefingEditor, { type Briefing } from "./ClientBriefingEditor";
@@ -13,23 +19,40 @@ import DeleteClientButton from "./DeleteClientButton";
 import GenerateCalendarButton from "./GenerateCalendarButton";
 import SyncMediaButton from "./SyncMediaButton";
 import BasicPlanManager from "./BasicPlanManager";
-import { listBasicMonths } from "@/lib/basic-plan";
 
 export const dynamic = "force-dynamic";
 
-export default async function ClientDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
+type Props = { params: Promise<{ id: string }> };
 
-  const [client, metaConnections] = await Promise.all([
+/** Nome do cliente para o título da aba (memorizado no mesmo render da página). */
+const loadClientName = cache(async (id: string) =>
+  uuidString.safeParse(id).success
+    ? prisma.client.findUnique({ where: { id }, select: { name: true } })
+    : null,
+);
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { id } = await params;
+  const client = await loadClientName(id);
+  return { title: client?.name ?? "Cliente não encontrado" };
+}
+
+function plural(n: number, one: string, many: string) {
+  return n === 1 ? one : many;
+}
+
+export default async function ClientDetailPage({ params }: Props) {
+  const { id } = await params;
+  // id que não é uuid faria o Prisma lançar: vira 404
+  if (!uuidString.safeParse(id).success) notFound();
+
+  const [client, metaConnections, users, openPending, queuedPostsCount] = await Promise.all([
     prisma.client.findUnique({
       where: { id },
       include: {
         socialAccounts: { orderBy: { platform: "asc" } },
         posts: { take: 5, orderBy: { scheduledAt: "desc" } },
+        responsible: { select: { id: true, name: true } },
         _count: { select: { posts: true } },
       },
     }),
@@ -38,11 +61,16 @@ export default async function ClientDetailPage({
       select: { id: true, name: true },
       orderBy: { createdAt: "desc" },
     }),
+    // GET /api/users é só para admin: a lista de redatoras vem do servidor
+    prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    prisma.pendingItem.count({ where: { clientId: id, resolvedAt: null } }),
+    prisma.post.count({ where: { clientId: id, status: { in: ["scheduled", "failed"] } } }),
   ]);
 
   if (!client) notFound();
 
   const basicMonths = client.tier === "basica" ? await listBasicMonths(client.id) : [];
+  const activeAccounts = client.socialAccounts.filter((a) => a.status === "active").length;
 
   const accounts = client.socialAccounts.map((a) => ({
     id: a.id,
@@ -53,37 +81,86 @@ export default async function ClientDetailPage({
     tokenExpiresAt: a.tokenExpiresAt ? a.tokenExpiresAt.toISOString() : null,
   }));
 
+  const stats = [
+    { label: "Contas", value: client.socialAccounts.length },
+    { label: "Contas ativas", value: activeAccounts },
+    { label: "Total de posts", value: client._count.posts },
+  ];
+
   return (
-    <div className="p-8 max-w-6xl mx-auto animate-fade-up">
+    <div className="page">
       <PageHeader
         title={client.name}
         back="/clients"
+        backLabel="Voltar para clientes"
+        badges={
+          <>
+            <StatusBadge kind="client" status={client.status} size="md" />
+            {!client.agencyPublishes && (
+              <span title="A agência produz o conteúdo, mas não agenda nem publica.">
+                <StatusBadge kind="agencyPublishes" status="nao" size="md" />
+              </span>
+            )}
+            <StatusBadge kind="plan" status={client.plan} size="md" />
+            {client.segment && <StatusBadge kind="segment" status={client.segment} size="md" />}
+            {client.responsible && (
+              <span
+                title="Redatora responsável"
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-surface pl-0.5 pr-2.5 text-sm font-medium text-fg"
+              >
+                <Avatar name={client.responsible.name} size="xs" />
+                <span className="sr-only">Redatora: </span>
+                {client.responsible.name}
+              </span>
+            )}
+            {openPending > 0 && (
+              <Link
+                href={`/pendencias?cliente=${client.id}`}
+                className="inline-flex min-h-11 items-center rounded-full sm:min-h-10"
+              >
+                <ToneBadge tone="warning" size="md">
+                  {openPending} {plural(openPending, "pendência aberta", "pendências abertas")}
+                  <span aria-hidden="true">→</span>
+                </ToneBadge>
+              </Link>
+            )}
+          </>
+        }
         action={
-          <div className="flex items-center gap-2">
+          <>
             <SyncMediaButton clientId={client.id} />
             <GenerateCalendarButton clientId={client.id} />
-            <Link href={`/posts/new?clientId=${client.id}`} className="btn-primary">
-              <Icon.plus className="w-4 h-4" />
+            <Link href={`/clients/${client.id}/importar`} className={buttonClasses({ variant: "secondary" })}>
+              <span aria-hidden="true" className="inline-flex size-4.5 [&>svg]:size-full">
+                <Icon.fileText />
+              </span>
+              Importar documento do mês
+            </Link>
+            <Link href={`/posts/new?clientId=${client.id}`} className={buttonClasses({ variant: "primary" })}>
+              <span aria-hidden="true" className="inline-flex size-4.5 [&>svg]:size-full">
+                <Icon.plus />
+              </span>
               Novo post
             </Link>
-            <DeleteClientButton clientId={client.id} clientName={client.name} />
-          </div>
+          </>
         }
       />
 
-      <div className="space-y-6">
+      <div className="grid gap-6">
         <ClientChecklist
           hasBriefing={
-            !!client.briefing && Object.values(client.briefing as Record<string, unknown>).some(
-              (v) => typeof v === "string" && v.trim().length > 0
+            !!client.briefing &&
+            Object.values(client.briefing as Record<string, unknown>).some(
+              (v) => typeof v === "string" && v.trim().length > 0,
             )
           }
           hasCredentials={!!client.credentialsEnc}
           hasToneOfVoice={!!client.toneOfVoice?.trim()}
-          activeAccounts={client.socialAccounts.filter((a) => a.status === "active").length}
+          activeAccounts={activeAccounts}
           hasDriveFolder={!!client.driveFolderId}
           hasLogo={!!client.logoUrl}
           tier={client.tier}
+          agencyPublishes={client.agencyPublishes}
         />
 
         <ClientInfoEditor
@@ -91,22 +168,27 @@ export default async function ClientDetailPage({
             id: client.id,
             name: client.name,
             email: client.email,
+            extraEmails: client.extraEmails,
             plan: client.plan,
+            tier: client.tier,
+            agencyPublishes: client.agencyPublishes,
+            status: client.status,
+            segment: client.segment,
+            responsibleUserId: client.responsibleUserId,
             toneOfVoice: client.toneOfVoice,
             driveFolderId: client.driveFolderId,
             logoUrl: client.logoUrl,
             brandColor: client.brandColor,
-            tier: client.tier,
             showContacts: client.showContacts,
           }}
+          users={users}
+          queuedPostsCount={queuedPostsCount}
         />
 
-        {client.tier === "basica" && (
-          <BasicPlanManager clientId={client.id} initial={basicMonths} />
-        )}
+        {client.tier === "basica" && <BasicPlanManager clientId={client.id} initial={basicMonths} />}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="min-w-0 lg:col-span-2">
             <ClientBriefingEditor
               client={{
                 id: client.id,
@@ -121,75 +203,89 @@ export default async function ClientDetailPage({
               }}
             />
           </div>
-          <CredentialsManager clientId={client.id} hasCredentials={!!client.credentialsEnc} />
-        </div>
-
-        <div className="grid grid-cols-3 gap-4">
-          <div className="card p-4">
-            <p className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider mb-1">
-              Contas
-            </p>
-            <p className="text-2xl font-semibold">{client.socialAccounts.length}</p>
-          </div>
-          <div className="card p-4">
-            <p className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider mb-1">
-              Total de posts
-            </p>
-            <p className="text-2xl font-semibold">{client._count.posts}</p>
-          </div>
-          <div className="card p-4">
-            <p className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider mb-1">
-              Contas ativas
-            </p>
-            <p className="text-2xl font-semibold">
-              {client.socialAccounts.filter((a) => a.status === "active").length}
-            </p>
+          <div className="min-w-0">
+            <CredentialsManager clientId={client.id} hasCredentials={!!client.credentialsEnc} />
           </div>
         </div>
 
-        <AccountsManager
-          clientId={client.id}
-          accounts={accounts}
-          metaConnections={metaConnections}
-        />
+        <dl className="grid gap-4 sm:grid-cols-3">
+          {stats.map((s) => (
+            <div key={s.label} className="card p-4">
+              <dt className="text-xs font-semibold uppercase tracking-overline text-fg-muted">{s.label}</dt>
+              <dd className="mt-1 font-display text-2xl font-semibold text-fg">{s.value}</dd>
+            </div>
+          ))}
+        </dl>
 
-        <div className="card overflow-hidden">
-          <div className="px-5 py-4 border-b border-[var(--color-border)] flex items-center justify-between">
-            <h2 className="font-semibold">Posts recentes</h2>
+        <AccountsManager clientId={client.id} accounts={accounts} metaConnections={metaConnections} />
+
+        <section aria-labelledby="posts-recentes" className="card overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3">
+            <h2 id="posts-recentes" className="font-display text-lg font-semibold tracking-title text-fg">
+              Posts recentes
+            </h2>
             <Link
               href={`/posts?clientId=${client.id}`}
-              className="text-sm text-[var(--color-accent)] hover:underline"
+              className="inline-flex min-h-11 items-center text-sm font-medium text-link hover:text-link-hover hover:underline sm:min-h-10"
             >
-              Ver todos
+              Ver todos os posts
             </Link>
           </div>
           {client.posts.length === 0 ? (
-            <div className="px-5 py-8 text-center text-sm text-[var(--color-text-muted)]">
-              Nenhum post ainda.
-            </div>
+            <EmptyState
+              size="inline"
+              headingLevel={3}
+              title="Nenhum post ainda"
+              description="Crie um post ou gere o cronograma do mês com IA."
+              action={
+                <Link href={`/posts/new?clientId=${client.id}`} className={buttonClasses({ variant: "secondary" })}>
+                  Criar post
+                </Link>
+              }
+            />
           ) : (
-            <div className="divide-y divide-[var(--color-border)]">
+            <ul className="divide-y divide-line">
               {client.posts.map((post) => (
-                <div key={post.id} className="flex items-center gap-4 px-5 py-4">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{post.theme ?? "Sem tema"}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <div className="flex gap-1">
-                        {post.targets.map((t) => (
-                          <PlatformChip key={t} platform={t} />
-                        ))}
+                <li key={post.id}>
+                  <Link
+                    href={`/posts/${post.id}`}
+                    className="flex items-center gap-4 px-5 py-3 transition-colors hover:bg-hover focus-visible:-outline-offset-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-fg">{post.theme?.trim() || "Sem tema"}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <span className="flex gap-1">
+                          {post.targets.map((t) => (
+                            <PlatformChip key={t} platform={t} />
+                          ))}
+                        </span>
+                        <span className="text-xs text-fg-muted">{formatDateTime(post.scheduledAt)}</span>
                       </div>
-                      <span className="text-xs text-[var(--color-text-faint)]">
-                        {formatDateTime(post.scheduledAt)}
-                      </span>
                     </div>
-                  </div>
-                  <StatusBadge status={post.status} />
-                </div>
+                    <StatusBadge kind="post" status={post.status} />
+                  </Link>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
-        </div>
+        </section>
+
+        <section aria-labelledby="zona-de-perigo" className="card border-danger-line p-5 sm:p-6">
+          <h2 id="zona-de-perigo" className="text-base font-semibold text-fg">
+            Zona de perigo
+          </h2>
+          <p className="mt-1 max-w-prose text-sm text-fg-muted">
+            Excluir o cliente apaga o cadastro, os posts, os cronogramas e as credenciais. Não dá para desfazer.
+          </p>
+          <div className="mt-4">
+            <DeleteClientButton
+              clientId={client.id}
+              clientName={client.name}
+              postsCount={client._count.posts}
+              accountsCount={client.socialAccounts.length}
+            />
+          </div>
+        </section>
       </div>
     </div>
   );

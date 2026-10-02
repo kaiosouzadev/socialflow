@@ -1,12 +1,18 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Icon } from "@/components/Icons";
-import { StatusBadge } from "@/components/ui";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
+import { Button, buttonClasses } from "@/components/Button";
+import { Callout } from "@/components/Callout";
+import { DatePicker } from "@/components/DatePickers";
+import { ConfirmDialog } from "@/components/Dialog";
+import { Field, Input, Select, Textarea } from "@/components/Field";
+import { Icon } from "@/components/Icons";
+import { EmptyState, StatusBadge } from "@/components/ui";
 import { formatDate } from "@/lib/format-date";
+import { toUserMessage } from "@/lib/user-facing-error";
 import ImportMetaButton from "./ImportMetaButton";
 
 type Account = {
@@ -18,11 +24,27 @@ type Account = {
   tokenExpiresAt: string | null;
 };
 
-const idHint: Record<string, string> = {
-  instagram: "User ID da conta Business/Creator",
-  facebook: "Page ID da página do Facebook",
-  linkedin: "URN da organização",
-};
+/** O que é o "ID da conta na rede" de cada plataforma (ajuda do campo) e um exemplo (placeholder). */
+const PLATFORMS = [
+  {
+    id: "instagram",
+    label: "Instagram",
+    help: "O ID de usuário da conta Business ou Creator do Instagram, vinculada a uma Página do Facebook.",
+    example: "ex.: 17841400000000000",
+  },
+  { id: "facebook", label: "Facebook", help: "O ID da Página do Facebook.", example: "ex.: 123456789" },
+  {
+    id: "linkedin",
+    label: "LinkedIn",
+    help: "O URN da organização (Company Page) no LinkedIn.",
+    example: "ex.: urn:li:organization:12345",
+  },
+] as const;
+
+const idHelp = (platform: string) => PLATFORMS.find((p) => p.id === platform)?.help ?? "O ID da conta na rede social.";
+
+/** Aviso que a rota /api/linkedin/start devolve na URL quando o LinkedIn não está configurado (S17). */
+const LINKEDIN_NOTICE = "linkedin-indisponivel";
 
 function AccountRow({ account }: { account: Account }) {
   const router = useRouter();
@@ -30,46 +52,57 @@ function AccountRow({ account }: { account: Account }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [deleteError, setDeleteError] = useState("");
 
   const [externalId, setExternalId] = useState(account.externalId);
   const [accessToken, setAccessToken] = useState("");
-  const [limit, setLimit] = useState(account.dailyPostLimit);
+  const [limit, setLimit] = useState(String(account.dailyPostLimit));
   const [status, setStatus] = useState(account.status);
 
   const label = BRAND[account.platform]?.label ?? account.platform;
 
   async function save() {
+    const dailyPostLimit = Number(limit);
+    if (!Number.isInteger(dailyPostLimit) || dailyPostLimit < 1 || dailyPostLimit > 200) {
+      setError("O limite diário precisa ser um número inteiro de 1 a 200.");
+      return;
+    }
+    if (!externalId.trim()) {
+      setError("Informe o ID da conta na rede.");
+      return;
+    }
     setBusy(true);
     setError("");
 
-    const payload: Record<string, unknown> = {
-      externalId,
-      dailyPostLimit: limit,
-      status,
-    };
-    // only send a new token if one was typed (keeps the current one otherwise)
+    const payload: Record<string, unknown> = { externalId: externalId.trim(), dailyPostLimit, status };
+    // só manda um token novo se foi digitado (senão mantém o atual)
     if (accessToken.trim()) payload.accessToken = accessToken.trim();
 
-    const res = await fetch(`/api/accounts/${account.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    setBusy(false);
-    if (!res.ok) {
-      setError("Não foi possível salvar. Verifique os campos.");
-      return;
+    try {
+      const res = await fetch(`/api/accounts/${account.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setError(toUserMessage(data, "Não foi possível salvar. Confira os campos e tente de novo."));
+        return;
+      }
+      setAccessToken("");
+      setEditing(false);
+      router.refresh();
+    } catch {
+      setError("Falha de conexão ao salvar. Verifique a internet e tente de novo.");
+    } finally {
+      setBusy(false);
     }
-    setAccessToken("");
-    setEditing(false);
-    router.refresh();
   }
 
   function cancel() {
     setExternalId(account.externalId);
     setAccessToken("");
-    setLimit(account.dailyPostLimit);
+    setLimit(String(account.dailyPostLimit));
     setStatus(account.status);
     setError("");
     setEditing(false);
@@ -77,155 +110,149 @@ function AccountRow({ account }: { account: Account }) {
 
   async function remove() {
     setBusy(true);
-    setError("");
-    const res = await fetch(`/api/accounts/${account.id}`, { method: "DELETE" });
-    if (!res.ok) {
-      setBusy(false);
+    setDeleteError("");
+    try {
+      const res = await fetch(`/api/accounts/${account.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setDeleteError(toUserMessage(data, "Não foi possível excluir a conta. Tente de novo em instantes."));
+        return;
+      }
       setConfirming(false);
-      setError("Não foi possível excluir a conta.");
-      return;
+      router.refresh();
+    } catch {
+      setDeleteError("Falha de conexão ao excluir. Verifique a internet e tente de novo.");
+    } finally {
+      setBusy(false);
     }
-    router.refresh();
   }
 
   return (
-    <div className="px-5 py-4">
-      <div className="flex items-center gap-4">
+    <li className="px-5 py-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <BrandBadge platform={account.platform} size={38} />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium">{label}</p>
-          <p className="text-xs text-[var(--color-text-faint)] truncate font-mono">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-fg">{label}</p>
+          <p className="truncate font-mono text-xs text-fg-muted" title={account.externalId}>
             {account.externalId}
           </p>
         </div>
 
         {!editing && (
           <div className="flex items-center gap-3">
-            <div className="text-right hidden sm:block">
-              <StatusBadge status={account.status} />
-              <p className="text-xs text-[var(--color-text-faint)] mt-1">
+            <div className="text-right">
+              <StatusBadge kind="account" status={account.status} />
+              <p className="mt-1 text-xs text-fg-muted">
                 {account.dailyPostLimit}/dia
-                {account.tokenExpiresAt &&
-                  ` · token até ${formatDate(account.tokenExpiresAt)}`}
+                {account.tokenExpiresAt && ` · token até ${formatDate(account.tokenExpiresAt)}`}
               </p>
             </div>
-            <button
-              onClick={() => setEditing(true)}
-              className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-white hover:bg-white/5 transition-colors"
-              title="Editar"
-            >
-              <Icon.edit className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setConfirming(true)}
-              className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+            <Button iconOnly variant="ghost" aria-label={`Editar conta ${label}`} title="Editar" onClick={() => setEditing(true)}>
+              <Icon.edit />
+            </Button>
+            <Button
+              iconOnly
+              variant="ghost"
+              aria-label={`Excluir conta ${label}`}
               title="Excluir"
+              onClick={() => {
+                setDeleteError("");
+                setConfirming(true);
+              }}
             >
-              <Icon.trash className="w-4 h-4" />
-            </button>
+              <Icon.trash />
+            </Button>
           </div>
         )}
       </div>
 
       {editing && (
-        <div className="mt-4 space-y-4">
-          <div>
-            <label className="label">
-              ID externo{" "}
-              <span className="text-[var(--color-text-faint)] font-normal">
-                ({idHint[account.platform] ?? "ID da conta"})
-              </span>
-            </label>
-            <input
-              value={externalId}
-              onChange={(e) => setExternalId(e.target.value)}
-              className="input font-mono"
-            />
-          </div>
+        <div className="mt-4 grid gap-4">
+          <Field label="ID da conta na rede" help={idHelp(account.platform)} required>
+            <Input value={externalId} onChange={(e) => setExternalId(e.target.value)} className="font-mono" />
+          </Field>
 
-          <div>
-            <label className="label">
-              Access Token{" "}
-              <span className="text-[var(--color-text-faint)] font-normal">
-                (deixe em branco para manter o atual)
-              </span>
-            </label>
-            <textarea
+          <Field label="Token de acesso" help="Deixe em branco para manter o token atual.">
+            <Textarea
               value={accessToken}
               onChange={(e) => setAccessToken(e.target.value)}
               rows={2}
-              placeholder="Cole um novo token apenas se for atualizar…"
-              className="input font-mono text-xs resize-none"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Cole um novo token só se for trocar"
+              className="resize-none font-mono"
             />
-          </div>
+          </Field>
 
           <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <label className="label">Limite diário</label>
-              <input
-                type="number"
-                min={1}
-                max={200}
-                value={limit}
-                onChange={(e) => setLimit(Number(e.target.value))}
-                className="input w-28"
-              />
-            </div>
-            <div>
-              <label className="label">Status</label>
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value)}
-                className="input w-36"
-              >
+            <Field label="Limite diário de posts" className="w-40">
+              <Input type="number" inputMode="numeric" min={1} max={200} value={limit} onChange={(e) => setLimit(e.target.value)} />
+            </Field>
+            <Field label="Status" className="w-40">
+              <Select value={status} onChange={(e) => setStatus(e.target.value)}>
                 <option value="active">Ativa</option>
                 <option value="inactive">Inativa</option>
-              </select>
-            </div>
-            <div className="flex gap-2 ml-auto">
-              <button onClick={cancel} className="btn-ghost !py-2">
+              </Select>
+            </Field>
+            <div className="flex gap-2 sm:ml-auto">
+              <Button disabled={busy} onClick={cancel}>
                 Cancelar
-              </button>
-              <button onClick={save} disabled={busy} className="btn-primary !py-2">
-                {busy ? "Salvando..." : "Salvar"}
-              </button>
+              </Button>
+              <Button variant="primary" loading={busy} loadingText="Salvando…" onClick={save}>
+                Salvar
+              </Button>
             </div>
           </div>
 
           {error && (
-            <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+            <Callout tone="danger" live="assertive">
               {error}
-            </p>
+            </Callout>
           )}
         </div>
       )}
 
-      {!editing && error && (
-        <p className="mt-3 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-          {error}
-        </p>
-      )}
+      <ConfirmDialog
+        open={confirming}
+        tone="danger"
+        title={`Excluir a conta ${label}?`}
+        description={<span className="break-all font-mono">{account.externalId}</span>}
+        consequences={[
+          "A conta e o token salvo são apagados. Não dá para desfazer.",
+          `Os posts deste cliente para o ${label} falham na publicação até outra conta ser conectada.`,
+        ]}
+        confirmLabel="Excluir conta"
+        busy={busy}
+        busyLabel="Excluindo…"
+        error={deleteError}
+        onCancel={() => setConfirming(false)}
+        onConfirm={remove}
+      />
+    </li>
+  );
+}
 
-      {confirming && (
-        <div className="mt-3 flex items-center gap-3 rounded-lg bg-red-500/[0.07] border border-red-500/20 px-3 py-2">
-          <span className="text-sm text-red-200 flex-1">
-            Excluir esta conta {label}? Posts em fila para ela podem falhar.
-          </span>
-          <button
-            onClick={remove}
-            disabled={busy}
-            className="text-sm font-medium text-red-300 hover:text-red-200"
-          >
-            {busy ? "Excluindo..." : "Sim, excluir"}
-          </button>
-          <button
-            onClick={() => setConfirming(false)}
-            className="text-sm text-[var(--color-text-muted)] hover:text-white"
-          >
-            Cancelar
-          </button>
-        </div>
-      )}
+/** Aviso "LinkedIn indisponível" vindo do redirecionamento de /api/linkedin/start. */
+function LinkedinNotice() {
+  const ref = useRef<HTMLDivElement>(null);
+  const pathname = usePathname();
+
+  // a página recarrega no topo: leva o aviso para a vista e o foco para ele
+  useEffect(() => {
+    ref.current?.scrollIntoView({ block: "center" });
+    ref.current?.focus({ preventScroll: true });
+  }, []);
+
+  return (
+    <div ref={ref} tabIndex={-1} className="px-5 pt-4 outline-none">
+      <Callout
+        tone="warning"
+        title="Não foi possível conectar o LinkedIn"
+        // tira o ?aviso da URL sem recarregar (integra com useSearchParams)
+        onDismiss={() => window.history.replaceState(null, "", pathname)}
+      >
+        A conexão com o LinkedIn não está disponível no momento. Avise o administrador do sistema.
+      </Callout>
     </div>
   );
 }
@@ -239,43 +266,167 @@ export default function AccountsManager({
   accounts: Account[];
   metaConnections?: { id: string; name: string }[];
 }) {
+  const searchParams = useSearchParams();
+  const linkedinUnavailable = searchParams.get("aviso") === LINKEDIN_NOTICE;
+
   return (
-    <div className="card overflow-hidden">
-      <div className="px-5 py-4 border-b border-[var(--color-border)] flex items-center justify-between gap-2">
-        <h2 className="font-semibold">Contas sociais</h2>
-        <div className="flex items-center gap-3">
+    <section aria-labelledby="contas-sociais" className="card overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
+        <h2 id="contas-sociais" className="font-display text-lg font-semibold tracking-title text-fg">
+          Contas sociais
+        </h2>
+        <div className="grid w-full gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
           <ImportMetaButton clientId={clientId} connections={metaConnections} />
-          <a href={`/api/linkedin/start?clientId=${clientId}`} className="btn-ghost">
+          <a href={`/api/linkedin/start?clientId=${clientId}`} className={buttonClasses()}>
             <BrandBadge platform="linkedin" size={18} />
             Conectar LinkedIn
           </a>
-          <Link
-            href={`/clients/${clientId}/accounts/new`}
-            className="text-sm text-[var(--color-accent)] hover:underline flex items-center gap-1"
-          >
-            <Icon.plus className="w-4 h-4" />
-            Manual
+          <Link href={`/clients/${clientId}/accounts/new`} className={buttonClasses({ variant: "ghost" })}>
+            <span aria-hidden="true" className="inline-flex size-4.5 [&>svg]:size-full">
+              <Icon.plus />
+            </span>
+            Adicionar manualmente
           </Link>
         </div>
       </div>
 
+      {linkedinUnavailable && <LinkedinNotice />}
+
       {accounts.length === 0 ? (
-        <div className="px-5 py-8 text-center text-sm text-[var(--color-text-muted)]">
-          Nenhuma conta conectada.{" "}
-          <Link
-            href={`/clients/${clientId}/accounts/new`}
-            className="text-[var(--color-accent)] hover:underline"
-          >
-            Adicionar conta
-          </Link>
-        </div>
+        <EmptyState
+          size="inline"
+          headingLevel={3}
+          title="Nenhuma conta conectada"
+          description="Importe a Página e o Instagram do Meta, conecte o LinkedIn ou adicione uma conta manualmente."
+        />
       ) : (
-        <div className="divide-y divide-[var(--color-border)]">
+        <ul className="divide-y divide-line">
           {accounts.map((acc) => (
             <AccountRow key={acc.id} account={acc} />
           ))}
-        </div>
+        </ul>
       )}
+    </section>
+  );
+}
+
+/**
+ * Formulário de /clients/[id]/accounts/new. Mora aqui (módulo cliente das contas sociais) para a
+ * página continuar componente de servidor e exportar `metadata` (CC8).
+ */
+export function NewAccountForm({ clientId }: { clientId: string }) {
+  const router = useRouter();
+  const [platform, setPlatform] = useState<string>("instagram");
+  const [tokenExpiresAt, setTokenExpiresAt] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const current = PLATFORMS.find((p) => p.id === platform) ?? PLATFORMS[0];
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+
+    const form = new FormData(e.currentTarget);
+    const expires = form.get("tokenExpiresAt");
+    const data = {
+      clientId,
+      platform,
+      externalId: String(form.get("externalId") ?? "").trim(),
+      accessToken: String(form.get("accessToken") ?? "").trim(),
+      dailyPostLimit: Number(form.get("dailyPostLimit") ?? 25),
+      tokenExpiresAt: expires ? new Date(String(expires)).toISOString() : undefined,
+    };
+
+    try {
+      const res = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setError(toUserMessage(body, "Não foi possível adicionar a conta. Confira os dados e tente de novo."));
+        return;
+      }
+      router.push(`/clients/${clientId}`);
+      router.refresh();
+    } catch {
+      setError("Falha de conexão ao salvar. Verifique a internet e tente de novo.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-6">
+      <Callout tone="info">
+        O token é criptografado antes de ser salvo e nunca mais é exibido depois disso.
+      </Callout>
+
+      <form onSubmit={handleSubmit} className="card grid gap-5 p-4 sm:p-6">
+        <Field label="Plataforma" kind="group">
+          <div className="grid grid-cols-3 gap-2">
+            {PLATFORMS.map((p) => (
+              <label
+                key={p.id}
+                className="flex min-h-14 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-control border border-line-strong bg-surface px-2 py-2 text-sm font-medium text-fg-muted transition-colors duration-(--sf-dur-fast) hover:bg-hover hover:text-fg has-checked:border-selected has-checked:bg-selected has-checked:text-on-selected has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-focus sm:flex-row sm:gap-2"
+              >
+                <input
+                  type="radio"
+                  name="platform"
+                  value={p.id}
+                  checked={platform === p.id}
+                  onChange={() => setPlatform(p.id)}
+                  className="sr-only"
+                />
+                <BrandBadge platform={p.id} size={22} />
+                {p.label}
+              </label>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="ID da conta na rede" help={current.help} required>
+          <Input name="externalId" placeholder={current.example} autoComplete="off" className="font-mono" />
+        </Field>
+
+        <Field label="Token de acesso" required>
+          <Textarea
+            name="accessToken"
+            rows={3}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="Cole aqui o token da conta"
+            className="resize-none font-mono"
+          />
+        </Field>
+
+        <div className="grid items-start gap-4 sm:grid-cols-2">
+          <Field label="Limite diário de posts" help="Máximo de publicações por dia nesta conta (1 a 200).">
+            <Input name="dailyPostLimit" type="number" inputMode="numeric" defaultValue={25} min={1} max={200} />
+          </Field>
+          <Field label="Expira em" optional>
+            <DatePicker name="tokenExpiresAt" value={tokenExpiresAt} onChange={setTokenExpiresAt} />
+          </Field>
+        </div>
+
+        {error && (
+          <Callout tone="danger" live="assertive">
+            {error}
+          </Callout>
+        )}
+
+        <div className="flex flex-col-reverse gap-3 pt-1 sm:flex-row">
+          <Link href={`/clients/${clientId}`} className={`${buttonClasses()} sm:flex-1`}>
+            Cancelar
+          </Link>
+          <Button type="submit" variant="primary" loading={loading} loadingText="Salvando…" className="sm:flex-1">
+            Salvar conta
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import { BRAND } from "./BrandIcons";
+
 type IconProps = { className?: string };
 
 function Svg({ className, children }: IconProps & { children: React.ReactNode }) {
@@ -155,10 +157,109 @@ export const Icon = {
       <path d="M9 18l6-6-6-6" />
     </Svg>
   ),
+  menu: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M4 6h16M4 12h16M4 18h16" />
+    </Svg>
+  ),
+  sun: (p: IconProps) => (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </Svg>
+  ),
+  moon: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+    </Svg>
+  ),
+  monitor: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M8 20h8M12 16v4" />
+    </Svg>
+  ),
+  info: (p: IconProps) => (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </Svg>
+  ),
+  xCircle: (p: IconProps) => (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m15 9-6 6M9 9l6 6" />
+    </Svg>
+  ),
+  externalLink: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </Svg>
+  ),
+  moreHorizontal: (p: IconProps) => (
+    <Svg {...p}>
+      <circle cx="5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+    </Svg>
+  ),
+  message: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" />
+    </Svg>
+  ),
+  fileText: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 3v5h5M9 13h6M9 17h6" />
+    </Svg>
+  ),
+  upload: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M12 15V4M7 9l5-5 5 5M5 20h14" />
+    </Svg>
+  ),
+  inbox: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M3 13h5l1.5 3h5L16 13h5" />
+      <path d="M5.5 5h13L21 13v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Z" />
+    </Svg>
+  ),
+  board: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9h18M9 9v11M15 9v11" />
+    </Svg>
+  ),
+  eye: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </Svg>
+  ),
+  eyeOff: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="m3 3 18 18M10.6 5.1A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a10 10 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    </Svg>
+  ),
+  copy: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+    </Svg>
+  ),
+  arrowRight: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </Svg>
+  ),
 };
 
-export const platformBadge: Record<string, { label: string; gradient: string }> = {
-  instagram: { label: "Instagram", gradient: "linear-gradient(135deg,#f9ce34,#ee2a7b,#6228d7)" },
-  facebook: { label: "Facebook", gradient: "linear-gradient(135deg,#1877f2,#0a5cd6)" },
-  linkedin: { label: "LinkedIn", gradient: "linear-gradient(135deg,#0a66c2,#004182)" },
-};
+/**
+ * Rótulo e gradiente oficial de cada rede, derivados do BRAND (fonte única das
+ * cores das redes, em BrandIcons). Mesmas chaves de antes.
+ * @deprecated use `BrandBadge` / `BRAND` de `./BrandIcons`.
+ */
+export const platformBadge: Record<string, { label: string; gradient: string }> = Object.fromEntries(
+  Object.entries(BRAND).map(([key, brand]) => [key, { label: brand.label, gradient: brand.gradient }]),
+);

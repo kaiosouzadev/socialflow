@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { BrandBadge } from "./BrandIcons";
 import { AiCaptionButton } from "./AiCaptionButton";
+
+const TEXTAREA =
+  "w-full resize-y rounded-control border border-line-strong bg-surface px-3 py-2.5 text-base leading-relaxed text-fg transition-colors duration-(--sf-dur-fast) placeholder:text-fg-faint hover:border-fg-muted focus:border-focus focus:outline-2 focus:outline-offset-1 focus:outline-focus sm:text-sm";
 
 /**
  * Padrão de legendas do sistema:
@@ -30,6 +33,8 @@ export function CaptionFields({
   const [liDirty, setLiDirty] = useState(
     () => typeof captions.linkedin === "string" && captions.linkedin !== shared
   );
+  const sharedId = useId();
+  const linkedinId = useId();
 
   const hasMeta = targets.includes("instagram") || targets.includes("facebook");
   const hasLinkedin = targets.includes("linkedin");
@@ -50,8 +55,8 @@ export function CaptionFields({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <label className="label !mb-0">Legendas</label>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-medium text-fg">Legendas</p>
         <AiCaptionButton
           clientId={clientId}
           theme={theme}
@@ -67,27 +72,26 @@ export function CaptionFields({
       </div>
 
       {targets.length === 0 ? (
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Selecione ao menos uma rede para escrever as legendas.
-        </p>
+        <p className="text-sm text-fg-muted">Selecione ao menos uma rede para escrever as legendas.</p>
       ) : (
         <div className="space-y-3">
           {hasMeta && (
             <div>
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className="flex items-center gap-1">
+              <div className="mb-1.5 flex items-center gap-2">
+                <span aria-hidden="true" className="flex items-center gap-1">
                   <BrandBadge platform="facebook" size={20} />
                   <BrandBadge platform="instagram" size={20} />
                 </span>
-                <span className="text-xs font-medium text-[var(--color-text-muted)]">
+                <label htmlFor={sharedId} className="text-sm font-medium text-fg-muted">
                   Facebook + Instagram (legenda única)
-                </span>
+                </label>
               </div>
               <textarea
+                id={sharedId}
                 value={shared}
                 onChange={(e) => setShared(e.target.value)}
                 rows={9}
-                className="input resize-y min-h-32 leading-relaxed"
+                className={`${TEXTAREA} min-h-32`}
                 placeholder="Legenda para Facebook e Instagram... ou gere com IA"
               />
             </div>
@@ -95,20 +99,21 @@ export function CaptionFields({
 
           {hasLinkedin && (
             <div>
-              <div className="flex items-center gap-2 mb-1.5">
-                <BrandBadge platform="linkedin" size={20} />
-                <span className="text-xs font-medium text-[var(--color-text-muted)]">
-                  LinkedIn
-                  {!liDirty && hasMeta && (
-                    <span className="text-[var(--color-text-faint)] font-normal"> · espelhando a legenda acima</span>
-                  )}
+              <div className="mb-1.5 flex items-center gap-2">
+                <span aria-hidden="true" className="flex items-center">
+                  <BrandBadge platform="linkedin" size={20} />
                 </span>
+                <label htmlFor={linkedinId} className="text-sm font-medium text-fg-muted">
+                  LinkedIn
+                  {!liDirty && hasMeta && <span className="font-normal"> · espelhando a legenda acima</span>}
+                </label>
               </div>
               <textarea
+                id={linkedinId}
                 value={captions.linkedin ?? shared}
                 onChange={(e) => setLinkedin(e.target.value)}
                 rows={7}
-                className="input resize-y min-h-24 leading-relaxed"
+                className={`${TEXTAREA} min-h-24`}
                 placeholder="Legenda para LinkedIn (por padrão igual à de Facebook/Instagram)"
               />
             </div>

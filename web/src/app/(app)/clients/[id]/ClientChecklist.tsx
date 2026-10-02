@@ -1,3 +1,4 @@
+import { Callout } from "@/components/Callout";
 import { Icon } from "@/components/Icons";
 
 type Item = { label: string; done: boolean; hint: string };
@@ -7,7 +8,8 @@ type Item = { label: string; done: boolean; hint: string };
  *
  * Briefing e credenciais vazios não chamavam atenção nenhuma na tela — ficavam
  * só como blocos em branco no meio da página. Aqui a lacuna aparece de cara,
- * com o motivo de cada campo importar.
+ * com o motivo de cada campo importar. Cliente "só produção" não cobra conta
+ * social: a agência não publica por ele.
  */
 export default function ClientChecklist({
   hasBriefing,
@@ -17,6 +19,7 @@ export default function ClientChecklist({
   hasDriveFolder,
   hasLogo,
   tier,
+  agencyPublishes = true,
 }: {
   hasBriefing: boolean;
   hasCredentials: boolean;
@@ -25,13 +28,19 @@ export default function ClientChecklist({
   hasDriveFolder: boolean;
   hasLogo: boolean;
   tier: string;
+  /** false = só produção: o item "Conta social conectada" não se aplica */
+  agencyPublishes?: boolean;
 }) {
   const items: Item[] = [
-    {
-      label: "Conta social conectada",
-      done: activeAccounts > 0,
-      hint: "sem conta ativa nada publica",
-    },
+    ...(agencyPublishes
+      ? [
+          {
+            label: "Conta social conectada",
+            done: activeAccounts > 0,
+            hint: "sem conta ativa nada é publicado",
+          },
+        ]
+      : []),
     {
       label: "Tom de voz",
       done: hasToneOfVoice,
@@ -52,7 +61,7 @@ export default function ClientChecklist({
       done: hasDriveFolder,
       hint: "origem das artes sincronizadas",
     },
-    // logo só aparece no link de aprovação; no plano básico a arte usa a marca
+    // logo aparece no link de aprovação; no plano básico também vai na arte gerada
     {
       label: "Logo",
       done: hasLogo,
@@ -63,46 +72,53 @@ export default function ClientChecklist({
   const missing = items.filter((i) => !i.done);
 
   if (missing.length === 0) {
-    return (
-      <div className="flex items-center gap-3 rounded-xl px-4 py-3 bg-emerald-500/[0.06] border border-emerald-500/20">
-        <Icon.check className="w-4 h-4 text-emerald-400 shrink-0" />
-        <p className="text-sm text-emerald-200/90">Cadastro completo.</p>
-      </div>
-    );
+    return <Callout tone="success">Cadastro completo.</Callout>;
   }
 
+  const title =
+    missing.length === 1 ? "Falta 1 item no cadastro" : `Faltam ${missing.length} itens no cadastro`;
+
   return (
-    <div className="card p-5">
-      <div className="flex items-center gap-2.5 mb-3">
-        <Icon.alert className="w-4 h-4 text-amber-400 shrink-0" />
-        <h2 className="font-semibold text-sm">
-          Faltam {missing.length} {missing.length === 1 ? "item" : "itens"} no cadastro
+    <section aria-labelledby="checklist-titulo" className="card p-5">
+      <div className="mb-3 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+        <span aria-hidden="true" className="inline-flex size-4 shrink-0 text-warning-solid [&>svg]:size-full">
+          <Icon.alert />
+        </span>
+        <h2 id="checklist-titulo" className="text-sm font-semibold text-fg">
+          {title}
         </h2>
-        <span className="text-xs text-[var(--color-text-faint)]">
-          {items.length - missing.length}/{items.length} prontos
+        <span className="text-xs text-fg-muted">
+          {items.length - missing.length} de {items.length} prontos
         </span>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <ul className="flex flex-wrap gap-2">
         {items.map((i) => (
-          <span
+          <li
             key={i.label}
             title={i.hint}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border ${
+            className={`inline-flex items-center gap-1.5 rounded-control border px-2.5 py-1 text-xs font-medium ${
               i.done
-                ? "text-emerald-300 bg-emerald-500/[0.08] border-emerald-500/20"
-                : "text-amber-200 bg-amber-500/[0.08] border-amber-500/25"
+                ? "border-success-line bg-success-bg text-success-fg"
+                : "border-warning-line bg-warning-bg text-warning-fg"
             }`}
           >
-            {i.done ? <Icon.check className="w-3 h-3" /> : <Icon.alert className="w-3 h-3" />}
+            <span aria-hidden="true" className="inline-flex size-3.5 [&>svg]:size-full">
+              {i.done ? <Icon.check /> : <Icon.alert />}
+            </span>
             {i.label}
-          </span>
+            <span className="sr-only">{i.done ? " (pronto)" : " (falta)"}</span>
+          </li>
         ))}
-      </div>
+      </ul>
 
-      <p className="text-xs text-[var(--color-text-faint)] mt-3">
-        {missing.map((m) => `${m.label} — ${m.hint}`).join(" · ")}
-      </p>
-    </div>
+      <ul className="mt-3 grid gap-0.5 text-xs text-fg-muted">
+        {missing.map((m) => (
+          <li key={m.label}>
+            <span className="font-medium text-fg">{m.label}</span> — {m.hint}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

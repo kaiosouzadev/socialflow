@@ -1,23 +1,50 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Avatar } from "@/components/Avatar";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
+import { Button } from "@/components/Button";
+import { Callout } from "@/components/Callout";
+import { ConfirmDialog, Dialog } from "@/components/Dialog";
+import { Field, Textarea } from "@/components/Field";
 import { Icon } from "@/components/Icons";
-import { Logo } from "@/components/Logo";
+import { SegmentedControl } from "@/components/Toggle";
+import { FormatBadge } from "@/components/ui";
+import { formatLabel, formatMeta, type PostFormat } from "@/lib/formats";
+import type { InstagramProfilePreview } from "@/lib/ig-profile";
+import InstagramFeedPreview, { type PlannedFeedTile } from "./InstagramFeedPreview";
 
 const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+const WEEKDAYS_LONG = [
+  "Domingo",
+  "Segunda-feira",
+  "Terça-feira",
+  "Quarta-feira",
+  "Quinta-feira",
+  "Sexta-feira",
+  "Sábado",
+];
+const MONTHS = [
+  "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+  "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+];
 // pedido de ajuste formal precisa dizer O QUE mudar
 const MIN_ADJUST = 30;
 
-/** Cada tipo de post tem cor e rótulo próprios — é isso que diferencia os
- *  cards quando ainda não existe arte (antes tudo virava um retângulo preto). */
-const FORMAT: Record<string, { label: string; color: string }> = {
-  feed: { label: "Feed", color: "#7c5cff" },
-  carrossel: { label: "Carrossel", color: "#38bdf8" },
-  reels: { label: "Reels", color: "#f472b6" },
-  story: { label: "Story", color: "#fbbf24" },
+/** Cada formato tem cor própria (tokens format-*, DESIGN a.6): é o que diferencia
+ *  os cards quando ainda não existe arte. Classes estáticas para o Tailwind. */
+const FORMAT_CLASS: Record<PostFormat, { stripe: string; wash: string; icon: string; text: string }> = {
+  feed: { stripe: "bg-format-feed", wash: "bg-format-feed-bg", icon: "text-format-feed", text: "text-format-feed-fg" },
+  carrossel: {
+    stripe: "bg-format-carrossel",
+    wash: "bg-format-carrossel-bg",
+    icon: "text-format-carrossel",
+    text: "text-format-carrossel-fg",
+  },
+  reels: { stripe: "bg-format-reels", wash: "bg-format-reels-bg", icon: "text-format-reels", text: "text-format-reels-fg" },
+  story: { stripe: "bg-format-story", wash: "bg-format-story-bg", icon: "text-format-story", text: "text-format-story-fg" },
 };
-const fmtOf = (f: string) => FORMAT[f] ?? { label: f, color: "#a1a1aa" };
+const fmtClass = (f: string) => FORMAT_CLASS[formatMeta(f).id];
 
 type Adjustment = {
   id: string;
@@ -33,13 +60,13 @@ type Post = {
   format: string;
   mediaUrl: string | null;
   mediaItems: { url: string; type?: string }[] | null;
+  /** legado (o importador grava só este) — vale quando a rede não tem `captions` (N-18) */
+  caption: string | null;
   captions: Record<string, string>;
   targets: string[];
-  when: string;
   fullWhen: string;
   day: number;
   time: string;
-  aiEditsUsed: number;
   clientNote: string | null;
   slides: string[];
   adjustments: Adjustment[];
@@ -60,6 +87,23 @@ function isVid(u: string) {
 }
 
 const pendingOf = (p: Post) => p.adjustments.filter((a) => a.status === "pendente").length;
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** Legenda que o cliente vê em cada rede: `captions[rede] ?? caption`, a mesma
+ *  regra do publicador (N-18). */
+function captionFor(post: Post, net: string): string {
+  return post.captions[net] ?? post.caption ?? "";
+}
+
+function firstText(...values: (string | null | undefined)[]): string {
+  return values.find((v): v is string => typeof v === "string" && v.trim().length > 0) ?? "";
+}
+
+/** "Legenda efetiva" do post (captions por rede ou o `caption` legado). */
+function captionText(post: Post): string {
+  return firstText(post.captions.instagram, post.captions.facebook, post.captions.linkedin, post.caption);
+}
 
 /* ------------------ "já vi este post" (por navegador) ------------------ */
 
@@ -73,6 +117,21 @@ function useHydrated() {
     () => true,
     () => false
   );
+}
+
+const MOBILE_QUERY = "(max-width: 639.98px)";
+
+function subscribeMobile(cb: () => void) {
+  const mq = window.matchMedia(MOBILE_QUERY);
+  mq.addEventListener("change", cb);
+  return () => mq.removeEventListener("change", cb);
+}
+const isMobileNow = () => window.matchMedia(MOBILE_QUERY).matches;
+const notMobileOnServer = () => false;
+
+/** Abaixo de `sm` (folha inferior): o modal do post ganha o rodapé "Fechar". */
+function useIsMobile() {
+  return useSyncExternalStore(subscribeMobile, isMobileNow, notMobileOnServer);
 }
 
 /**
@@ -129,8 +188,7 @@ function mediaOf(post: Post) {
 /** Prévia do conteúdo no card: primeira linha da legenda ou, na fase
  *  cronograma (sem legenda ainda), a explicação do tema. */
 function captionPreview(post: Post): string {
-  const raw = post.captions.instagram ?? post.captions.facebook ?? post.captions.linkedin ?? "";
-  const firstLine = raw.split("\n").find((l) => l.trim().length > 0) ?? "";
+  const firstLine = captionText(post).split("\n").find((l) => l.trim().length > 0) ?? "";
   return firstLine.trim() || post.explanation.trim();
 }
 
@@ -151,6 +209,26 @@ function groupPosts(posts: Post[]): Group[] {
     groups.push({ key, day: primary.day, theme: primary.theme, posts: sorted, primary });
   }
   return groups.sort((a, b) => a.day - b.day || a.primary.time.localeCompare(b.primary.time));
+}
+
+/** "Instagram e Facebook" (texto para leitor de tela; os selos são decorativos). */
+function networksText(targets: string[]): string {
+  const names = targets.map((t) => BRAND[t]?.label ?? t);
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} e ${names[names.length - 1]}` : (names[0] ?? "");
+}
+
+function Networks({ targets, size }: { targets: string[]; size: number }) {
+  if (targets.length === 0) return null;
+  return (
+    <>
+      <span aria-hidden="true" className="flex items-center gap-1">
+        {targets.map((t) => (
+          <BrandBadge key={t} platform={t} size={size} />
+        ))}
+      </span>
+      <span className="sr-only">{networksText(targets)}</span>
+    </>
+  );
 }
 
 function Thumb({
@@ -178,41 +256,64 @@ function Thumb({
   return <img src={url} alt="" loading="lazy" className={`object-cover ${className}`} />;
 }
 
-/** Placeholder por tipo de post — substitui o retângulo preto "sem mídia". */
+/** Placeholder por formato — substitui o retângulo preto "sem mídia". */
 function FormatPlaceholder({ format, compact = false }: { format: string; compact?: boolean }) {
-  const f = fmtOf(format);
+  const c = fmtClass(format);
   return (
-    <div
-      className="w-full h-full flex flex-col items-center justify-center gap-1"
-      style={{ background: `linear-gradient(135deg, ${f.color}26, ${f.color}0d)` }}
-    >
-      <span style={{ color: f.color }}>
-        <Icon.calendar className={compact ? "w-3.5 h-3.5" : "w-5 h-5"} />
+    <div aria-hidden="true" className={`flex size-full flex-col items-center justify-center gap-1 ${c.wash}`}>
+      <span className={`inline-flex ${compact ? "size-4" : "size-5"} [&>svg]:size-full ${c.icon}`}>
+        <Icon.calendar />
       </span>
-      {!compact && (
-        <span className="text-[10px] font-semibold" style={{ color: f.color }}>
-          {f.label}
-        </span>
-      )}
+      {!compact && <span className={`text-xs font-semibold ${c.text}`}>{formatLabel(format)}</span>}
     </div>
   );
 }
 
-function FormatBadge({ format, size = "sm" }: { format: string; size?: "sm" | "xs" }) {
-  const f = fmtOf(format);
+/* --------------------------- modal de detalhe --------------------------- */
+
+type Choice = "adjust" | "note" | "caption";
+
+/** Escolha do modal do post (DESIGN h.1): título + efeito sobre a aprovação, ≥ 14 px. */
+function ChoiceButton({
+  icon,
+  title,
+  effect,
+  expanded,
+  controls,
+  onToggle,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  effect: string;
+  expanded: boolean;
+  controls: string;
+  onToggle: () => void;
+}) {
   return (
-    <span
-      className={`inline-flex items-center rounded font-semibold leading-none ${
-        size === "xs" ? "text-[9px] px-1 py-0.5" : "text-[10px] px-1.5 py-0.5"
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-controls={controls}
+      onClick={onToggle}
+      className={`flex min-h-16 w-full items-start gap-3 rounded-card border bg-surface p-4 text-left transition-colors duration-(--sf-dur-fast) hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${
+        expanded ? "border-selected" : "border-line-strong"
       }`}
-      style={{ background: `${f.color}22`, color: f.color, border: `1px solid ${f.color}40` }}
     >
-      {f.label}
-    </span>
+      <span aria-hidden="true" className="mt-0.5 inline-flex size-5 shrink-0 text-fg-muted [&>svg]:size-full">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-base font-semibold text-fg">{title}</span>
+        <span className="mt-0.5 block text-sm text-fg-muted">{effect}</span>
+      </span>
+    </button>
   );
 }
 
-/* --------------------------- modal de detalhe --------------------------- */
+/** Rodapé das escolhas abertas: [Cancelar] [ação]; no celular, empilhados com a ação em cima. */
+function ChoiceActions({ children }: { children: React.ReactNode }) {
+  return <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">{children}</div>;
+}
 
 function PostModal({
   token,
@@ -231,41 +332,53 @@ function PostModal({
   onAdjustmentAdded: (postId: string, adjustment: Adjustment) => void;
   readOnly?: boolean;
 }) {
+  const uid = useId();
+  const isMobile = useIsMobile();
+  const topRef = useRef<HTMLDivElement>(null);
   const [postId, setPostId] = useState(group.primary.id);
   const post = group.posts.find((p) => p.id === postId) ?? group.primary;
 
   const media = mediaOf(post);
+  const hasMeta = post.targets.includes("instagram") || post.targets.includes("facebook");
+  const hasLinkedin = post.targets.includes("linkedin");
+  const metaNet = post.targets.includes("instagram") ? "instagram" : post.targets.includes("facebook") ? "facebook" : null;
+  const savedShared = metaNet ? captionFor(post, metaNet) : "";
+  const savedLinkedin = captionFor(post, "linkedin");
+  const hasCaption = captionText(post).length > 0;
+  const canEditCaption = hasCaption && (hasMeta || hasLinkedin);
+
+  const initialCaps = () => {
+    const c: Record<string, string> = { ...post.captions };
+    for (const t of post.targets) c[t] = captionFor(post, t);
+    return c;
+  };
+
   const [active, setActive] = useState(0);
-  const [caps, setCaps] = useState<Record<string, string>>(post.captions);
+  const [choice, setChoice] = useState<Choice | null>(null);
+  const [caps, setCaps] = useState<Record<string, string>>(initialCaps);
+  // LinkedIn espelha a legenda FB+IG até ser editado
+  const [liDirty, setLiDirty] = useState(() => hasLinkedin && hasMeta && savedLinkedin !== savedShared);
   const [note, setNote] = useState(post.clientNote ?? "");
-  const [noteOpen, setNoteOpen] = useState(!!post.clientNote);
   const [adjustComment, setAdjustComment] = useState("");
-  const [adjustOpen, setAdjustOpen] = useState(false);
-  const [busy, setBusy] = useState("");
-  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState<"" | "save" | "note" | "adjust">("");
+  const [done, setDone] = useState("");
+  const [error, setError] = useState("");
 
   // trocar de post dentro do grupo recarrega os campos do post escolhido
   const [prevPostId, setPrevPostId] = useState(postId);
   if (postId !== prevPostId) {
     setPrevPostId(postId);
-    setCaps(post.captions);
+    setCaps(initialCaps());
+    setLiDirty(hasLinkedin && hasMeta && savedLinkedin !== savedShared);
     setNote(post.clientNote ?? "");
-    setNoteOpen(!!post.clientNote);
     setAdjustComment("");
-    setAdjustOpen(false);
+    setChoice(null);
     setActive(0);
-    setMsg("");
+    setDone("");
+    setError("");
   }
 
-  const hasCaption = !!(post.captions.instagram ?? post.captions.facebook ?? post.captions.linkedin);
-  const hasMeta = post.targets.includes("instagram") || post.targets.includes("facebook");
-  const hasLinkedin = post.targets.includes("linkedin");
-  const shared = caps.instagram ?? caps.facebook ?? "";
-  // LinkedIn espelha a legenda FB+IG até ser editado
-  const [liDirty, setLiDirty] = useState(
-    () => typeof post.captions.linkedin === "string" &&
-      post.captions.linkedin !== (post.captions.instagram ?? post.captions.facebook ?? "")
-  );
+  const shared = metaNet ? (caps[metaNet] ?? "") : "";
 
   function setShared(text: string) {
     setCaps((p) => ({
@@ -280,19 +393,26 @@ function PostModal({
     setCaps((p) => ({ ...p, linkedin: text }));
   }
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-    };
-  }, [onClose]);
+  function toggle(c: Choice) {
+    setDone("");
+    setError("");
+    setChoice((cur) => (cur === c ? null : c));
+  }
+  function cancelChoice() {
+    if (choice === "caption") {
+      setCaps(initialCaps());
+      setLiDirty(hasLinkedin && hasMeta && savedLinkedin !== savedShared);
+    }
+    if (choice === "note") setNote(post.clientNote ?? "");
+    if (choice === "adjust") setAdjustComment("");
+    setChoice(null);
+    setError("");
+  }
 
   async function save() {
     setBusy("save");
-    setMsg("");
+    setDone("");
+    setError("");
     try {
       const captions: Record<string, string> = {};
       for (const t of post.targets) captions[t] = caps[t] ?? "";
@@ -303,13 +423,14 @@ function PostModal({
       });
       if (r.ok) {
         onSaved(post.id, captions);
-        setMsg("Salvo ✓");
+        setChoice(null);
+        setDone("Legenda salva. A equipe já vê a nova versão.");
       } else {
         const d = await r.json().catch(() => null);
-        setMsg(typeof d?.error === "string" ? d.error : "Erro ao salvar");
+        setError(typeof d?.error === "string" ? d.error : "Não foi possível salvar a legenda. Tente novamente.");
       }
     } catch {
-      setMsg("Falha de conexão ao salvar. Tente novamente.");
+      setError("Falha de conexão ao salvar. Tente novamente.");
     } finally {
       setBusy("");
     }
@@ -317,7 +438,8 @@ function PostModal({
 
   async function saveNote() {
     setBusy("note");
-    setMsg("");
+    setDone("");
+    setError("");
     try {
       const r = await fetch(`/api/aprovar/${token}/post/${post.id}`, {
         method: "POST",
@@ -326,13 +448,14 @@ function PostModal({
       });
       if (r.ok) {
         onNoted(post.id, note.trim() || null);
-        setMsg(note.trim() ? "Comentário enviado ✓" : "Comentário removido");
+        setChoice(null);
+        setDone(note.trim() ? "Observação enviada. A equipe vai ver." : "Observação removida.");
       } else {
         const d = await r.json().catch(() => null);
-        setMsg(typeof d?.error === "string" ? d.error : "Erro ao enviar comentário");
+        setError(typeof d?.error === "string" ? d.error : "Não foi possível enviar a observação. Tente novamente.");
       }
     } catch {
-      setMsg("Falha de conexão. Tente novamente.");
+      setError("Falha de conexão. Tente novamente.");
     } finally {
       setBusy("");
     }
@@ -343,7 +466,8 @@ function PostModal({
   async function requestAdjust() {
     if (adjustComment.trim().length < MIN_ADJUST || busy) return;
     setBusy("adjust");
-    setMsg("");
+    setDone("");
+    setError("");
     try {
       const r = await fetch(`/api/aprovar/${token}/post/${post.id}`, {
         method: "POST",
@@ -352,341 +476,391 @@ function PostModal({
       });
       const d = await r.json().catch(() => null);
       if (!r.ok) {
-        setMsg(typeof d?.error === "string" ? d.error : "Erro ao enviar o pedido de ajuste.");
+        setError(typeof d?.error === "string" ? d.error : "Não foi possível enviar o pedido de ajuste. Tente novamente.");
         return;
       }
       onAdjustmentAdded(post.id, d.adjustment);
       setAdjustComment("");
-      setAdjustOpen(false);
-      setMsg("Pedido de ajuste enviado ✓ — a equipe foi avisada.");
+      setChoice(null);
+      setDone("Pedido de ajuste enviado. A equipe foi avisada.");
     } catch {
-      setMsg("Falha de conexão. Tente novamente.");
+      setError("Falha de conexão. Tente novamente.");
     } finally {
       setBusy("");
     }
   }
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        className="card w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-b-none sm:rounded-2xl animate-fade-up"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* header */}
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-3 bg-[var(--color-surface)]/95 backdrop-blur border-b border-[var(--color-border)]">
-          <div className="min-w-0">
-            <p className="font-medium truncate">{post.theme || "Post"}</p>
-            <p className="text-xs text-[var(--color-text-faint)] capitalize">{post.fullWhen}</p>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Fechar"
-            className="shrink-0 p-1.5 rounded-lg hover:bg-white/10 text-[var(--color-text-muted)]"
-          >
-            <Icon.x className="w-5 h-5" />
-          </button>
-        </div>
+  const pendingHere = pendingOf(post);
+  const resolvedHere = post.adjustments.length - pendingHere;
+  const panelId = (c: Choice) => `${uid}-${c}`;
+  const ratio =
+    post.format === "story" || post.format === "reels"
+      ? "aspect-9/16 max-w-[calc(60dvh*9/16)]"
+      : "aspect-4/5 max-w-[calc(60dvh*4/5)]";
+  const metaLabel =
+    post.targets.includes("facebook") && post.targets.includes("instagram")
+      ? "Facebook + Instagram (legenda única)"
+      : BRAND[metaNet ?? ""]?.label ?? "";
+  const showLinkedinCaption = hasLinkedin && (!hasMeta || savedLinkedin !== savedShared);
 
-        {/* seletor quando o tema tem Feed + Story */}
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={post.theme || "Post sem tema"}
+      description={post.fullWhen}
+      size="md"
+      busy={busy !== ""}
+      error={error || null}
+      initialFocusRef={topRef}
+      footer={
+        isMobile ? (
+          <Button variant="secondary" size="lg" fullWidth onClick={onClose} disabled={busy !== ""}>
+            Fechar
+          </Button>
+        ) : undefined
+      }
+    >
+      {/* foco inicial no topo: o cliente começa lendo, não no fim da rolagem */}
+      <div ref={topRef} tabIndex={-1} className="-mt-2 grid gap-5 pb-4 pt-2 outline-none">
+        {/* seletor quando o tema tem Feed + Story (alvos de 44 px em todas as larguras) */}
         {group.posts.length > 1 && (
-          <div className="flex gap-2 px-5 pt-4 flex-wrap">
-            {group.posts.map((p) => {
-              const f = fmtOf(p.format);
-              const on = p.id === post.id;
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => setPostId(p.id)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
-                  style={{
-                    background: on ? `${f.color}22` : "transparent",
-                    borderColor: on ? `${f.color}66` : "var(--color-border)",
-                    color: on ? f.color : "var(--color-text-muted)",
-                  }}
-                >
-                  {f.label} · {p.time}
-                  {(p.clientNote || pendingOf(p) > 0) && " ✎"}
-                </button>
-              );
-            })}
+          <div className="[&_[role=radio]]:h-11">
+            <SegmentedControl
+              aria-label="Formato"
+              fullWidth
+              value={post.id}
+              onChange={setPostId}
+              options={group.posts.map((p) => ({ value: p.id, label: `${formatLabel(p.format)} · ${p.time}` }))}
+            />
           </div>
         )}
 
-        <div className="p-5 space-y-4">
-          {/* explicação do tema — é isso que o cliente aprova na fase cronograma */}
-          {post.explanation && (
-            <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] p-4">
-              <p className="text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
-                Sobre esta postagem
-              </p>
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{post.explanation}</p>
-            </div>
-          )}
+        {/* explicação do tema — é isso que o cliente aprova na fase cronograma */}
+        {post.explanation && (
+          <div className="rounded-card bg-sunken p-4 text-sm">
+            <p className="font-semibold text-fg-muted">Sobre esta postagem</p>
+            <p className="mt-1 whitespace-pre-wrap leading-relaxed text-fg">{post.explanation}</p>
+          </div>
+        )}
 
-          {/* mídia (ou placeholder do tipo, quando a arte ainda não existe) */}
-          <div className="space-y-2">
-            <div className="rounded-xl overflow-hidden bg-black/40 aspect-square flex items-center justify-center">
-              {media[0] ? (
-                <Thumb url={media[active]?.url ?? media[0].url} playable className="w-full h-full" />
-              ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center gap-2">
-                  <FormatPlaceholder format={post.format} />
-                  <p className="text-xs text-[var(--color-text-faint)] px-6 text-center">
-                    A arte deste post ainda será produzida pela agência.
-                  </p>
-                </div>
-              )}
-            </div>
-            {media.length > 1 && (
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {media.map((m, i) => (
-                  <button
-                    key={m.url + i}
-                    onClick={() => setActive(i)}
-                    className={`shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 ${
-                      i === active ? "border-[var(--color-accent)]" : "border-transparent opacity-70"
-                    }`}
-                  >
-                    <Thumb url={m.url} className="w-full h-full" />
-                  </button>
-                ))}
+        {/* mídia na proporção do formato (ou placeholder, quando a arte ainda não existe) */}
+        <div className="grid gap-2">
+          <div className={`mx-auto w-full overflow-hidden rounded-card ${ratio} ${media[0] ? "bg-sunken" : fmtClass(post.format).wash}`}>
+            {media[0] ? (
+              <Thumb url={media[active]?.url ?? media[0].url} playable className="size-full" />
+            ) : (
+              <div className="flex size-full flex-col items-center justify-center gap-3 p-6 text-center">
+                <span aria-hidden="true" className={`inline-flex size-6 [&>svg]:size-full ${fmtClass(post.format).icon}`}>
+                  <Icon.calendar />
+                </span>
+                <p className={`text-sm ${fmtClass(post.format).text}`}>
+                  A arte deste post ainda será produzida pela agência.
+                </p>
               </div>
             )}
           </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <FormatBadge format={post.format} />
-            <span className="flex items-center gap-1">
-              {post.targets.map((t) => (
-                <BrandBadge key={t} platform={t} size={16} />
-              ))}
-            </span>
-          </div>
-
-          {/* roteiro das telas (carrossel/reels ainda sem arte final) */}
-          {post.slides.length > 0 && (
-            <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] overflow-hidden">
-              <p className="px-4 py-2 text-xs font-medium text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
-                {post.format === "reels" ? "Telas do reels" : "Páginas do carrossel"}
-              </p>
-              <div className="divide-y divide-[var(--color-border)]">
-                {post.slides.map((s, i) => (
-                  <div key={i} className="px-4 py-2.5 flex gap-2.5">
-                    <span className="shrink-0 text-[11px] font-semibold text-[var(--color-accent)] mt-0.5">
-                      {i + 1}
-                    </span>
-                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{s}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* legendas: só quando o conteúdo já foi produzido (fase 2). Na fase
-              cronograma o cliente aprova o tema; a legenda vem depois. */}
-          {hasCaption && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-[var(--color-text-muted)]">Legendas</span>
-                {!readOnly && (
-                  <button
-                    onClick={save}
-                    disabled={busy !== ""}
-                    className="text-xs font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40"
-                  >
-                    {busy === "save" ? "Salvando..." : "Salvar alterações"}
-                  </button>
-                )}
-              </div>
-
-              {hasMeta && (
-                <div>
-                  <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
-                    <span className="flex items-center gap-1">
-                      {post.targets.includes("facebook") && <BrandBadge platform="facebook" size={18} />}
-                      {post.targets.includes("instagram") && <BrandBadge platform="instagram" size={18} />}
-                    </span>
-                    {post.targets.includes("facebook") && post.targets.includes("instagram")
-                      ? "Facebook + Instagram (legenda única)"
-                      : BRAND[post.targets.includes("facebook") ? "facebook" : "instagram"]?.label}
-                  </span>
-                  <textarea
-                    value={shared}
-                    onChange={(e) => setShared(e.target.value)}
-                    rows={7}
-                    readOnly={readOnly}
-                    className="input resize-y min-h-24 text-sm leading-relaxed read-only:opacity-70"
-                  />
-                </div>
-              )}
-
-              {hasLinkedin && (
-                <div>
-                  <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
-                    <BrandBadge platform="linkedin" size={18} /> LinkedIn
-                    {!liDirty && hasMeta && (
-                      <span className="text-[var(--color-text-faint)] font-normal">· espelhando FB+IG</span>
-                    )}
-                  </span>
-                  <textarea
-                    value={caps.linkedin ?? shared}
-                    onChange={(e) => setLinkedin(e.target.value)}
-                    rows={5}
-                    readOnly={readOnly}
-                    className="input resize-y min-h-20 text-sm leading-relaxed read-only:opacity-70"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* pedidos de ajuste formais (bloqueiam a aprovação até a equipe concluir) */}
-          {post.adjustments.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-[var(--color-text-muted)]">Pedidos de ajuste</p>
-              {post.adjustments.map((a) => (
-                <div
-                  key={a.id}
-                  className={`rounded-xl border p-3 text-sm space-y-1.5 ${
-                    a.status === "pendente"
-                      ? "border-amber-500/30 bg-amber-500/[0.06]"
-                      : "border-emerald-500/25 bg-emerald-500/[0.05]"
+          {media.length > 1 && (
+            <div className="flex gap-2 overflow-x-auto p-1">
+              {media.map((m, i) => (
+                <button
+                  key={m.url + i}
+                  type="button"
+                  onClick={() => setActive(i)}
+                  aria-label={`Mídia ${i + 1} de ${media.length}`}
+                  aria-pressed={i === active}
+                  className={`size-14 shrink-0 overflow-hidden rounded-control border-2 ${
+                    i === active ? "border-selected" : "border-line"
                   }`}
                 >
-                  <p className="whitespace-pre-wrap leading-relaxed">{a.comment}</p>
-                  {a.status === "pendente" ? (
-                    <p className="text-[11px] text-amber-300 font-medium">
-                      Aguardando a equipe concluir este ajuste
-                    </p>
-                  ) : (
-                    <div className="text-[11px] text-emerald-300 font-medium">
-                      Concluído ✓
-                      {a.reply ? (
-                        <span className="block font-normal text-emerald-200/80 mt-0.5">
-                          Resposta: {a.reply}
-                        </span>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
+                  <Thumb url={m.url} className="size-full" />
+                </button>
               ))}
             </div>
           )}
-
-          {/* pedir ajuste formal neste post */}
-          {!readOnly && (
-            <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] p-4">
-              {!adjustOpen ? (
-                <button
-                  onClick={() => setAdjustOpen(true)}
-                  className="text-xs font-medium text-[var(--color-accent)] hover:underline"
-                >
-                  Solicitar ajuste nesta postagem
-                </button>
-              ) : (
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-[var(--color-text-muted)]">
-                    O que você quer mudar nesta postagem?
-                  </label>
-                  <textarea
-                    value={adjustComment}
-                    onChange={(e) => setAdjustComment(e.target.value)}
-                    rows={4}
-                    maxLength={2000}
-                    placeholder="Descreva o ajuste (mínimo 30 caracteres). Ex: trocar o tema por algo sobre resultados; não citar preço."
-                    className="input resize-y min-h-20 text-sm"
-                  />
-                  <div className="flex items-center justify-between gap-3">
-                    <span
-                      className={`text-[11px] ${
-                        adjustRemaining > 0 ? "text-[var(--color-text-faint)]" : "text-emerald-300"
-                      }`}
-                    >
-                      {adjustRemaining > 0
-                        ? `Faltam ${adjustRemaining} caracteres`
-                        : "Pronto para enviar ✓"}
-                    </span>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => {
-                          setAdjustOpen(false);
-                          setAdjustComment("");
-                        }}
-                        className="text-xs text-[var(--color-text-muted)] hover:text-white"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        onClick={requestAdjust}
-                        disabled={busy !== "" || adjustComment.trim().length < MIN_ADJUST}
-                        className="btn-primary !py-1.5 !px-3.5 text-xs disabled:opacity-40"
-                      >
-                        {busy === "adjust" ? "Enviando..." : "Enviar pedido de ajuste"}
-                      </button>
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-[var(--color-text-faint)]">
-                    A aprovação do cronograma fica bloqueada até a equipe concluir seus ajustes.
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* comentário livre (não bloqueia — observação para a agência) */}
-          {!readOnly && (
-            <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] p-4">
-              {!noteOpen ? (
-                <button
-                  onClick={() => setNoteOpen(true)}
-                  className="text-xs text-[var(--color-text-muted)] hover:text-white hover:underline"
-                >
-                  Deixar uma observação livre neste post (não trava a aprovação)
-                </button>
-              ) : (
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-[var(--color-text-muted)]">
-                    Observação para a agência sobre este post
-                  </label>
-                  <textarea
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    rows={3}
-                    maxLength={1000}
-                    placeholder="Ex: gostei do tema; se possível usar foto da equipe."
-                    className="input resize-y min-h-16 text-sm"
-                  />
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={saveNote}
-                      disabled={busy !== ""}
-                      className="btn-ghost !py-1.5 text-xs disabled:opacity-40"
-                    >
-                      {busy === "note" ? "Enviando..." : "Enviar observação"}
-                    </button>
-                    <span className="text-[11px] text-[var(--color-text-faint)]">
-                      {note.length}/1000
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {readOnly && post.clientNote && (
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.07] p-4">
-              <p className="text-xs font-medium text-amber-200/90 mb-1">Seu comentário</p>
-              <p className="text-sm whitespace-pre-wrap">{post.clientNote}</p>
-            </div>
-          )}
-
-          {msg && <p className="text-xs text-[var(--color-text-muted)]">{msg}</p>}
         </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <FormatBadge format={post.format} />
+          <Networks targets={post.targets} size={20} />
+        </div>
+
+        {/* roteiro das telas (carrossel/reels ainda sem arte final) */}
+        {post.slides.length > 0 && (
+          <div className="overflow-hidden rounded-card border border-line">
+            <p className="border-b border-line px-4 py-2 text-sm font-semibold text-fg-muted">
+              {post.format === "reels" ? "Telas do reels" : "Páginas do carrossel"}
+            </p>
+            <ol className="divide-y divide-line">
+              {post.slides.map((s, i) => (
+                <li key={i} className="flex gap-3 px-4 py-2.5 text-sm">
+                  <span className="shrink-0 font-semibold text-link">{i + 1}</span>
+                  <p className="whitespace-pre-wrap leading-relaxed text-fg">{s}</p>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+
+        {/* legenda: só leitura aqui; editar é uma das escolhas abaixo (A-041) */}
+        {hasCaption && (
+          <div className="grid gap-3">
+            <h3 className="text-base font-semibold text-fg">Legenda</h3>
+            {hasMeta && (
+              <div className="grid gap-1.5">
+                <p className="flex items-center gap-2 text-sm text-fg-muted">
+                  <span aria-hidden="true" className="flex items-center gap-1">
+                    {post.targets.includes("facebook") && <BrandBadge platform="facebook" size={18} />}
+                    {post.targets.includes("instagram") && <BrandBadge platform="instagram" size={18} />}
+                  </span>
+                  {metaLabel}
+                </p>
+                <p className="whitespace-pre-wrap rounded-card bg-sunken p-4 text-sm leading-relaxed text-fg">
+                  {savedShared || "Sem legenda para estas redes."}
+                </p>
+              </div>
+            )}
+            {showLinkedinCaption && (
+              <div className="grid gap-1.5">
+                <p className="flex items-center gap-2 text-sm text-fg-muted">
+                  <span aria-hidden="true" className="inline-flex">
+                    <BrandBadge platform="linkedin" size={18} />
+                  </span>
+                  LinkedIn
+                </p>
+                <p className="whitespace-pre-wrap rounded-card bg-sunken p-4 text-sm leading-relaxed text-fg">
+                  {savedLinkedin || "Sem legenda para o LinkedIn."}
+                </p>
+              </div>
+            )}
+            {hasLinkedin && hasMeta && !showLinkedinCaption && (
+              <p className="text-sm text-fg-muted">O LinkedIn usa a mesma legenda.</p>
+            )}
+            {!hasMeta && !hasLinkedin && (
+              <p className="whitespace-pre-wrap rounded-card bg-sunken p-4 text-sm leading-relaxed text-fg">
+                {captionText(post)}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* pedidos de ajuste formais (bloqueiam a aprovação até a equipe concluir) */}
+        {post.adjustments.length > 0 && (
+          <div className="grid gap-2">
+            <h3 className="text-base font-semibold text-fg">Pedidos de ajuste</h3>
+            {post.adjustments.map((a) =>
+              a.status === "pendente" ? (
+                <Callout key={a.id} tone="warning" title="Aguardando a equipe concluir este ajuste">
+                  <p className="whitespace-pre-wrap">{a.comment}</p>
+                </Callout>
+              ) : (
+                <Callout key={a.id} tone="success" title="Ajuste concluído pela equipe">
+                  <p className="whitespace-pre-wrap">{a.comment}</p>
+                  {a.reply ? (
+                    <p className="mt-1 whitespace-pre-wrap">
+                      <span className="font-semibold">Resposta da equipe:</span> {a.reply}
+                    </p>
+                  ) : null}
+                </Callout>
+              )
+            )}
+          </div>
+        )}
+
+        {readOnly ? (
+          <>
+            {post.clientNote && (
+              <div className="rounded-card bg-sunken p-4 text-sm">
+                <p className="font-semibold text-fg-muted">Sua observação</p>
+                <p className="mt-1 whitespace-pre-wrap text-fg">{post.clientNote}</p>
+              </div>
+            )}
+            <Callout tone="success" title="Cronograma já aprovado">
+              Por este link não é mais possível pedir ajustes, deixar observações nem editar a legenda. Se precisar
+              mudar algo, fale com a agência.
+            </Callout>
+          </>
+        ) : (
+          <section aria-labelledby={`${uid}-acoes`} className="grid gap-3">
+            <div>
+              <h3 id={`${uid}-acoes`} className="text-base font-semibold text-fg">
+                O que você quer fazer com este post?
+              </h3>
+              {pendingHere > 0 ? (
+                <p className="mt-1 text-sm text-warning-fg">
+                  Este post tem {pendingHere === 1 ? "um ajuste aberto" : `${pendingHere} ajustes abertos`}. Enquanto a
+                  equipe não concluir, o cronograma não pode ser aprovado.
+                </p>
+              ) : resolvedHere > 0 ? (
+                <p className="mt-1 text-sm text-fg-muted">
+                  A equipe concluiu o ajuste deste post. Ele não impede mais a aprovação do cronograma.
+                </p>
+              ) : null}
+            </div>
+
+            {done && (
+              <Callout tone="success" live="polite">
+                {done}
+              </Callout>
+            )}
+
+            {post.clientNote && choice !== "note" && (
+              <div className="rounded-card bg-sunken p-4 text-sm">
+                <p className="font-semibold text-fg-muted">Sua observação</p>
+                <p className="mt-1 whitespace-pre-wrap text-fg">{post.clientNote}</p>
+              </div>
+            )}
+
+            <div className="grid gap-2">
+              <ChoiceButton
+                icon={<Icon.edit />}
+                title={pendingHere > 0 ? "Pedir outro ajuste neste post" : "Pedir ajuste neste post"}
+                effect="A equipe refaz este post. Enquanto o ajuste estiver aberto, o cronograma não pode ser aprovado."
+                expanded={choice === "adjust"}
+                controls={panelId("adjust")}
+                onToggle={() => toggle("adjust")}
+              />
+              {choice === "adjust" && (
+                <div id={panelId("adjust")} className="grid gap-3 rounded-card border border-line bg-surface p-4">
+                  <Field
+                    label="O que você quer mudar?"
+                    help={
+                      <span className="text-sm">
+                        {adjustRemaining > 0
+                          ? `Faltam ${plural(adjustRemaining, "caractere", "caracteres")} (mínimo de ${MIN_ADJUST}).`
+                          : "Pronto para enviar."}
+                      </span>
+                    }
+                  >
+                    <Textarea
+                      value={adjustComment}
+                      onChange={(e) => setAdjustComment(e.target.value)}
+                      rows={4}
+                      minLength={MIN_ADJUST}
+                      maxLength={2000}
+                      placeholder="Ex.: trocar o tema por algo sobre resultados; não citar preço."
+                    />
+                  </Field>
+                  <ChoiceActions>
+                    <Button variant="secondary" size="lg" onClick={cancelChoice} disabled={busy !== ""}>
+                      Cancelar
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="lg"
+                      onClick={requestAdjust}
+                      loading={busy === "adjust"}
+                      loadingText="Enviando…"
+                      disabled={busy !== "" || adjustRemaining > 0}
+                    >
+                      Enviar pedido de ajuste
+                    </Button>
+                  </ChoiceActions>
+                </div>
+              )}
+
+              <ChoiceButton
+                icon={<Icon.message />}
+                title={post.clientNote ? "Editar sua observação" : "Deixar uma observação"}
+                effect="Um recado para a equipe. Não impede a aprovação."
+                expanded={choice === "note"}
+                controls={panelId("note")}
+                onToggle={() => toggle("note")}
+              />
+              {choice === "note" && (
+                <div id={panelId("note")} className="grid gap-3 rounded-card border border-line bg-surface p-4">
+                  <Field label="Observação para a agência">
+                    <Textarea
+                      value={note}
+                      onChange={(e) => setNote(e.target.value)}
+                      rows={3}
+                      maxLength={1000}
+                      showCount
+                      placeholder="Ex.: gostei do tema; se possível, usar foto da equipe."
+                    />
+                  </Field>
+                  <ChoiceActions>
+                    <Button variant="secondary" size="lg" onClick={cancelChoice} disabled={busy !== ""}>
+                      Cancelar
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="lg"
+                      onClick={saveNote}
+                      loading={busy === "note"}
+                      loadingText="Enviando…"
+                      disabled={busy !== "" || (!note.trim() && !post.clientNote)}
+                    >
+                      {!note.trim() && post.clientNote ? "Remover observação" : "Enviar observação"}
+                    </Button>
+                  </ChoiceActions>
+                </div>
+              )}
+
+              {/* editar a legenda é intencional quando ela já existe (mantido; só a apresentação mudou) */}
+              {canEditCaption && (
+                <>
+                  <ChoiceButton
+                    icon={<Icon.fileText />}
+                    title="Editar a legenda"
+                    effect="Você mesmo altera o texto. A nova versão vai para a equipe e não impede a aprovação."
+                    expanded={choice === "caption"}
+                    controls={panelId("caption")}
+                    onToggle={() => toggle("caption")}
+                  />
+                  {choice === "caption" && (
+                    <div id={panelId("caption")} className="grid gap-3 rounded-card border border-line bg-surface p-4">
+                      {hasMeta && (
+                        <Field label={`Legenda · ${metaLabel}`}>
+                          <Textarea
+                            value={shared}
+                            onChange={(e) => setShared(e.target.value)}
+                            rows={7}
+                            className="leading-relaxed"
+                          />
+                        </Field>
+                      )}
+                      {hasLinkedin && (
+                        <Field
+                          label="Legenda · LinkedIn"
+                          help={
+                            !liDirty && hasMeta ? (
+                              <span className="text-sm">Igual à do Facebook + Instagram até você mudar.</span>
+                            ) : undefined
+                          }
+                        >
+                          <Textarea
+                            value={caps.linkedin ?? shared}
+                            onChange={(e) => setLinkedin(e.target.value)}
+                            rows={5}
+                            className="leading-relaxed"
+                          />
+                        </Field>
+                      )}
+                      <ChoiceActions>
+                        <Button variant="secondary" size="lg" onClick={cancelChoice} disabled={busy !== ""}>
+                          Cancelar
+                        </Button>
+                        <Button
+                          variant="primary"
+                          size="lg"
+                          onClick={save}
+                          loading={busy === "save"}
+                          loadingText="Salvando…"
+                          disabled={busy !== ""}
+                        >
+                          Salvar legenda
+                        </Button>
+                      </ChoiceActions>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </section>
+        )}
       </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -709,78 +883,66 @@ function GroupCard({
   const preview = captionPreview(primary);
   const noted = group.posts.some((p) => p.clientNote);
   const pending = group.posts.reduce((n, p) => n + pendingOf(p), 0);
-  const f = fmtOf(primary.format);
 
   return (
     <button
+      type="button"
       onClick={onOpen}
-      className="group relative w-full text-left rounded-lg overflow-hidden bg-white/[0.03] border transition-colors hover:border-[var(--color-accent)]"
-      style={{
-        borderColor: pending > 0 ? "#f59e0b88" : seen ? `${f.color}55` : "var(--color-border)",
-      }}
+      className={`group relative w-full overflow-hidden rounded-control border bg-surface text-left transition-colors duration-(--sf-dur-fast) hover:border-line-strong ${
+        pending > 0 ? "border-warning-solid" : "border-line"
+      }`}
     >
-      {/* faixa de cor do tipo — diferencia Feed/Story/Carrossel/Reels de relance */}
-      <span className="absolute left-0 top-0 bottom-0 w-[3px] z-10" style={{ background: f.color }} />
+      {/* faixa de cor do formato — diferencia Feed/Story/Carrossel/Reels de relance */}
+      <span aria-hidden="true" className={`absolute inset-y-0 left-0 z-10 w-0.75 ${fmtClass(primary.format).stripe}`} />
 
-      <div className={compact ? "aspect-square" : "aspect-[4/3]"}>
+      <div className={compact ? "aspect-square" : "aspect-4/3"}>
         {media[0] ? (
-          <Thumb url={media[0].url} className="w-full h-full group-hover:scale-105 transition-transform" />
+          <Thumb url={media[0].url} className="size-full transition-transform group-hover:scale-105" />
         ) : (
           <FormatPlaceholder format={primary.format} compact={compact} />
         )}
       </div>
 
-      <div className="px-2 py-1.5 space-y-1">
-        <div className="flex items-center gap-1 flex-wrap">
-          <FormatBadge format={primary.format} size={compact ? "xs" : "sm"} />
+      <div className={`grid gap-1 ${compact ? "px-1.5 py-1.5" : "px-3 py-2"}`}>
+        <div className="flex flex-wrap items-center gap-1">
+          <FormatBadge format={primary.format} />
           {extras.map((p) => (
-            <span
-              key={p.id}
-              className="text-[9px] font-semibold leading-none rounded px-1 py-0.5"
-              style={{
-                background: `${fmtOf(p.format).color}22`,
-                color: fmtOf(p.format).color,
-                border: `1px solid ${fmtOf(p.format).color}40`,
-              }}
-            >
-              + {fmtOf(p.format).label} {p.time}
+            <span key={p.id} className="text-xs text-fg-muted">
+              + {formatLabel(p.format)} {p.time}
             </span>
           ))}
         </div>
 
-        {/* o conteúdo que faltava: tema e prévia (legenda ou explicação) */}
-        <p className={`font-medium leading-tight line-clamp-2 ${compact ? "text-[10px]" : "text-xs"}`}>
+        {/* tema e prévia (legenda ou explicação) */}
+        <p className={`line-clamp-2 font-semibold leading-snug text-fg ${compact ? "text-xs" : "text-sm"}`}>
           {group.theme || "Sem tema"}
         </p>
-        {!compact && preview && (
-          <p className="text-[10px] leading-tight text-[var(--color-text-faint)] line-clamp-2">
-            {preview}
-          </p>
-        )}
+        {!compact && preview && <p className="line-clamp-2 text-xs leading-snug text-fg-muted">{preview}</p>}
 
-        <div className="flex items-center gap-1">
-          {primary.targets.map((t) => (
-            <BrandBadge key={t} platform={t} size={compact ? 11 : 13} />
-          ))}
-          <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">{primary.time}</span>
+        <div className="flex items-center gap-1 text-xs text-fg-muted">
+          <Networks targets={primary.targets} size={compact ? 14 : 16} />
+          <span className="ml-auto tabular-nums">{primary.time}</span>
         </div>
       </div>
 
-      {/* marcações: ajuste pendente, comentado e visto */}
-      <span className="absolute top-1 right-1 z-10 flex gap-1">
+      {/* selos: ajuste pendente, comentado e revisado (texto para leitor de tela dentro do botão) */}
+      <span className="absolute right-1 top-1 z-10 flex gap-1">
         {pending > 0 && (
-          <span className="w-4 h-4 rounded-full bg-amber-400 text-black flex items-center justify-center text-[9px] font-bold">
-            !
+          <span className="inline-grid size-5 place-items-center rounded-full bg-warning-solid text-on-solid">
+            <Icon.edit className="size-3" />
+            <span className="sr-only">, ajuste pendente</span>
           </span>
         )}
         {noted && pending === 0 && (
-          <span className="w-4 h-4 rounded-full bg-amber-400/70 text-black flex items-center justify-center text-[9px] font-bold">
-            ✎
+          <span className="inline-grid size-5 place-items-center rounded-full bg-brand-solid text-on-solid">
+            <Icon.message className="size-3" />
+            <span className="sr-only">, com comentário</span>
           </span>
         )}
         {seen && (
-          <span className="w-4 h-4 rounded-full bg-emerald-400/90 text-black flex items-center justify-center">
-            <Icon.check className="w-2.5 h-2.5" />
+          <span className="inline-grid size-5 place-items-center rounded-full bg-success-solid text-on-solid">
+            <Icon.check className="size-3" />
+            <span className="sr-only">, revisado</span>
           </span>
         )}
       </span>
@@ -794,37 +956,49 @@ export default function ApprovalView({
   token,
   clientName,
   clientLogoUrl,
-  clientBrandColor,
-  monthLabel,
+  monthTitle,
+  monthText,
   year,
   month,
   posts: initialPosts,
   readOnly = false,
   changesAsked = false,
   scheduleNote,
+  igProfile,
+  plannedFeedCount,
 }: {
   token: string;
   clientName: string;
   clientLogoUrl: string | null;
-  clientBrandColor: string | null;
-  monthLabel: string;
+  /** "Outubro de 2026" (títulos) */
+  monthTitle: string;
+  /** "outubro de 2026" (meio de frase) */
+  monthText: string;
   year: number;
   month: number;
   posts: Post[];
   readOnly?: boolean;
   changesAsked?: boolean;
   scheduleNote: string | null;
+  /** perfil do Instagram (ou do cadastro) para "Ver como feed"; null quando não há arte de feed */
+  igProfile: Promise<InstagramProfilePreview> | null;
+  /** posts de feed deste cronograma ainda não publicados (somam no nº de posts do perfil) */
+  plannedFeedCount: number;
 }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [view, setView] = useState<"calendario" | "feed">("calendario");
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
-  const [error, setError] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [approveError, setApproveError] = useState("");
   const [askingChanges, setAskingChanges] = useState(false);
   const [changesNote, setChangesNote] = useState("");
+  const [changesError, setChangesError] = useState("");
   const [changesSent, setChangesSent] = useState(false);
+  const statusId = useId();
+  const pageRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
 
   /* Antes da hidratação os handlers de clique ainda não existem — o primeiro
      toque logo após carregar era engolido em silêncio. A grade só fica
@@ -871,30 +1045,44 @@ export default function ApprovalView({
     [groups]
   );
 
+  // A-003: a barra é fixa e opaca; o conteúdo reserva a altura REAL dela (a linha de
+  // status quebra em 2 linhas no celular), para o último card nunca ficar por trás.
+  const hasBar = !readOnly && !approved && !changesSent;
+  useEffect(() => {
+    const bar = barRef.current;
+    const page = pageRef.current;
+    if (!hasBar || !bar || !page) return;
+    const ro = new ResizeObserver(() => {
+      page.style.setProperty("--bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+    });
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, [hasBar]);
+
   async function approve() {
     setApproving(true);
-    setError("");
+    setApproveError("");
     try {
       const r = await fetch(`/api/aprovar/${token}/approve`, { method: "POST" });
       if (!r.ok) {
         const d = await r.json().catch(() => null);
-        setError(
+        setApproveError(
           typeof d?.error === "string" ? d.error : "Não foi possível aprovar. Tente novamente."
         );
         return;
       }
+      setConfirming(false);
       setApproved(true);
     } catch {
-      setError("Falha de conexão. Tente novamente.");
+      setApproveError("Falha de conexão. Tente novamente.");
     } finally {
       setApproving(false);
-      setConfirming(false);
     }
   }
 
   async function requestChanges() {
     setApproving(true);
-    setError("");
+    setChangesError("");
     try {
       const r = await fetch(`/api/aprovar/${token}/request-changes`, {
         method: "POST",
@@ -903,74 +1091,41 @@ export default function ApprovalView({
       });
       if (!r.ok) {
         const d = await r.json().catch(() => null);
-        setError(typeof d?.error === "string" ? d.error : "Não foi possível enviar. Tente novamente.");
+        setChangesError(typeof d?.error === "string" ? d.error : "Não foi possível enviar. Tente novamente.");
         return;
       }
-      setChangesSent(true);
       setAskingChanges(false);
+      setChangesSent(true);
     } catch {
-      setError("Falha de conexão. Tente novamente.");
+      setChangesError("Falha de conexão. Tente novamente.");
     } finally {
       setApproving(false);
     }
   }
 
-  const accent = clientBrandColor && /^#[0-9a-f]{6}$/i.test(clientBrandColor)
-    ? clientBrandColor
-    : "var(--color-accent)";
-
-  const identity = (
-    <div className="flex items-center justify-center gap-3 mb-6">
-      {clientLogoUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={clientLogoUrl}
-          alt={clientName}
-          className="w-10 h-10 rounded-xl object-cover border border-[var(--color-border)]"
-        />
-      ) : (
-        <span
-          className="w-10 h-10 rounded-xl flex items-center justify-center font-semibold text-sm"
-          style={{ background: `${accent}22`, color: accent, border: `1px solid ${accent}55` }}
-        >
-          {clientName.slice(0, 2).toUpperCase()}
+  const finalScreen = (title: string, text: string) => (
+    <div className="mx-auto w-full max-w-3xl px-4 py-10">
+      <div className="card mx-auto max-w-md p-8 text-center">
+        <span aria-hidden="true" className="mx-auto mb-3 inline-flex size-8 text-success-solid [&>svg]:size-full">
+          <Icon.check />
         </span>
-      )}
-      <span className="font-semibold tracking-tight">{clientName}</span>
-      <span className="text-[var(--color-text-faint)]">·</span>
-      <span className="flex items-center gap-1.5 text-sm text-[var(--color-text-muted)]">
-        <Logo size={18} />
-        Social<span className="gradient-text -ml-1.5">Flow</span>
-      </span>
+        <h1 className="font-display text-2xl font-semibold tracking-display text-fg">{title}</h1>
+        <p className="mt-3 text-base text-fg-muted">{text}</p>
+      </div>
     </div>
   );
 
   if (approved) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center px-4 py-10">
-        <div className="card p-8 max-w-md text-center">
-          <h1 className="text-xl font-semibold mb-1">Aprovado ✓</h1>
-          <p className="text-sm text-[var(--color-text-muted)]">
-            Obrigado! Seu cronograma de {monthLabel} foi aprovado. Agora a equipe produz as
-            legendas e artes — você recebe toda semana as postagens completas da semana seguinte
-            para revisão final.
-          </p>
-        </div>
-      </div>
+    return finalScreen(
+      "Cronograma aprovado",
+      `Obrigado! Seu cronograma de ${monthText} foi aprovado. Agora a equipe produz as legendas e artes — você recebe toda semana as postagens completas da semana seguinte para revisão final.`
     );
   }
 
   if (changesSent) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center px-4 py-10">
-        <div className="card p-8 max-w-md text-center">
-          <h1 className="text-xl font-semibold mb-1">Ajustes solicitados ✓</h1>
-          <p className="text-sm text-[var(--color-text-muted)]">
-            A agência recebeu seus comentários e vai revisar o cronograma de {monthLabel}. Nada será
-            publicado até você aprovar.
-          </p>
-        </div>
-      </div>
+    return finalScreen(
+      "Pedido de ajustes enviado",
+      `A agência recebeu seus comentários e vai revisar o cronograma de ${monthText}. Nada será publicado até você aprovar.`
     );
   }
 
@@ -987,165 +1142,168 @@ export default function ApprovalView({
     ...Array<null>(firstWeekday).fill(null),
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
+  const dayTitle = (day: number) =>
+    `${WEEKDAYS_LONG[new Date(Date.UTC(year, month, day)).getUTCDay()]}, ${day} de ${MONTHS[month]}`;
+  const shortDate = (day: number) => `${pad2(day)}/${pad2(month + 1)}`;
 
   const reviewed = groups.filter((g) => seen.has(g.key)).length;
   const pct = groups.length ? Math.round((reviewed / groups.length) * 100) : 0;
   const notedCount = posts.filter((p) => p.clientNote).length;
+  const unopened = groups.length - reviewed;
+
+  const statusLine =
+    pendingCount > 0 ? (
+      <p id={statusId} className="mb-2 text-sm font-medium text-warning-fg">
+        Aguardando {plural(pendingCount, "ajuste", "ajustes")} da equipe — a aprovação libera quando{" "}
+        {pendingCount === 1 ? "ele for concluído" : "forem concluídos"}.
+      </p>
+    ) : (
+      <p id={statusId} className="mb-2 text-sm text-fg-muted">
+        {reviewed < groups.length
+          ? `Você revisou ${reviewed} de ${plural(groups.length, "tema", "temas")}.`
+          : "Você revisou todos os temas."}
+      </p>
+    );
+
+  const interactive = ready ? "" : "pointer-events-none opacity-60";
+
+  // "Ver como feed": só quando já há arte de feed (como antes) e o perfil foi pedido no servidor
+  const feedProfile = feedGroups.length > 0 ? igProfile : null;
+  const showFeed = view === "feed" && feedProfile !== null;
+  // grade do perfil: os planejados que vão para o feed (com ou sem arte), do mais tardio para o
+  // mais cedo — o mais novo fica no canto superior esquerdo, como no Instagram
+  const plannedTiles: PlannedFeedTile[] = showFeed
+    ? groups
+        .filter((g) => g.primary.format !== "story")
+        .reverse()
+        .map((g) => {
+          const m = mediaOf(g.primary)[0];
+          const fmt = formatMeta(g.primary.format).id;
+          return {
+            key: g.key,
+            label: `Planejado para ${shortDate(g.day)}: ${g.theme || "Sem tema"}${fmt === "feed" ? "" : ` · ${formatLabel(fmt)}`}`,
+            format: fmt,
+            media: m ? <Thumb url={m.url} className="size-full" /> : <FormatPlaceholder format={g.primary.format} />,
+          };
+        })
+    : [];
 
   return (
-    <div className="min-h-screen flex flex-col items-center px-4 py-8 sm:py-10">
-      <div className="w-full max-w-3xl space-y-4">
-        {identity}
-
-        <div className="text-center mb-2">
-          <h1 className="text-2xl font-semibold tracking-tight capitalize">{monthLabel}</h1>
-          <p className="text-sm text-[var(--color-text-muted)] mt-1">
+    <div
+      ref={pageRef}
+      className={`w-full pt-6 ${hasBar ? "pb-[calc(var(--bar-h,104px)+24px)]" : "pb-10"}`}
+    >
+      {/* a coluna da página continua em max-w-3xl; só a prévia do feed usa a largura do perfil */}
+      <div className="mx-auto grid w-full max-w-3xl gap-4 px-4">
+        {/* identidade do cliente + título */}
+        <div>
+          <div className="flex items-center gap-3">
+            <Avatar name={clientName} src={clientLogoUrl} size="lg" shape="square" />
+            <span className="text-base font-semibold text-fg">{clientName}</span>
+          </div>
+          <h1 className="mt-4 font-display text-3xl font-semibold tracking-display text-fg">
+            Cronograma de {monthTitle}
+          </h1>
+          <p className="mt-1 text-base text-fg-muted">
             {readOnly
-              ? "Este cronograma já foi aprovado — toque em um post para rever."
-              : `${groups.length} ${groups.length === 1 ? "tema" : "temas"} · ${posts.length} ${posts.length === 1 ? "post" : "posts"}. Toque em um card para ver e comentar.`}
+              ? "Este cronograma já foi aprovado. Toque em um tema para rever."
+              : `${plural(groups.length, "tema", "temas")} · ${plural(posts.length, "post", "posts")}. Toque em um tema para ver e comentar.`}
           </p>
         </div>
 
-        {readOnly && (
-          <p className="text-sm text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-center">
-            Cronograma aprovado ✓ — as postagens completas chegam para sua revisão toda semana.
-          </p>
-        )}
-
-        {!readOnly && changesAsked && (
-          <div className="text-sm text-amber-200/90 bg-amber-500/[0.07] border border-amber-500/20 rounded-lg px-3 py-2">
-            <p className="font-medium">Ajustes já solicitados</p>
-            {scheduleNote && <p className="mt-1 whitespace-pre-wrap">{scheduleNote}</p>}
-            <p className="mt-1 text-xs text-[var(--color-text-faint)]">
-              A agência está revisando. Você pode continuar comentando ou aprovar quando estiver ok.
+        {/* situação: no máximo 1 aviso, nesta prioridade (DESIGN h.1) */}
+        {readOnly ? (
+          <Callout tone="success" title="Cronograma aprovado">
+            As postagens completas chegam para sua revisão toda semana. Por este link não é mais possível pedir
+            ajustes.
+          </Callout>
+        ) : pendingCount > 0 ? (
+          <Callout tone="warning" title={`${plural(pendingCount, "ajuste", "ajustes")} aguardando a equipe`}>
+            Você poderá aprovar o cronograma assim que a equipe concluir os ajustes pedidos. Enquanto isso, pode
+            continuar revisando e comentando.
+          </Callout>
+        ) : changesAsked ? (
+          <Callout tone="warning" title="Ajustes já pedidos">
+            {scheduleNote && <p className="whitespace-pre-wrap">{scheduleNote}</p>}
+            <p className={scheduleNote ? "mt-1" : undefined}>
+              A agência está revisando. Você pode continuar comentando ou aprovar quando estiver tudo certo.
             </p>
-          </div>
-        )}
-
-        {!readOnly && pendingCount > 0 && (
-          <p className="text-sm text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 text-center">
-            {pendingCount} pedido(s) de ajuste aguardando a equipe — a aprovação libera assim que
-            forem concluídos.
-          </p>
-        )}
+          </Callout>
+        ) : null}
 
         {/* progresso da revisão */}
         {!readOnly && (
-          <div className="card px-4 py-3">
-            <div className="flex items-center justify-between text-xs mb-2">
-              <span className="text-[var(--color-text-muted)]">
-                {reviewed} de {groups.length} {groups.length === 1 ? "tema revisado" : "temas revisados"}
-                {notedCount > 0 && (
-                  <span className="text-amber-300/90">
-                    {" "}· {notedCount} com comentário
-                  </span>
-                )}
+          <div className="card p-4">
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="text-fg">
+                {reviewed} de {plural(groups.length, "tema revisado", "temas revisados")}
+                {notedCount > 0 && ` · ${notedCount} com comentário`}
               </span>
-              <span className="text-[var(--color-text-faint)] tabular-nums">{pct}%</span>
+              <span className="tabular-nums text-fg-muted">{pct}%</span>
             </div>
-            <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+            <div
+              role="progressbar"
+              aria-label="Temas revisados"
+              aria-valuemin={0}
+              aria-valuemax={groups.length}
+              aria-valuenow={reviewed}
+              className="mt-2 h-2 overflow-hidden rounded-full bg-neutral-bg"
+            >
               <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${pct}%`, background: accent }}
+                className="h-full rounded-full bg-selected transition-[width] duration-(--sf-dur-slow)"
+                style={{ width: `${pct}%` }}
               />
             </div>
           </div>
         )}
 
-        {/* alternância calendário / feed (feed só quando já há artes) */}
-        {feedGroups.length > 0 && (
+        {/* alternância calendário / feed (feed só quando já há artes) — 44 px no celular [A-033] */}
+        {feedProfile !== null && (
           <div className="flex justify-center">
-            <div className="flex items-center rounded-lg border border-[var(--color-border)] overflow-hidden text-sm">
-              <button
-                onClick={() => setView("calendario")}
-                className={`px-3.5 py-1.5 font-medium transition-colors ${
-                  view === "calendario"
-                    ? "bg-[var(--color-accent)] text-white"
-                    : "text-[var(--color-text-muted)] hover:text-white"
-                }`}
-              >
-                Calendário
-              </button>
-              <button
-                onClick={() => setView("feed")}
-                className={`px-3.5 py-1.5 font-medium transition-colors ${
-                  view === "feed"
-                    ? "bg-[var(--color-accent)] text-white"
-                    : "text-[var(--color-text-muted)] hover:text-white"
-                }`}
-              >
-                Ver como feed
-              </button>
-            </div>
+            <SegmentedControl
+              aria-label="Modo de exibição"
+              value={view}
+              onChange={setView}
+              options={[
+                { value: "calendario", label: "Calendário" },
+                { value: "feed", label: "Ver como feed" },
+              ]}
+            />
           </div>
         )}
 
-        {!ready && (
-          <p className="text-xs text-center text-[var(--color-text-faint)]">Preparando cronograma…</p>
-        )}
+        {!ready && <p className="text-center text-sm text-fg-muted">Preparando o cronograma…</p>}
 
-        {view === "feed" && feedGroups.length > 0 ? (
-          /* pré-visualização estilo feed do Instagram: grade 3xN, mais recente primeiro */
-          <div className={`card p-2 sm:p-3 ${ready ? "" : "opacity-50 pointer-events-none"}`}>
-            <div className="grid grid-cols-3 gap-0.5 sm:gap-1">
-              {[...feedGroups].reverse().map((g) => {
-                const m = mediaOf(g.primary)[0];
-                return (
-                  <button
-                    key={g.key}
-                    onClick={() => openGroup(g.key)}
-                    className="relative aspect-square overflow-hidden group"
-                  >
-                    <Thumb url={m.url} className="w-full h-full group-hover:opacity-80 transition-opacity" />
-                    {g.primary.format === "carrossel" && (
-                      <span className="absolute top-1.5 right-1.5 text-white drop-shadow">
-                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h13a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1Zm-3 9V4a1 1 0 0 1 1-1h12v2H6v11H4Z"/></svg>
-                      </span>
-                    )}
-                    {g.primary.format === "reels" && (
-                      <span className="absolute top-1.5 right-1.5 text-white drop-shadow">
-                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7L8 5Z"/></svg>
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
+        {!showFeed && (
           <>
             {/* ---------- lista (celular): o cliente abre isso do WhatsApp ---------- */}
-            <div className={`sm:hidden space-y-3 ${ready ? "" : "opacity-50 pointer-events-none"}`}>
+            <div className={`grid gap-3 sm:hidden ${interactive}`}>
               {[...byDay.entries()]
                 .sort((a, b) => a[0] - b[0])
-                .map(([day, dayGroups]) => {
-                  const weekday = WEEKDAYS[new Date(Date.UTC(year, month, day)).getUTCDay()];
-                  return (
-                    <div key={day} className="card p-3">
-                      <p className="text-xs font-semibold text-[var(--color-text-muted)] mb-2">
-                        {weekday}, {day} de {monthLabel}
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        {dayGroups.map((g) => (
-                          <GroupCard
-                            key={g.key}
-                            group={g}
-                            seen={seen.has(g.key)}
-                            onOpen={() => openGroup(g.key)}
-                            compact={false}
-                          />
-                        ))}
-                      </div>
+                .map(([day, dayGroups]) => (
+                  <section key={day} className="card p-3">
+                    <h2 className="mb-2 text-sm font-semibold text-fg-muted">{dayTitle(day)}</h2>
+                    {/* 1 tema → cartão em largura total [A-017] */}
+                    <div className={`grid gap-2 ${dayGroups.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
+                      {dayGroups.map((g) => (
+                        <GroupCard
+                          key={g.key}
+                          group={g}
+                          seen={seen.has(g.key)}
+                          onOpen={() => openGroup(g.key)}
+                          compact={false}
+                        />
+                      ))}
                     </div>
-                  );
-                })}
+                  </section>
+                ))}
             </div>
 
             {/* ---------- calendário (tablet/desktop) ---------- */}
-            <div className={`hidden sm:block card p-4 ${ready ? "" : "opacity-50 pointer-events-none"}`}>
-              <div className="grid grid-cols-7 gap-2 mb-1">
+            <div className={`card hidden p-4 sm:block ${interactive}`}>
+              <div aria-hidden="true" className="mb-1 grid grid-cols-7 gap-2">
                 {WEEKDAYS.map((w) => (
-                  <div key={w} className="text-center text-xs font-medium text-[var(--color-text-faint)] py-1">
+                  <div key={w} className="py-1 text-center text-xs font-medium text-fg-muted">
                     {w}
                   </div>
                 ))}
@@ -1155,8 +1313,8 @@ export default function ApprovalView({
                   if (d === null) return <div key={`e${i}`} />;
                   const dayGroups = byDay.get(d) ?? [];
                   return (
-                    <div key={d} className="min-h-[3rem] flex flex-col gap-1">
-                      <span className="text-xs text-[var(--color-text-faint)] leading-none pl-0.5">{d}</span>
+                    <div key={d} className="flex min-h-12 min-w-0 flex-col gap-1">
+                      <span className="pl-0.5 text-xs leading-none text-fg-muted">{d}</span>
                       {dayGroups.map((g) => (
                         <GroupCard
                           key={g.key}
@@ -1173,160 +1331,173 @@ export default function ApprovalView({
             </div>
           </>
         )}
-
-        {error && (
-          <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-            {error}
-          </p>
-        )}
-
-        {!readOnly && (
-          <div className="sticky bottom-4 pt-2 space-y-2">
-            <button
-              onClick={() => setAskingChanges(true)}
-              disabled={approving || !ready}
-              className="btn-ghost w-full !py-2.5 text-sm disabled:opacity-40"
-            >
-              Solicitar ajustes
-            </button>
-            <button
-              onClick={() => setConfirming(true)}
-              disabled={approving || !ready || pendingCount > 0}
-              title={
-                pendingCount > 0
-                  ? "Aguardando a equipe concluir os ajustes solicitados"
-                  : undefined
-              }
-              className="btn-primary w-full !py-3 text-base shadow-2xl disabled:opacity-40"
-            >
-              {pendingCount > 0
-                ? `Aguardando ${pendingCount} ajuste(s) da equipe`
-                : "Aprovar cronograma"}
-            </button>
-          </div>
-        )}
-
-        {open && (
-          <PostModal
-            token={token}
-            group={open}
-            onClose={() => setOpenKey(null)}
-            onSaved={handleSaved}
-            onNoted={handleNoted}
-            onAdjustmentAdded={handleAdjustmentAdded}
-            readOnly={readOnly}
-          />
-        )}
-
-        {/* confirmação com resumo — aprovar deixou de ser 1 clique */}
-        {confirming && (
-          <div
-            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm"
-            onClick={() => setConfirming(false)}
-          >
-            <div
-              className="card w-full max-w-md rounded-b-none sm:rounded-2xl p-6 animate-fade-up"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 className="text-lg font-semibold mb-1">Aprovar cronograma?</h2>
-              <p className="text-sm text-[var(--color-text-muted)] mb-4">
-                Depois de aprovado, a equipe produz o conteúdo completo e você revisa as postagens
-                semana a semana antes da publicação.
-              </p>
-
-              <div className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] divide-y divide-[var(--color-border)] mb-4 text-sm">
-                <div className="flex justify-between px-4 py-2.5">
-                  <span className="text-[var(--color-text-muted)]">Mês</span>
-                  <span className="font-medium capitalize">{monthLabel}</span>
-                </div>
-                <div className="flex justify-between px-4 py-2.5">
-                  <span className="text-[var(--color-text-muted)]">Temas</span>
-                  <span className="font-medium">{groups.length}</span>
-                </div>
-                <div className="flex justify-between px-4 py-2.5">
-                  <span className="text-[var(--color-text-muted)]">Posts</span>
-                  <span className="font-medium">{posts.length}</span>
-                </div>
-                <div className="flex justify-between px-4 py-2.5">
-                  <span className="text-[var(--color-text-muted)]">Revisados por você</span>
-                  <span className="font-medium">
-                    {reviewed} de {groups.length}
-                  </span>
-                </div>
-              </div>
-
-              {reviewed < groups.length && (
-                <p className="text-xs text-amber-200/90 bg-amber-500/[0.07] border border-amber-500/20 rounded-lg px-3 py-2 mb-4">
-                  Você ainda não abriu {groups.length - reviewed}{" "}
-                  {groups.length - reviewed === 1 ? "tema" : "temas"}. Pode aprovar mesmo assim.
-                </p>
-              )}
-              {notedCount > 0 && (
-                <p className="text-xs text-amber-200/90 bg-amber-500/[0.07] border border-amber-500/20 rounded-lg px-3 py-2 mb-4">
-                  Há {notedCount} {notedCount === 1 ? "post" : "posts"} com observação. Se aprovar
-                  agora, o cronograma segue como está.
-                </p>
-              )}
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setConfirming(false)}
-                  disabled={approving}
-                  className="btn-ghost flex-1"
-                >
-                  Voltar
-                </button>
-                <button onClick={approve} disabled={approving} className="btn-primary flex-1">
-                  {approving ? "Aprovando..." : "Confirmar aprovação"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* pedir ajustes com comentário geral */}
-        {askingChanges && (
-          <div
-            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm"
-            onClick={() => setAskingChanges(false)}
-          >
-            <div
-              className="card w-full max-w-md rounded-b-none sm:rounded-2xl p-6 animate-fade-up"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 className="text-lg font-semibold mb-1">Solicitar ajustes</h2>
-              <p className="text-sm text-[var(--color-text-muted)] mb-4">
-                Conte o que precisa mudar. Nada será publicado até você aprovar.
-                {notedCount > 0 && ` Seus ${notedCount} comentário(s) por post vão junto.`}
-              </p>
-              <textarea
-                value={changesNote}
-                onChange={(e) => setChangesNote(e.target.value)}
-                rows={5}
-                maxLength={2000}
-                placeholder="Ex: trocar os temas da semana 2; usar fotos da equipe em vez de banco de imagens."
-                className="input resize-y min-h-24 text-sm mb-4"
-              />
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setAskingChanges(false)}
-                  disabled={approving}
-                  className="btn-ghost flex-1"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={requestChanges}
-                  disabled={approving || (!changesNote.trim() && notedCount === 0)}
-                  className="btn-primary flex-1 disabled:opacity-40"
-                >
-                  {approving ? "Enviando..." : "Enviar"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* "Ver como feed": o perfil do Instagram como vai ficar (a grade só com os planejados deste cronograma) */}
+      {showFeed && feedProfile && (
+        <InstagramFeedPreview
+          profile={feedProfile}
+          clientName={clientName}
+          clientLogoUrl={clientLogoUrl}
+          planned={plannedTiles}
+          plannedCount={plannedFeedCount}
+          onOpen={openGroup}
+          className={`mt-6 ${interactive}`}
+        />
+      )}
+
+      {/* A-003: barra fixa OPACA (bg-raised) — nada passa legível por trás */}
+      {hasBar && (
+        <div
+          ref={barRef}
+          className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-raised shadow-bar"
+        >
+          <div className="mx-auto max-w-3xl px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3">
+            {statusLine}
+            {/* no celular o primário ocupa o resto da linha: "Aprovar cronograma" cabe em 1 linha a 390 px */}
+            <div className="flex gap-2 sm:justify-end">
+              <Button
+                variant="secondary"
+                size="lg"
+                className="shrink-0 max-sm:px-3"
+                onClick={() => {
+                  setChangesError("");
+                  setAskingChanges(true);
+                }}
+                disabled={approving || !ready}
+              >
+                Pedir ajustes
+              </Button>
+              <Button
+                variant="primary"
+                size="lg"
+                fullWidth
+                className="min-w-0 flex-1 max-sm:px-3 sm:w-auto sm:flex-none"
+                onClick={() => {
+                  setApproveError("");
+                  setConfirming(true);
+                }}
+                disabled={approving || !ready || pendingCount > 0}
+                aria-describedby={statusId}
+              >
+                Aprovar cronograma
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {open && (
+        <PostModal
+          key={open.key}
+          token={token}
+          group={open}
+          onClose={() => setOpenKey(null)}
+          onSaved={handleSaved}
+          onNoted={handleNoted}
+          onAdjustmentAdded={handleAdjustmentAdded}
+          readOnly={readOnly}
+        />
+      )}
+
+      {/* confirmação com resumo — aprovar não é 1 clique */}
+      <ConfirmDialog
+        open={confirming}
+        title="Aprovar cronograma?"
+        description="Depois de aprovado, a equipe produz o conteúdo completo e você revisa as postagens semana a semana antes da publicação. Por este link, não será mais possível pedir ajustes."
+        cancelLabel="Voltar"
+        confirmLabel="Confirmar aprovação"
+        busy={approving}
+        busyLabel="Aprovando…"
+        error={approveError || null}
+        confirmDisabled={pendingCount > 0}
+        onConfirm={approve}
+        onCancel={() => {
+          setConfirming(false);
+          setApproveError("");
+        }}
+      >
+        <dl className="divide-y divide-line rounded-card border border-line bg-sunken">
+          <div className="flex justify-between gap-3 px-4 py-2.5">
+            <dt className="text-fg-muted">Mês</dt>
+            <dd className="font-medium">{monthTitle}</dd>
+          </div>
+          <div className="flex justify-between gap-3 px-4 py-2.5">
+            <dt className="text-fg-muted">Temas</dt>
+            <dd className="font-medium">{groups.length}</dd>
+          </div>
+          <div className="flex justify-between gap-3 px-4 py-2.5">
+            <dt className="text-fg-muted">Posts</dt>
+            <dd className="font-medium">{posts.length}</dd>
+          </div>
+          <div className="flex justify-between gap-3 px-4 py-2.5">
+            <dt className="text-fg-muted">Revisados por você</dt>
+            <dd className="font-medium">
+              {reviewed} de {groups.length}
+            </dd>
+          </div>
+        </dl>
+        {unopened > 0 && (
+          <Callout tone="warning">
+            Você ainda não abriu {plural(unopened, "tema", "temas")}. Pode aprovar mesmo assim.
+          </Callout>
+        )}
+        {notedCount > 0 && (
+          <Callout tone="warning">
+            Há {plural(notedCount, "post", "posts")} com observação. Se aprovar agora, o cronograma segue como está.
+          </Callout>
+        )}
+      </ConfirmDialog>
+
+      {/* pedir ajustes com comentário geral */}
+      <Dialog
+        open={askingChanges}
+        onClose={() => setAskingChanges(false)}
+        title="Pedir ajustes no cronograma"
+        description="Conte o que precisa mudar. Nada será publicado até você aprovar, e você ainda pode aprovar depois."
+        size="sm"
+        busy={approving}
+        error={changesError || null}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setAskingChanges(false)} disabled={approving}>
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              onClick={requestChanges}
+              loading={approving}
+              loadingText="Enviando…"
+              disabled={!changesNote.trim() && notedCount === 0}
+            >
+              Enviar pedido
+            </Button>
+          </>
+        }
+      >
+        <div className="pb-2">
+          <Field
+            label="O que precisa mudar?"
+            help={
+              notedCount > 0 ? (
+                <span className="text-sm">
+                  {notedCount === 1
+                    ? "Sua observação no post vai junto."
+                    : `Suas ${notedCount} observações por post vão junto.`}
+                </span>
+              ) : undefined
+            }
+          >
+            <Textarea
+              value={changesNote}
+              onChange={(e) => setChangesNote(e.target.value)}
+              rows={5}
+              maxLength={2000}
+              placeholder="Ex.: trocar os temas da semana 2; usar fotos da equipe em vez de banco de imagens."
+            />
+          </Field>
+        </div>
+      </Dialog>
     </div>
   );
 }

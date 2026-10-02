@@ -2,9 +2,39 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/Button";
+import { Callout } from "@/components/Callout";
+import { Field, Input } from "@/components/Field";
 import { Icon } from "@/components/Icons";
 
 type Credential = { network: string; login: string; password: string; note?: string };
+
+const EMPTY_ROW: Credential = { network: "", login: "", password: "", note: "" };
+
+/** Botão mostrar/ocultar senha (A-044): estado em aria-pressed, nome fixo. */
+function RevealButton({
+  pressed,
+  onToggle,
+  label,
+}: {
+  pressed: boolean;
+  onToggle: () => void;
+  label: string;
+}) {
+  return (
+    <Button
+      iconOnly
+      variant="ghost"
+      size="sm"
+      aria-label={label}
+      aria-pressed={pressed}
+      title={pressed ? "Ocultar senha" : "Mostrar senha"}
+      onClick={onToggle}
+    >
+      {pressed ? <Icon.eyeOff /> : <Icon.eye />}
+    </Button>
+  );
+}
 
 export default function CredentialsManager({
   clientId,
@@ -17,161 +47,251 @@ export default function CredentialsManager({
   const [revealed, setRevealed] = useState(false);
   const [editing, setEditing] = useState(false);
   const [rows, setRows] = useState<Credential[]>([]);
+  const [loadedRows, setLoadedRows] = useState<Credential[]>([]);
   const [show, setShow] = useState<Record<number, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  async function load(thenEdit = false) {
+  async function load() {
     setBusy(true);
     setError("");
-    const res = await fetch(`/api/clients/${clientId}/credentials`);
-    const data = await res.json().catch(() => null);
-    setBusy(false);
-    if (!res.ok) {
-      setError("Falha ao carregar credenciais.");
-      return;
+    try {
+      const res = await fetch(`/api/clients/${clientId}/credentials`, { cache: "no-store" });
+      const data: unknown = await res.json().catch(() => null);
+      const list = (data as { credentials?: unknown } | null)?.credentials;
+      if (!res.ok || !Array.isArray(list)) {
+        setError("Não foi possível carregar as credenciais. Tente de novo.");
+        return;
+      }
+      setRows(list as Credential[]);
+      setLoadedRows(list as Credential[]);
+      setShow({});
+      setRevealed(true);
+    } catch {
+      setError("Sem conexão com o servidor. Verifique a internet e tente de novo.");
+    } finally {
+      setBusy(false);
     }
-    setRows(data.credentials ?? []);
-    setRevealed(true);
-    if (thenEdit) setEditing(true);
   }
 
-  function startNew() {
-    setRows([{ network: "", login: "", password: "", note: "" }]);
-    setRevealed(true);
+  function startEditing() {
+    const base = revealed ? loadedRows : [];
+    setRows(base.length > 0 ? base.map((r) => ({ ...r })) : [{ ...EMPTY_ROW }]);
+    setShow({});
+    setError("");
     setEditing(true);
   }
 
+  function cancel() {
+    setRows(loadedRows);
+    setShow({});
+    setError("");
+    setEditing(false);
+  }
+
   async function save() {
+    // linhas totalmente em branco (ex.: "Adicionar rede" sem preencher) não vão ao servidor
+    const filled = rows.filter((r) => r.network.trim() || r.login.trim() || r.password.trim());
     setBusy(true);
     setError("");
-    const res = await fetch(`/api/clients/${clientId}/credentials`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ credentials: rows }),
-    });
-    setBusy(false);
-    if (!res.ok) {
-      setError("Falha ao salvar.");
-      return;
+    try {
+      const res = await fetch(`/api/clients/${clientId}/credentials`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials: filled }),
+      });
+      if (!res.ok) {
+        setError(
+          res.status === 400
+            ? "Preencha a rede de cada credencial antes de salvar."
+            : "Não foi possível salvar as credenciais. Tente de novo.",
+        );
+        return;
+      }
+      // o servidor descarta as linhas vazias: o que ficou na tela é o que foi gravado
+      const kept = filled.filter((r) => r.network.trim() && (r.login.trim() || r.password.trim()));
+      setRows(kept);
+      setLoadedRows(kept);
+      setRevealed(true);
+      setShow({});
+      setEditing(false);
+      router.refresh();
+    } catch {
+      setError("Sem conexão com o servidor. Verifique a internet e tente de novo.");
+    } finally {
+      setBusy(false);
     }
-    setEditing(false);
-    router.refresh();
   }
 
   const setRow = (i: number, patch: Partial<Credential>) =>
-    setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+    setRows((list) => list.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  const toggleShow = (i: number) => setShow((s) => ({ ...s, [i]: !s[i] }));
+
+  const hasSaved = hasCredentials || loadedRows.length > 0;
 
   return (
-    <div className="card p-6">
-      <div className="flex items-center justify-between mb-4">
+    <section aria-labelledby="credenciais-titulo" className="card p-5 sm:p-6">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Icon.shield className="w-4 h-4 text-[var(--color-text-muted)]" />
-          <h2 className="font-semibold">Credenciais</h2>
-          <span className="text-xs text-[var(--color-text-faint)]">(criptografadas)</span>
+          <span aria-hidden="true" className="inline-flex size-4 text-fg-muted [&>svg]:size-full">
+            <Icon.shield />
+          </span>
+          <h2 id="credenciais-titulo" className="font-display text-lg font-semibold tracking-title text-fg">
+            Credenciais
+          </h2>
+          <span className="text-xs text-fg-muted">(criptografadas)</span>
         </div>
-        <div className="flex gap-2">
-          {!editing && hasCredentials && !revealed && (
-            <button onClick={() => load(false)} disabled={busy} className="btn-ghost !py-2 !px-3 text-xs">
-              {busy ? "..." : "Revelar"}
-            </button>
-          )}
-          {!editing && (revealed || !hasCredentials) && (
-            <button
-              onClick={() => (revealed ? setEditing(true) : startNew())}
-              className="btn-ghost !py-2 !px-3 text-xs"
-            >
-              <Icon.edit className="w-3.5 h-3.5" />
-              {hasCredentials ? "Editar" : "Adicionar"}
-            </button>
-          )}
-        </div>
+        {!editing && (
+          <div className="flex flex-wrap gap-2">
+            {hasSaved && !revealed && (
+              <Button size="sm" leadingIcon={<Icon.eye />} loading={busy} loadingText="Carregando…" onClick={() => void load()}>
+                Revelar
+              </Button>
+            )}
+            {(revealed || !hasSaved) && (
+              <Button size="sm" leadingIcon={hasSaved ? <Icon.edit /> : <Icon.plus />} onClick={startEditing}>
+                {hasSaved ? "Editar" : "Adicionar"}
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
-      {!revealed && hasCredentials && (
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Credenciais salvas e criptografadas. Clique em <b>Revelar</b> para visualizar.
-        </p>
+      {!revealed && hasSaved && !editing && (
+        <p className="text-sm text-fg-muted">Credenciais salvas e criptografadas. Use “Revelar” para ver.</p>
       )}
-      {!revealed && !hasCredentials && (
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Nenhuma credencial cadastrada.
-        </p>
-      )}
+      {!revealed && !hasSaved && !editing && <p className="text-sm text-fg-muted">Nenhuma credencial cadastrada.</p>}
 
       {revealed && !editing && (
-        <div className="space-y-2">
-          {rows.length === 0 && (
-            <p className="text-sm text-[var(--color-text-muted)]">Nenhuma credencial.</p>
+        <>
+          {rows.length === 0 ? (
+            <p className="text-sm text-fg-muted">Nenhuma credencial cadastrada.</p>
+          ) : (
+            <ul className="grid gap-2">
+              {rows.map((r, i) => (
+                <li
+                  key={i}
+                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-control border border-line bg-sunken px-3 py-2 text-sm sm:grid-cols-[6rem_minmax(0,1fr)_minmax(0,10rem)_auto]"
+                >
+                  <span className="font-medium text-fg">{r.network}</span>
+                  <span className="col-start-1 truncate text-fg-muted sm:col-start-auto" title={r.login}>
+                    {r.login || "—"}
+                  </span>
+                  <span className="col-start-1 truncate font-mono text-fg-muted sm:col-start-auto">
+                    {show[i] ? (
+                      r.password
+                    ) : (
+                      <>
+                        <span aria-hidden="true">••••••••</span>
+                        <span className="sr-only">Senha oculta</span>
+                      </>
+                    )}
+                  </span>
+                  <span className="col-start-2 row-span-3 row-start-1 sm:col-start-auto sm:row-span-1 sm:row-start-auto">
+                    <RevealButton
+                      pressed={!!show[i]}
+                      onToggle={() => toggleShow(i)}
+                      label={`Mostrar senha de ${r.network}`}
+                    />
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
-          {rows.map((r, i) => (
-            <div key={i} className="flex items-center gap-3 text-sm rounded-lg bg-white/[0.02] border border-[var(--color-border)] px-3 py-2">
-              <span className="w-24 font-medium shrink-0">{r.network}</span>
-              <span className="text-[var(--color-text-muted)] truncate flex-1">{r.login || "—"}</span>
-              <span className="font-mono text-[var(--color-text-muted)] w-40 truncate">
-                {show[i] ? r.password : "••••••••"}
-              </span>
-              <button
-                onClick={() => setShow({ ...show, [i]: !show[i] })}
-                className="text-xs text-[var(--color-accent)] hover:underline shrink-0"
-              >
-                {show[i] ? "ocultar" : "ver"}
-              </button>
-            </div>
-          ))}
-        </div>
+        </>
       )}
 
       {editing && (
-        <div className="space-y-3">
+        <div className="grid gap-4">
           {rows.map((r, i) => (
-            <div key={i} className="grid grid-cols-12 gap-2 items-center">
-              <input
-                placeholder="rede"
-                value={r.network}
-                onChange={(e) => setRow(i, { network: e.target.value })}
-                className="input col-span-3 !py-1.5"
-              />
-              <input
-                placeholder="login"
-                value={r.login}
-                onChange={(e) => setRow(i, { login: e.target.value })}
-                className="input col-span-4 !py-1.5"
-              />
-              <input
-                placeholder="senha"
-                value={r.password}
-                onChange={(e) => setRow(i, { password: e.target.value })}
-                className="input col-span-4 !py-1.5 font-mono"
-              />
-              <button
-                onClick={() => setRows(rows.filter((_, j) => j !== i))}
-                className="col-span-1 p-2 rounded-lg text-[var(--color-text-muted)] hover:text-red-400"
-                title="Remover"
-              >
-                <Icon.trash className="w-4 h-4" />
-              </button>
-            </div>
+            <fieldset key={i} className="m-0 grid min-w-0 gap-3 rounded-control border border-line p-3 sm:grid-cols-12 sm:items-end">
+              <legend className="sr-only">Credencial {i + 1}</legend>
+              <Field label="Rede" className="sm:col-span-3">
+                <Input
+                  value={r.network}
+                  onChange={(e) => setRow(i, { network: e.target.value })}
+                  disabled={busy}
+                  autoComplete="off"
+                  placeholder="Instagram"
+                />
+              </Field>
+              <Field label="Login" className="sm:col-span-4">
+                <Input
+                  value={r.login}
+                  onChange={(e) => setRow(i, { login: e.target.value })}
+                  disabled={busy}
+                  autoComplete="off"
+                  placeholder="usuário ou e-mail"
+                />
+              </Field>
+              <Field label="Senha" className="sm:col-span-4">
+                <Input
+                  type={show[i] ? "text" : "password"}
+                  value={r.password}
+                  onChange={(e) => setRow(i, { password: e.target.value })}
+                  disabled={busy}
+                  // não é a senha de quem está logado: o navegador não deve preencher nem oferecer salvar
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  className="font-mono"
+                  trailingSlot={
+                    <RevealButton
+                      pressed={!!show[i]}
+                      onToggle={() => toggleShow(i)}
+                      label={`Mostrar senha da credencial ${i + 1}`}
+                    />
+                  }
+                />
+              </Field>
+              <div className="sm:col-span-1 sm:justify-self-end">
+                <Button
+                  iconOnly
+                  variant="ghost"
+                  aria-label={`Remover credencial ${i + 1}`}
+                  disabled={busy}
+                  onClick={() => setRows((list) => list.filter((_, j) => j !== i))}
+                >
+                  <Icon.trash />
+                </Button>
+              </div>
+            </fieldset>
           ))}
-          <button
-            onClick={() => setRows([...rows, { network: "", login: "", password: "", note: "" }])}
-            className="text-sm text-[var(--color-accent)] hover:underline flex items-center gap-1"
-          >
-            <Icon.plus className="w-4 h-4" /> Adicionar rede
-          </button>
 
-          {error && <p className="text-sm text-red-400">{error}</p>}
+          <div>
+            <Button
+              variant="ghost"
+              size="sm"
+              leadingIcon={<Icon.plus />}
+              disabled={busy}
+              onClick={() => setRows((list) => [...list, { ...EMPTY_ROW }])}
+            >
+              Adicionar rede
+            </Button>
+          </div>
 
-          <div className="flex gap-3 pt-1">
-            <button onClick={() => { setEditing(false); }} className="btn-ghost flex-1">Cancelar</button>
-            <button onClick={save} disabled={busy} className="btn-primary flex-1">
-              {busy ? "Salvando..." : "Salvar credenciais"}
-            </button>
+          {error && (
+            <Callout tone="danger" live="assertive">
+              {error}
+            </Callout>
+          )}
+
+          <div className="flex flex-col-reverse gap-3 border-t border-line pt-4 sm:flex-row sm:justify-end">
+            <Button variant="secondary" disabled={busy} onClick={cancel}>
+              Cancelar
+            </Button>
+            <Button variant="primary" loading={busy} loadingText="Salvando…" onClick={() => void save()}>
+              Salvar credenciais
+            </Button>
           </div>
         </div>
       )}
 
-      {error && !editing && <p className="text-sm text-red-400 mt-2">{error}</p>}
-    </div>
+      {error && !editing && (
+        <Callout tone="danger" live="assertive" className="mt-3">
+          {error}
+        </Callout>
+      )}
+    </section>
   );
 }

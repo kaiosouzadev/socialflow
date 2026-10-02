@@ -1,10 +1,12 @@
+import type { Metadata } from "next";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
-import { PageHeader } from "@/components/ui";
 import MetaConnectionsManager from "./MetaConnectionsManager";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Conexões Meta" };
 
 export default async function MetaPage() {
   const session = await auth();
@@ -34,11 +36,8 @@ export default async function MetaPage() {
   }));
 
   return (
-    <div className="p-8 max-w-6xl mx-auto animate-fade-up">
-      <PageHeader
-        title="Conexões Meta"
-        subtitle="Business Manager → Páginas e Instagram dos clientes"
-      />
+    <div className="page">
+      {/* o PageHeader (com "Nova conexão") fica no MetaConnectionsManager, que abre o diálogo */}
       <MetaConnectionsManager initial={initial} />
     </div>
   );

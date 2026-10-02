@@ -2,66 +2,89 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/Button";
+import { ConfirmDialog } from "@/components/Dialog";
 import { Icon } from "@/components/Icons";
 
+/** Excluir cliente com ConfirmDialog que diz a consequência antes (A-016, A-032). */
 export default function DeleteClientButton({
   clientId,
   clientName,
+  postsCount,
+  accountsCount,
 }: {
   clientId: string;
   clientName: string;
+  /** para as consequências do diálogo (opcional) */
+  postsCount?: number;
+  accountsCount?: number;
 }) {
   const router = useRouter();
-  const [confirming, setConfirming] = useState(false);
+  const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleDelete() {
     setLoading(true);
-    setError(false);
-    const res = await fetch(`/api/clients/${clientId}`, { method: "DELETE" });
-    if (!res.ok) {
+    setError(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}`, { method: "DELETE" });
+      if (!res.ok) {
+        setError(
+          res.status === 404
+            ? "Este cliente não existe mais. Volte para a lista de clientes."
+            : "Não foi possível excluir o cliente. Tente de novo.",
+        );
+        setLoading(false);
+        return;
+      }
+    } catch {
+      setError("Sem conexão com o servidor. Verifique a internet e tente de novo.");
       setLoading(false);
-      setError(true);
       return;
     }
     router.push("/clients");
     router.refresh();
   }
 
-  if (confirming) {
-    return (
-      <div className="flex items-center gap-3 rounded-lg bg-red-500/[0.07] border border-red-500/20 px-3 py-2">
-        <span className="text-sm text-red-200">
-          {error ? "Não foi possível excluir. Tentar de novo?" : `Excluir ${clientName} e todos os dados?`}
-        </span>
-        <button
-          onClick={handleDelete}
-          disabled={loading}
-          className="text-sm font-medium text-red-300 hover:text-red-200"
-        >
-          {loading ? "Excluindo..." : "Sim"}
-        </button>
-        <button
-          onClick={() => {
-            setConfirming(false);
-            setError(false);
-          }}
-          className="text-sm text-[var(--color-text-muted)] hover:text-white"
-        >
-          Não
-        </button>
-      </div>
-    );
-  }
+  const posts =
+    postsCount === 0
+      ? null
+      : postsCount === 1
+        ? "O post do cliente é apagado."
+        : `${postsCount === undefined ? "Todos os posts" : `Os ${postsCount} posts`} do cliente são apagados.`;
+  const accounts =
+    accountsCount === 0
+      ? null
+      : accountsCount === 1
+        ? "A conta conectada sai do sistema (nada é apagado na rede social)."
+        : `${accountsCount === undefined ? "As contas conectadas" : `As ${accountsCount} contas conectadas`} saem do sistema (nada é apagado nas redes sociais).`;
 
   return (
-    <button
-      onClick={() => setConfirming(true)}
-      className="btn-ghost !py-2 hover:!text-red-400 hover:!border-red-500/30"
-    >
-      <Icon.trash className="w-4 h-4" />
-      Excluir
-    </button>
+    <>
+      <Button variant="danger" leadingIcon={<Icon.trash />} onClick={() => setOpen(true)}>
+        Excluir cliente
+      </Button>
+      <ConfirmDialog
+        open={open}
+        tone="danger"
+        title={`Excluir o cliente ${clientName}?`}
+        consequences={[
+          ...(posts ? [posts] : []),
+          "Cronogramas, aprovações, pendências, credenciais e briefing também são apagados.",
+          ...(accounts ? [accounts] : []),
+          "Não dá para desfazer.",
+        ]}
+        confirmLabel="Excluir cliente"
+        busy={loading}
+        busyLabel="Excluindo…"
+        error={error}
+        onConfirm={() => void handleDelete()}
+        onCancel={() => {
+          setOpen(false);
+          setError(null);
+        }}
+      />
+    </>
   );
 }

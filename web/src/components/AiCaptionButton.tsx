@@ -1,6 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
+import { Button } from "./Button";
+import { toUserMessage } from "@/lib/user-facing-error";
+
+const CAPTION_ERROR = "Não foi possível gerar a legenda agora. Tente de novo em instantes.";
 
 function SparkleIcon({ className = "w-4 h-4" }: { className?: string }) {
   return (
@@ -26,6 +30,7 @@ export function AiCaptionButton({
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const errorId = useId();
 
   async function generate() {
     if (targets.length === 0) {
@@ -40,32 +45,38 @@ export function AiCaptionButton({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ clientId, theme, targets }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(typeof data?.error === "string" ? data.error : "Falha ao gerar.");
+        setError(toUserMessage(data, CAPTION_ERROR));
         return;
       }
-      onResult(data.captions ?? {});
+      onResult(data?.captions ?? {});
     } catch {
-      setError("Falha de conexão com a IA.");
+      setError("Falha de conexão com a IA. Verifique a internet e tente de novo.");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <span className="inline-flex items-center gap-2">
-      <button
-        type="button"
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        leadingIcon={<SparkleIcon />}
+        loading={loading}
+        loadingText="Gerando…"
+        disabled={disabled}
+        aria-describedby={error ? errorId : undefined}
         onClick={generate}
-        disabled={disabled || loading}
-        className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-lg border border-[var(--color-border)] text-[var(--color-accent)] hover:border-[var(--color-accent)]/50 hover:bg-[var(--color-accent)]/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         title={disabled ? "Selecione um cliente primeiro" : "Gerar legenda com IA"}
       >
-        <SparkleIcon className="w-3.5 h-3.5" />
-        {loading ? "Gerando..." : "Gerar com IA"}
-      </button>
-      {error && <span className="text-xs text-red-400">{error}</span>}
+        Gerar com IA
+      </Button>
+      {error && (
+        <span id={errorId} role="alert" className="text-xs font-medium text-danger-fg">
+          {error}
+        </span>
+      )}
     </span>
   );
 }

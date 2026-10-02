@@ -1,185 +1,622 @@
 @import "tailwindcss";
 
-/* ------------------------------------------------------------------ *
- * Design tokens — defined on :root so both var() in component classes
- * and Tailwind arbitrary utilities (text-[var(--color-x)]) resolve.
- * ------------------------------------------------------------------ */
+/* =====================================================================
+ * Tokens do design system (marca Grupo Coletivo)
+ * GERADO por scratchpad/design/contraste/gen-css.mjs a partir de tokens.mjs.
+ * Valores verificados por contrast.mjs (WCAG 2.x). Não editar à mão sem
+ * rodar o cálculo de novo.
+ * ===================================================================== */
+
+/* 1. Valores — modo claro (padrão) */
 :root {
+  color-scheme: light;
+  --sf-canvas: #f4efe3;
+  --sf-surface: #fffdf7;
+  --sf-raised: #fffdf7;
+  --sf-sunken: #f8f4eb;
+  --sf-hover: rgb(23 21 16 / 0.06);
+  --sf-press: rgb(23 21 16 / 0.1);
+  --sf-selected: #171510;
+  --sf-on-selected: #fffdf7;
+  --sf-today-bg: rgb(238 114 40 / 0.1);
+  --sf-scrim: rgb(23 21 16 / 0.5);
+  --sf-fg: #171510;
+  --sf-fg-muted: #4f4b42;
+  --sf-fg-faint: #655f55;
+  --sf-fg-disabled: #a39e93;
+  --sf-link: #2f49d6;
+  --sf-link-hover: #2234a8;
+  --sf-line: rgb(23 21 16 / 0.13);
+  --sf-line-strong: #8a8478;
+  --sf-focus: #3854e8;
+  --sf-primary: #171510;
+  --sf-primary-hover: #3854e8;
+  --sf-primary-press: #2234a8;
+  --sf-on-primary: #fffdf7;
+  --sf-disabled-bg: #ebe6db;
+  --sf-brand: #ee7228;
+  --sf-on-brand: #171510;
+  --sf-brand-plate: #171510;
+  --sf-selection-bg: #d4f34a;
+  --sf-selection-fg: #171510;
+  --sf-scroll-thumb: #c8c1b3;
+  --sf-neutral-fg: #4f4b43;
+  --sf-neutral-bg: #ece7dc;
+  --sf-neutral-solid: #7d776b;
+  --sf-neutral-line: rgb(23 21 16 / 0.16);
+  --sf-info-fg: #2234a8;
+  --sf-info-bg: #e7ebfd;
+  --sf-info-solid: #3854e8;
+  --sf-info-line: rgb(56 84 232 / 0.3);
+  --sf-success-fg: #1e6b2e;
+  --sf-success-bg: #dff1d8;
+  --sf-success-solid: #2e7d3e;
+  --sf-success-line: rgb(46 125 62 / 0.3);
+  --sf-warning-fg: #7d4e00;
+  --sf-warning-bg: #fdf0c9;
+  --sf-warning-solid: #a86f00;
+  --sf-warning-line: rgb(168 111 0 / 0.35);
+  --sf-danger-fg: #a3260c;
+  --sf-danger-bg: #fdeaea;
+  --sf-danger-solid: #b3261e;
+  --sf-danger-line: rgb(179 38 30 / 0.3);
+  --sf-brand-fg: #9a3d08;
+  --sf-brand-bg: #fde6d5;
+  --sf-brand-solid: #c4561a;
+  --sf-brand-line: rgb(238 114 40 / 0.45);
+  --sf-danger-hover: #8f1d16;
+  --sf-on-danger: #fffdf7;
+  --sf-on-solid: #fffdf7;
+  --sf-format-feed-fg: #2a43c9;
+  --sf-format-feed-bg: #e7ebfd;
+  --sf-format-feed: #3854e8;
+  --sf-format-carrossel-fg: #11606d;
+  --sf-format-carrossel-bg: #dcf0f2;
+  --sf-format-carrossel: #1c7f8f;
+  --sf-format-reels-fg: #a01f5c;
+  --sf-format-reels-bg: #fde4ef;
+  --sf-format-reels: #cc3a80;
+  --sf-format-story-fg: #7a5400;
+  --sf-format-story-bg: #fff1c7;
+  --sf-format-story: #a37300;
+  --sf-stage-sem-texto-fill: #c4321f;
+  --sf-stage-sem-texto-on: #fffdf7;
+  --sf-stage-sem-texto-solid: #c4321f;
+  --sf-stage-sem-texto-text: #b02a18;
+  --sf-stage-texto-ok-fill: #1f7a3b;
+  --sf-stage-texto-ok-on: #fffdf7;
+  --sf-stage-texto-ok-solid: #1f7a3b;
+  --sf-stage-texto-ok-text: #1d6e35;
+  --sf-stage-em-aprovacao-fill: #ffc83d;
+  --sf-stage-em-aprovacao-on: #171510;
+  --sf-stage-em-aprovacao-solid: #9a6b00;
+  --sf-stage-em-aprovacao-text: #7a5400;
+  --sf-stage-tema-aprovado-fill: #3854e8;
+  --sf-stage-tema-aprovado-on: #fffdf7;
+  --sf-stage-tema-aprovado-solid: #3854e8;
+  --sf-stage-tema-aprovado-text: #2a43c9;
+  --sf-stage-post-aprovado-fill: #a8239a;
+  --sf-stage-post-aprovado-on: #fffdf7;
+  --sf-stage-post-aprovado-solid: #a8239a;
+  --sf-stage-post-aprovado-text: #931f87;
+  --sf-shadow-card: 0 1px 2px rgb(23 21 16 / 0.05);
+  --sf-shadow-raised: 0 1px 2px rgb(23 21 16 / 0.06), 0 12px 32px -12px rgb(23 21 16 / 0.24);
+  --sf-shadow-bar: 0 -8px 24px -12px rgb(23 21 16 / 0.18);
+  /* movimento (iguais nos dois modos) */
+  --sf-dur-fast: 120ms;
+  --sf-dur-base: 180ms;
+  --sf-dur-slow: 260ms;
+  --sf-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --sf-ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* 2. Valores — modo escuro (data-theme é aplicado no <html> pelo script anti-flash) */
+:root[data-theme="dark"] {
   color-scheme: dark;
-
-  --color-bg: #07070b;
-  --color-surface: #101019;
-  --color-surface-2: #161622;
-  --color-border: #232333;
-  --color-border-strong: #34344a;
-  --color-text: #f1f1f6;
-  --color-text-muted: #a2a2b8;
-  --color-text-faint: #6b6b85;
-
-  --color-accent: #8b6dff;
-  --color-accent-2: #a855f7;
-  --color-accent-3: #ec4899;
-
-  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset,
-    0 12px 32px -16px rgba(0, 0, 0, 0.8);
+  --sf-canvas: #171510;
+  --sf-surface: #1f1d18;
+  --sf-raised: #292620;
+  --sf-sunken: #12110d;
+  --sf-hover: rgb(255 253 247 / 0.07);
+  --sf-press: rgb(255 253 247 / 0.11);
+  --sf-selected: #ee7228;
+  --sf-on-selected: #171510;
+  --sf-today-bg: rgb(238 114 40 / 0.14);
+  --sf-scrim: rgb(0 0 0 / 0.6);
+  --sf-fg: #fffdf7;
+  --sf-fg-muted: #c9c5bb;
+  --sf-fg-faint: #a6a195;
+  --sf-fg-disabled: #6c685e;
+  --sf-link: #a3b1ff;
+  --sf-link-hover: #c3cbff;
+  --sf-line: rgb(255 253 247 / 0.12);
+  --sf-line-strong: #858075;
+  --sf-focus: #a3b1ff;
+  --sf-primary: #ee7228;
+  --sf-primary-hover: #f29020;
+  --sf-primary-press: #d8641d;
+  --sf-on-primary: #171510;
+  --sf-disabled-bg: #2f2c25;
+  --sf-brand: #ee7228;
+  --sf-on-brand: #171510;
+  --sf-brand-plate: #171510;
+  --sf-selection-bg: #d4f34a;
+  --sf-selection-fg: #171510;
+  --sf-scroll-thumb: #4a463d;
+  --sf-neutral-fg: #d6d2c8;
+  --sf-neutral-bg: #2f2c26;
+  --sf-neutral-solid: #9a958a;
+  --sf-neutral-line: rgb(255 253 247 / 0.16);
+  --sf-info-fg: #b3beff;
+  --sf-info-bg: #1f2445;
+  --sf-info-solid: #8c9cff;
+  --sf-info-line: rgb(140 156 255 / 0.35);
+  --sf-success-fg: #8fdca3;
+  --sf-success-bg: #17301e;
+  --sf-success-solid: #5cc977;
+  --sf-success-line: rgb(92 201 119 / 0.35);
+  --sf-warning-fg: #ffd581;
+  --sf-warning-bg: #352912;
+  --sf-warning-solid: #f2b33d;
+  --sf-warning-line: rgb(242 179 61 / 0.35);
+  --sf-danger-fg: #ffaa9e;
+  --sf-danger-bg: #3a1d18;
+  --sf-danger-solid: #ff7a66;
+  --sf-danger-line: rgb(255 122 102 / 0.35);
+  --sf-brand-fg: #ffab73;
+  --sf-brand-bg: #3a2416;
+  --sf-brand-solid: #ee7228;
+  --sf-brand-line: rgb(238 114 40 / 0.45);
+  --sf-danger-hover: #ff9585;
+  --sf-on-danger: #171510;
+  --sf-on-solid: #171510;
+  --sf-format-feed-fg: #b3beff;
+  --sf-format-feed-bg: #1f2445;
+  --sf-format-feed: #8c9cff;
+  --sf-format-carrossel-fg: #8fdde7;
+  --sf-format-carrossel-bg: #14302f;
+  --sf-format-carrossel: #5cc4d2;
+  --sf-format-reels-fg: #ffa3cd;
+  --sf-format-reels-bg: #3a1a2b;
+  --sf-format-reels: #ff79b6;
+  --sf-format-story-fg: #ffd77a;
+  --sf-format-story-bg: #352a10;
+  --sf-format-story: #ffc83d;
+  --sf-stage-sem-texto-fill: #ff7a66;
+  --sf-stage-sem-texto-on: #171510;
+  --sf-stage-sem-texto-solid: #ff7a66;
+  --sf-stage-sem-texto-text: #ff9a8a;
+  --sf-stage-texto-ok-fill: #5cc977;
+  --sf-stage-texto-ok-on: #171510;
+  --sf-stage-texto-ok-solid: #5cc977;
+  --sf-stage-texto-ok-text: #7fd894;
+  --sf-stage-em-aprovacao-fill: #ffc83d;
+  --sf-stage-em-aprovacao-on: #171510;
+  --sf-stage-em-aprovacao-solid: #ffc83d;
+  --sf-stage-em-aprovacao-text: #ffd577;
+  --sf-stage-tema-aprovado-fill: #8c9cff;
+  --sf-stage-tema-aprovado-on: #171510;
+  --sf-stage-tema-aprovado-solid: #8c9cff;
+  --sf-stage-tema-aprovado-text: #aab6ff;
+  --sf-stage-post-aprovado-fill: #f07ce6;
+  --sf-stage-post-aprovado-on: #171510;
+  --sf-stage-post-aprovado-solid: #f07ce6;
+  --sf-stage-post-aprovado-text: #f59eee;
+  --sf-shadow-card: none;
+  --sf-shadow-raised: 0 1px 0 rgb(255 253 247 / 0.05) inset, 0 16px 40px -12px rgb(0 0 0 / 0.7);
+  --sf-shadow-bar: 0 -8px 24px -12px rgb(0 0 0 / 0.6);
 }
 
-/* Tailwind theme mapping (enables font-sans / color utilities if needed) */
+/* 3. Sem JS (script anti-flash não rodou): segue o sistema */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --sf-canvas: #171510;
+    --sf-surface: #1f1d18;
+    --sf-raised: #292620;
+    --sf-sunken: #12110d;
+    --sf-hover: rgb(255 253 247 / 0.07);
+    --sf-press: rgb(255 253 247 / 0.11);
+    --sf-selected: #ee7228;
+    --sf-on-selected: #171510;
+    --sf-today-bg: rgb(238 114 40 / 0.14);
+    --sf-scrim: rgb(0 0 0 / 0.6);
+    --sf-fg: #fffdf7;
+    --sf-fg-muted: #c9c5bb;
+    --sf-fg-faint: #a6a195;
+    --sf-fg-disabled: #6c685e;
+    --sf-link: #a3b1ff;
+    --sf-link-hover: #c3cbff;
+    --sf-line: rgb(255 253 247 / 0.12);
+    --sf-line-strong: #858075;
+    --sf-focus: #a3b1ff;
+    --sf-primary: #ee7228;
+    --sf-primary-hover: #f29020;
+    --sf-primary-press: #d8641d;
+    --sf-on-primary: #171510;
+    --sf-disabled-bg: #2f2c25;
+    --sf-brand: #ee7228;
+    --sf-on-brand: #171510;
+    --sf-brand-plate: #171510;
+    --sf-selection-bg: #d4f34a;
+    --sf-selection-fg: #171510;
+    --sf-scroll-thumb: #4a463d;
+    --sf-neutral-fg: #d6d2c8;
+    --sf-neutral-bg: #2f2c26;
+    --sf-neutral-solid: #9a958a;
+    --sf-neutral-line: rgb(255 253 247 / 0.16);
+    --sf-info-fg: #b3beff;
+    --sf-info-bg: #1f2445;
+    --sf-info-solid: #8c9cff;
+    --sf-info-line: rgb(140 156 255 / 0.35);
+    --sf-success-fg: #8fdca3;
+    --sf-success-bg: #17301e;
+    --sf-success-solid: #5cc977;
+    --sf-success-line: rgb(92 201 119 / 0.35);
+    --sf-warning-fg: #ffd581;
+    --sf-warning-bg: #352912;
+    --sf-warning-solid: #f2b33d;
+    --sf-warning-line: rgb(242 179 61 / 0.35);
+    --sf-danger-fg: #ffaa9e;
+    --sf-danger-bg: #3a1d18;
+    --sf-danger-solid: #ff7a66;
+    --sf-danger-line: rgb(255 122 102 / 0.35);
+    --sf-brand-fg: #ffab73;
+    --sf-brand-bg: #3a2416;
+    --sf-brand-solid: #ee7228;
+    --sf-brand-line: rgb(238 114 40 / 0.45);
+    --sf-danger-hover: #ff9585;
+    --sf-on-danger: #171510;
+    --sf-on-solid: #171510;
+    --sf-format-feed-fg: #b3beff;
+    --sf-format-feed-bg: #1f2445;
+    --sf-format-feed: #8c9cff;
+    --sf-format-carrossel-fg: #8fdde7;
+    --sf-format-carrossel-bg: #14302f;
+    --sf-format-carrossel: #5cc4d2;
+    --sf-format-reels-fg: #ffa3cd;
+    --sf-format-reels-bg: #3a1a2b;
+    --sf-format-reels: #ff79b6;
+    --sf-format-story-fg: #ffd77a;
+    --sf-format-story-bg: #352a10;
+    --sf-format-story: #ffc83d;
+    --sf-stage-sem-texto-fill: #ff7a66;
+    --sf-stage-sem-texto-on: #171510;
+    --sf-stage-sem-texto-solid: #ff7a66;
+    --sf-stage-sem-texto-text: #ff9a8a;
+    --sf-stage-texto-ok-fill: #5cc977;
+    --sf-stage-texto-ok-on: #171510;
+    --sf-stage-texto-ok-solid: #5cc977;
+    --sf-stage-texto-ok-text: #7fd894;
+    --sf-stage-em-aprovacao-fill: #ffc83d;
+    --sf-stage-em-aprovacao-on: #171510;
+    --sf-stage-em-aprovacao-solid: #ffc83d;
+    --sf-stage-em-aprovacao-text: #ffd577;
+    --sf-stage-tema-aprovado-fill: #8c9cff;
+    --sf-stage-tema-aprovado-on: #171510;
+    --sf-stage-tema-aprovado-solid: #8c9cff;
+    --sf-stage-tema-aprovado-text: #aab6ff;
+    --sf-stage-post-aprovado-fill: #f07ce6;
+    --sf-stage-post-aprovado-on: #171510;
+    --sf-stage-post-aprovado-solid: #f07ce6;
+    --sf-stage-post-aprovado-text: #f59eee;
+    --sf-shadow-card: none;
+    --sf-shadow-raised: 0 1px 0 rgb(255 253 247 / 0.05) inset, 0 16px 40px -12px rgb(0 0 0 / 0.7);
+    --sf-shadow-bar: 0 -8px 24px -12px rgb(0 0 0 / 0.6);
+  }
+}
+
+/* 4. Utilitários Tailwind v4 */
+@theme inline {
+  --color-canvas: var(--sf-canvas);
+  --color-surface: var(--sf-surface);
+  --color-raised: var(--sf-raised);
+  --color-sunken: var(--sf-sunken);
+  --color-hover: var(--sf-hover);
+  --color-press: var(--sf-press);
+  --color-selected: var(--sf-selected);
+  --color-on-selected: var(--sf-on-selected);
+  --color-today: var(--sf-today-bg);
+  --color-scrim: var(--sf-scrim);
+  --color-fg: var(--sf-fg);
+  --color-fg-muted: var(--sf-fg-muted);
+  --color-fg-faint: var(--sf-fg-faint);
+  --color-fg-disabled: var(--sf-fg-disabled);
+  --color-link: var(--sf-link);
+  --color-link-hover: var(--sf-link-hover);
+  --color-line: var(--sf-line);
+  --color-line-strong: var(--sf-line-strong);
+  --color-focus: var(--sf-focus);
+  --color-primary: var(--sf-primary);
+  --color-primary-hover: var(--sf-primary-hover);
+  --color-primary-press: var(--sf-primary-press);
+  --color-on-primary: var(--sf-on-primary);
+  --color-disabled: var(--sf-disabled-bg);
+  --color-brand: var(--sf-brand);
+  --color-on-brand: var(--sf-on-brand);
+  --color-brand-plate: var(--sf-brand-plate);
+  --color-neutral-fg: var(--sf-neutral-fg);
+  --color-neutral-bg: var(--sf-neutral-bg);
+  --color-neutral-solid: var(--sf-neutral-solid);
+  --color-neutral-line: var(--sf-neutral-line);
+  --color-info-fg: var(--sf-info-fg);
+  --color-info-bg: var(--sf-info-bg);
+  --color-info-solid: var(--sf-info-solid);
+  --color-info-line: var(--sf-info-line);
+  --color-success-fg: var(--sf-success-fg);
+  --color-success-bg: var(--sf-success-bg);
+  --color-success-solid: var(--sf-success-solid);
+  --color-success-line: var(--sf-success-line);
+  --color-warning-fg: var(--sf-warning-fg);
+  --color-warning-bg: var(--sf-warning-bg);
+  --color-warning-solid: var(--sf-warning-solid);
+  --color-warning-line: var(--sf-warning-line);
+  --color-danger-fg: var(--sf-danger-fg);
+  --color-danger-bg: var(--sf-danger-bg);
+  --color-danger-solid: var(--sf-danger-solid);
+  --color-danger-line: var(--sf-danger-line);
+  --color-brand-fg: var(--sf-brand-fg);
+  --color-brand-bg: var(--sf-brand-bg);
+  --color-brand-solid: var(--sf-brand-solid);
+  --color-brand-line: var(--sf-brand-line);
+  --color-danger-hover: var(--sf-danger-hover);
+  --color-on-danger: var(--sf-on-danger);
+  --color-on-solid: var(--sf-on-solid);
+  --color-format-feed-fg: var(--sf-format-feed-fg);
+  --color-format-feed-bg: var(--sf-format-feed-bg);
+  --color-format-feed: var(--sf-format-feed);
+  --color-format-carrossel-fg: var(--sf-format-carrossel-fg);
+  --color-format-carrossel-bg: var(--sf-format-carrossel-bg);
+  --color-format-carrossel: var(--sf-format-carrossel);
+  --color-format-reels-fg: var(--sf-format-reels-fg);
+  --color-format-reels-bg: var(--sf-format-reels-bg);
+  --color-format-reels: var(--sf-format-reels);
+  --color-format-story-fg: var(--sf-format-story-fg);
+  --color-format-story-bg: var(--sf-format-story-bg);
+  --color-format-story: var(--sf-format-story);
+  --color-stage-sem-texto-fill: var(--sf-stage-sem-texto-fill);
+  --color-stage-sem-texto-on: var(--sf-stage-sem-texto-on);
+  --color-stage-sem-texto-solid: var(--sf-stage-sem-texto-solid);
+  --color-stage-sem-texto-text: var(--sf-stage-sem-texto-text);
+  --color-stage-texto-ok-fill: var(--sf-stage-texto-ok-fill);
+  --color-stage-texto-ok-on: var(--sf-stage-texto-ok-on);
+  --color-stage-texto-ok-solid: var(--sf-stage-texto-ok-solid);
+  --color-stage-texto-ok-text: var(--sf-stage-texto-ok-text);
+  --color-stage-em-aprovacao-fill: var(--sf-stage-em-aprovacao-fill);
+  --color-stage-em-aprovacao-on: var(--sf-stage-em-aprovacao-on);
+  --color-stage-em-aprovacao-solid: var(--sf-stage-em-aprovacao-solid);
+  --color-stage-em-aprovacao-text: var(--sf-stage-em-aprovacao-text);
+  --color-stage-tema-aprovado-fill: var(--sf-stage-tema-aprovado-fill);
+  --color-stage-tema-aprovado-on: var(--sf-stage-tema-aprovado-on);
+  --color-stage-tema-aprovado-solid: var(--sf-stage-tema-aprovado-solid);
+  --color-stage-tema-aprovado-text: var(--sf-stage-tema-aprovado-text);
+  --color-stage-post-aprovado-fill: var(--sf-stage-post-aprovado-fill);
+  --color-stage-post-aprovado-on: var(--sf-stage-post-aprovado-on);
+  --color-stage-post-aprovado-solid: var(--sf-stage-post-aprovado-solid);
+  --color-stage-post-aprovado-text: var(--sf-stage-post-aprovado-text);
+
+  --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-bricolage), var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --shadow-card: var(--sf-shadow-card);
+  --shadow-raised: var(--sf-shadow-raised);
+  --shadow-bar: var(--sf-shadow-bar);
+}
+
 @theme {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --radius-chip: 6px;
+  --radius-control: 8px;
+  --radius-card: 14px;
+  --radius-sheet: 24px;
+
+  --tracking-display: -0.025em;
+  --tracking-title: -0.02em;
+  --tracking-overline: 0.06em;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-* {
-  border-color: var(--color-border);
-}
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-html,
-body {
-  height: 100%;
-}
+/* ===================================================================== *
+ * Fim do bloco de tokens. Daqui para baixo: nenhum hex e nenhuma cor
+ * literal, só var(--sf-*) (critério 6 do S07).
+ * ===================================================================== */
 
-body {
-  background-color: var(--color-bg);
-  color: var(--color-text);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-  background-image:
-    radial-gradient(48rem 48rem at 100% -10%, rgba(139, 109, 255, 0.12), transparent 60%),
-    radial-gradient(42rem 42rem at -10% 110%, rgba(236, 72, 153, 0.08), transparent 55%);
-  background-attachment: fixed;
+/* ------------------------------------------------------------------ *
+ * Base — em @layer base para que os utilitários (border-line-strong,
+ * outline-offset-1…) sempre vençam.
+ * ------------------------------------------------------------------ */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--sf-line);
+  }
+
+  html {
+    /* evita o "salto" quando um Dialog trava a rolagem */
+    scrollbar-gutter: stable;
+    scrollbar-color: var(--sf-scroll-thumb) transparent;
+  }
+
+  body {
+    background-color: var(--sf-canvas);
+    color: var(--sf-fg);
+    /* fallback explícito: o global-error não tem as variáveis do next/font */
+    font-family: var(--font-dm-sans, system-ui), ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* todo h1 é display (tipografia c); utilitários de fonte ainda vencem */
+  h1 {
+    font-family: var(--font-bricolage, var(--font-dm-sans, system-ui)), ui-sans-serif, system-ui, sans-serif;
+  }
+
+  h1,
+  h2 {
+    text-wrap: balance;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--sf-focus);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--sf-selection-bg);
+    color: var(--sf-selection-fg);
+  }
 }
 
 /* ------------------------------------------------------------------ *
- * Component layer — lower priority than utilities so inline tweaks
- * (e.g. `!py-2`, `w-full`) still win.
+ * Componentes legados — mesmos nomes de antes, reescritos com tokens.
+ * Ficam em @layer components (prioridade menor que os utilitários,
+ * então ajustes como `w-full` continuam vencendo). Código novo usa os
+ * componentes Button/Field (S12).
  * ------------------------------------------------------------------ */
 @layer components {
   .bg-grid {
     background-image:
-      linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+      linear-gradient(to right, color-mix(in srgb, var(--sf-fg) 5%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in srgb, var(--sf-fg) 5%, transparent) 1px, transparent 1px);
     background-size: 44px 44px;
-    -webkit-mask-image: radial-gradient(ellipse 75% 55% at 50% 40%, #000 25%, transparent 75%);
-    mask-image: radial-gradient(ellipse 75% 55% at 50% 40%, #000 25%, transparent 75%);
-  }
-
-  .gradient-text {
-    background: linear-gradient(120deg, #c4b5fd, #a855f7 45%, #ec4899);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
+    -webkit-mask-image: radial-gradient(ellipse 75% 55% at 50% 40%, black 25%, transparent 75%);
+    mask-image: radial-gradient(ellipse 75% 55% at 50% 40%, black 25%, transparent 75%);
   }
 
   .card {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
-    border: 1px solid var(--color-border);
-    border-radius: 1rem;
-    box-shadow: var(--shadow-card);
+    background-color: var(--sf-surface);
+    border: 1px solid var(--sf-line);
+    border-radius: var(--radius-card);
+    box-shadow: var(--sf-shadow-card);
   }
 
   .glass-hover {
-    transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease,
-      box-shadow 0.2s ease;
+    transition: border-color var(--sf-dur-fast) ease;
   }
   .glass-hover:hover {
-    border-color: var(--color-border-strong);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
-    transform: translateY(-2px);
-    box-shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.9);
+    border-color: var(--sf-line-strong);
   }
 
+  /* = Button primary md (e.1) */
   .btn-primary {
-    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    font-weight: 500;
+    min-height: 2.75rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
     font-size: 0.875rem;
-    line-height: 1;
-    color: #fff;
-    border-radius: 0.7rem;
-    padding: 0.625rem 1.05rem;
-    background: linear-gradient(135deg, #8b6dff, #a855f7 55%, #d65bd6);
-    box-shadow: 0 6px 20px -6px rgba(139, 109, 255, 0.6),
-      inset 0 1px 0 rgba(255, 255, 255, 0.2);
-    transition: filter 0.18s ease, transform 0.1s ease, box-shadow 0.2s ease;
+    line-height: 1.25rem;
+    font-weight: 600;
     white-space: nowrap;
+    background-color: var(--sf-primary);
+    color: var(--sf-on-primary);
+    transition:
+      color var(--sf-dur-fast) ease,
+      background-color var(--sf-dur-fast) ease,
+      border-color var(--sf-dur-fast) ease;
   }
   .btn-primary:hover {
-    filter: brightness(1.08) saturate(1.05);
-    box-shadow: 0 10px 26px -6px rgba(139, 109, 255, 0.75),
-      inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    background-color: var(--sf-primary-hover);
   }
   .btn-primary:active {
-    transform: translateY(1px);
+    background-color: var(--sf-primary-press);
   }
   .btn-primary:disabled {
-    opacity: 0.5;
+    background-color: var(--sf-disabled-bg);
+    color: var(--sf-fg-disabled);
     cursor: not-allowed;
-    box-shadow: none;
   }
 
+  /* = Button secondary md (e.1) */
   .btn-ghost {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    font-weight: 500;
+    min-height: 2.75rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--sf-line-strong);
+    border-radius: var(--radius-control);
     font-size: 0.875rem;
-    line-height: 1;
-    color: var(--color-text-muted);
-    border-radius: 0.7rem;
-    padding: 0.625rem 1.05rem;
-    border: 1px solid var(--color-border);
-    background: rgba(255, 255, 255, 0.02);
-    transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+    line-height: 1.25rem;
+    font-weight: 600;
     white-space: nowrap;
+    background-color: var(--sf-surface);
+    color: var(--sf-fg);
+    transition:
+      color var(--sf-dur-fast) ease,
+      background-color var(--sf-dur-fast) ease,
+      border-color var(--sf-dur-fast) ease;
   }
   .btn-ghost:hover {
-    color: var(--color-text);
-    border-color: var(--color-border-strong);
-    background: rgba(255, 255, 255, 0.05);
+    background-color: var(--sf-hover);
+  }
+  .btn-ghost:active {
+    background-color: var(--sf-press);
+  }
+  .btn-ghost:disabled {
+    background-color: var(--sf-disabled-bg);
+    color: var(--sf-fg-disabled);
+    border-color: var(--sf-line);
+    cursor: not-allowed;
   }
 
-  .input {
+  /* Contêiner de página (d): substitui `p-8 max-w-6xl mx-auto` */
+  .page {
     width: 100%;
-    border-radius: 0.7rem;
-    border: 1px solid var(--color-border);
-    background: rgba(255, 255, 255, 0.025);
-    padding: 0.625rem 0.9rem;
-    font-size: 0.875rem;
-    color: var(--color-text);
-    transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    max-width: 72rem;
+    margin-inline: auto;
+    padding: 1.5rem 1rem;
   }
-  .input::placeholder {
-    color: var(--color-text-faint);
+  .page--narrow {
+    max-width: 48rem;
   }
-  .input:focus {
-    outline: none;
-    border-color: rgba(139, 109, 255, 0.65);
-    box-shadow: 0 0 0 3px rgba(139, 109, 255, 0.18);
-    background: rgba(255, 255, 255, 0.04);
-  }
-  select.input option {
-    background: #161622;
-    color: var(--color-text);
+  .page--wide {
+    max-width: none;
   }
 
-  .label {
-    display: block;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: var(--color-text-muted);
-    margin-bottom: 0.4rem;
+  .skeleton {
+    background-color: var(--sf-neutral-bg);
+    border-radius: 8px;
+    animation: sf-pulse 1.4s ease-in-out infinite;
+  }
+
+  /* Gaveta do menu (< md): o painel entra pela esquerda; o fundo esmaece */
+  .sf-drawer[open] .sf-drawer-panel {
+    animation: sf-drawer-in var(--sf-dur-slow) var(--sf-ease-out) backwards;
+  }
+  .sf-drawer[open]::backdrop {
+    animation: sf-fade-in var(--sf-dur-base) var(--sf-ease-out) backwards;
+  }
+
+  @media (min-width: 40rem) {
+    .btn-primary,
+    .btn-ghost {
+      min-height: 2.5rem;
+    }
+    .page {
+      padding-inline: 1.5rem;
+    }
+  }
+
+  @media (min-width: 64rem) {
+    .page {
+      padding: 2rem;
+    }
   }
 }
 
 /* ------------------------------------------------------------------ *
- * Scrollbar + animations
+ * Barra de rolagem (WebKit; os demais usam scrollbar-color no html)
  * ------------------------------------------------------------------ */
 ::-webkit-scrollbar {
   width: 11px;
@@ -191,12 +628,15 @@ body {
 ::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 9999px;
-  box-shadow: inset 0 0 0 10px #2a2a3c;
+  box-shadow: inset 0 0 0 10px var(--sf-scroll-thumb);
 }
 ::-webkit-scrollbar-thumb:hover {
-  box-shadow: inset 0 0 0 10px #3a3a52;
+  box-shadow: inset 0 0 0 10px var(--sf-line-strong);
 }
 
+/* ------------------------------------------------------------------ *
+ * Animações
+ * ------------------------------------------------------------------ */
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -214,11 +654,32 @@ body {
   animation: fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
+@keyframes sf-pulse {
+  50% {
+    opacity: 0.55;
   }
-  100% {
-    background-position: 200% 0;
+}
+
+@keyframes sf-drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes sf-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Movimento reduzido: sem deslizar, sem pulsar, rolagem instantânea */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

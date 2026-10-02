@@ -4,6 +4,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Icon } from "@/components/Icons";
+import { Button, buttonClasses } from "@/components/Button";
+import { Callout } from "@/components/Callout";
+import { ConfirmDialog } from "@/components/Dialog";
 import { Toast, type ToastState } from "@/components/Toast";
 
 type Props = {
@@ -11,31 +14,60 @@ type Props = {
   overdue: number;
   exhausted: number;
   failed: number;
+  /** presos que voltam à fila (cliente com postagem pela agência) */
+  stuckRequeueable: number;
+  /** com falha que voltam à fila (cliente com postagem pela agência) */
+  failedRequeueable: number;
   lastPublishedLabel: string | null;
   healthy: boolean;
 };
+
+type Scope = "stuck" | "failed";
+
+const posts = (n: number) => `${n} ${n === 1 ? "post" : "posts"}`;
+
+/** Link solto (fora de frase) com alvo ≥ 40 px (DESIGN, A11y "Alvos"). */
+const LOOSE_LINK_SM = buttonClasses({ variant: "ghost", size: "sm" });
 
 /**
  * Saúde da fila de publicação no dashboard.
  *
  * A fila travando em silêncio era o bug mais caro: posts ficavam presos em
- * "publishing" e só apareciam depois, como "Falharam". Agora o travamento é
- * visível na primeira tela, com a ação de destravar ao lado.
+ * "publishing" e só apareciam depois, como "Falharam". O travamento fica
+ * visível na primeira tela, com a ação de destravar ao lado — sempre depois de
+ * um ConfirmDialog com o resumo (A-002): nada é enviado antes de confirmar.
+ * O servidor pula os clientes só produção (S13); o resumo já os desconta.
  */
 export default function QueueHealthCard({
   stuck,
   overdue,
   exhausted,
   failed,
+  stuckRequeueable,
+  failedRequeueable,
   lastPublishedLabel,
   healthy,
 }: Props) {
   const router = useRouter();
-  const [busy, setBusy] = useState("");
+  const [confirm, setConfirm] = useState<Scope | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
 
-  async function requeue(scope: "stuck" | "failed") {
-    setBusy(scope);
+  function openConfirm(scope: Scope) {
+    setError(null);
+    setConfirm(scope);
+  }
+
+  function closeConfirm() {
+    if (busy) return;
+    setConfirm(null);
+    setError(null);
+  }
+
+  async function requeue(scope: Scope) {
+    setBusy(true);
+    setError(null);
     try {
       const r = await fetch("/api/posts/retry", {
         method: "POST",
@@ -44,143 +76,187 @@ export default function QueueHealthCard({
       });
       const d = await r.json().catch(() => null);
       if (!r.ok) {
-        setToast({
-          kind: "error",
-          text: typeof d?.error === "string" ? d.error : "Não foi possível recolocar na fila.",
-        });
+        // erro fica DENTRO do diálogo (nunca Toast com Dialog aberto)
+        setError(
+          r.status === 401
+            ? "Sua sessão expirou. Entre de novo para continuar."
+            : typeof d?.error === "string"
+              ? d.error
+              : "Não foi possível recolocar os posts na fila. Tente de novo.",
+        );
         return;
       }
-      setToast({
-        kind: "success",
-        text:
-          d.requeued > 0
-            ? `${d.requeued} post(s) de volta na fila — publicação em ~2 minutos.`
-            : "Nada para recolocar na fila.",
-      });
+      const requeued = typeof d?.requeued === "number" ? d.requeued : 0;
+      const skipped = typeof d?.skippedNoPublish === "number" ? d.skippedNoPublish : 0;
+      const skippedText = skipped > 0 ? ` ${posts(skipped)} de cliente só produção ficou de fora.` : "";
+      setConfirm(null);
+      setToast(
+        requeued > 0
+          ? { kind: "success", text: `${posts(requeued)} de volta na fila — publicação em ~2 min.${skippedText}` }
+          : { kind: "info", text: `Nenhum post voltou à fila: a lista já tinha mudado.${skippedText}` },
+      );
       router.refresh();
     } catch {
-      setToast({ kind: "error", text: "Falha de conexão. Tente novamente." });
+      setError("Falha de conexão. Verifique a internet e tente de novo.");
     } finally {
-      setBusy("");
+      setBusy(false);
     }
   }
 
   if (healthy && failed === 0) {
     return (
       <>
-        <div className="mb-6 flex items-center gap-3 rounded-xl px-4 py-3 bg-emerald-500/[0.06] border border-emerald-500/20">
-          <Icon.check className="w-4 h-4 text-emerald-400 shrink-0" />
-          <p className="text-sm text-emerald-200/90">
-            Fila de publicação saudável.
-            {lastPublishedLabel && (
-              <span className="text-[var(--color-text-faint)]">
-                {" "}
-                Última publicação: {lastPublishedLabel}.
-              </span>
-            )}
-          </p>
-        </div>
+        <Callout tone="success" title="Fila de publicação saudável" className="mb-6">
+          {lastPublishedLabel
+            ? `Última publicação com sucesso: ${lastPublishedLabel}.`
+            : "Nenhuma publicação com sucesso registrada ainda."}
+        </Callout>
         <Toast toast={toast} onClose={() => setToast(null)} />
       </>
     );
   }
 
+  const stuckSkipped = Math.max(0, stuck - stuckRequeueable);
+  const failedSkipped = Math.max(0, failed - failedRequeueable);
+  const skippedLine = (n: number) =>
+    `${posts(n)} de cliente só produção ${n === 1 ? "fica" : "ficam"} de fora: a agência não publica para ${n === 1 ? "ele" : "eles"}.`;
+
+  const dialog =
+    confirm === "stuck"
+      ? {
+          title: `Destravar ${posts(stuckRequeueable)} ${stuckRequeueable === 1 ? "preso" : "presos"}?`,
+          description:
+            stuckRequeueable === 1
+              ? "Ele está em “Publicando” há mais de 20 minutos."
+              : "Eles estão em “Publicando” há mais de 20 minutos.",
+          consequences: [
+            `${posts(stuckRequeueable)} ${stuckRequeueable === 1 ? "volta" : "voltam"} à fila e ${stuckRequeueable === 1 ? "será publicado" : "serão publicados"} em ~2 min nas redes dos clientes.`,
+            "As tentativas automáticas recomeçam do zero.",
+            ...(stuckSkipped > 0 ? [skippedLine(stuckSkipped)] : []),
+          ],
+          confirmLabel: `Destravar ${posts(stuckRequeueable)}`,
+          busyLabel: "Destravando…",
+        }
+      : {
+          title: `Reenviar ${posts(failedRequeueable)} com falha?`,
+          description:
+            exhausted > 0 ? "Inclui os que já esgotaram as tentativas automáticas." : undefined,
+          consequences: [
+            `${posts(failedRequeueable)} ${failedRequeueable === 1 ? "volta" : "voltam"} à fila e ${failedRequeueable === 1 ? "será publicado" : "serão publicados"} em ~2 min nas redes dos clientes.`,
+            "As tentativas automáticas recomeçam do zero e o último erro é apagado.",
+            ...(failedSkipped > 0 ? [skippedLine(failedSkipped)] : []),
+          ],
+          confirmLabel: `Reenviar ${posts(failedRequeueable)}`,
+          busyLabel: "Reenviando…",
+        };
+
   return (
     <>
-      <div
-        className={`mb-6 card p-5 ${
-          healthy ? "" : "border-red-500/25 bg-red-500/[0.04]"
-        }`}
+      <section
+        aria-labelledby="fila-titulo"
+        className={`card mb-6 p-4 sm:p-5 ${healthy ? "border-warning-line" : "border-danger-line"}`}
       >
-        <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-          <div className="flex items-center gap-2.5">
-            <Icon.alert
-              className={`w-5 h-5 ${healthy ? "text-amber-400" : "text-red-400"}`}
-            />
-            <div>
-              <h2 className="font-semibold text-sm">
-                {healthy ? "Fila com pendências" : "Fila de publicação travada"}
-              </h2>
-              <p className="text-xs text-[var(--color-text-faint)]">
-                {lastPublishedLabel
-                  ? `Última publicação com sucesso: ${lastPublishedLabel}`
-                  : "Nenhuma publicação bem-sucedida registrada ainda"}
-              </p>
-            </div>
+        <div className="mb-4 flex items-start gap-3">
+          <span aria-hidden="true" className={`mt-0.5 inline-flex shrink-0 ${healthy ? "text-warning-solid" : "text-danger-solid"}`}>
+            <Icon.alert className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 id="fila-titulo" className="text-base font-semibold text-fg">
+              {healthy ? "Fila com pendências" : "Fila de publicação travada"}
+            </h2>
+            <p className="text-sm text-fg-muted">
+              {lastPublishedLabel
+                ? `Última publicação com sucesso: ${lastPublishedLabel}`
+                : "Nenhuma publicação com sucesso registrada ainda"}
+            </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <Metric
-            label={`Presos publicando`}
-            value={stuck}
-            tone={stuck > 0 ? "bad" : "ok"}
-            hint="há mais de 20 min"
-          />
-          <Metric
-            label="Agendados atrasados"
-            value={overdue}
-            tone={overdue > 0 ? "warn" : "ok"}
-            hint="passaram da hora"
-          />
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Metric label="Presos publicando" value={stuck} tone="bad" hint="há mais de 20 min" />
+          <Metric label="Agendados atrasados" value={overdue} tone="warn" hint="passaram da hora" />
           <Metric
             label="Tentativas esgotadas"
             value={exhausted}
-            tone={exhausted > 0 ? "bad" : "ok"}
-            hint="o retry desistiu"
+            tone="bad"
+            hint="sem novas tentativas automáticas"
           />
-          <Metric
-            label="Falharam"
-            value={failed}
-            tone={failed > 0 ? "warn" : "ok"}
-            hint="total"
-          />
-        </div>
+          <Metric label="Falharam" value={failed} tone="warn" hint="total" />
+        </dl>
 
-        <div className="flex items-center gap-2 flex-wrap mt-4">
-          {stuck > 0 && (
-            <button
-              onClick={() => requeue("stuck")}
-              disabled={busy !== ""}
-              className="btn-primary !py-2 text-xs"
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {stuckRequeueable > 0 && (
+            <Button
+              variant="primary"
+              size="sm"
+              leadingIcon={<Icon.refresh />}
+              onClick={() => openConfirm("stuck")}
             >
-              <Icon.refresh className="w-3.5 h-3.5" />
-              {busy === "stuck" ? "Destravando..." : `Destravar ${stuck} preso(s)`}
-            </button>
+              {`Destravar ${posts(stuckRequeueable)} ${stuckRequeueable === 1 ? "preso" : "presos"}`}
+            </Button>
+          )}
+          {failedRequeueable > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              leadingIcon={<Icon.refresh />}
+              onClick={() => openConfirm("failed")}
+            >
+              {`Reenviar todos (${failedRequeueable})`}
+            </Button>
           )}
           {failed > 0 && (
-            <>
-              <button
-                onClick={() => requeue("failed")}
-                disabled={busy !== ""}
-                className="btn-ghost !py-2 text-xs"
-              >
-                <Icon.refresh className="w-3.5 h-3.5" />
-                {busy === "failed" ? "Reenviando..." : `Reenviar todos (${failed})`}
-              </button>
-              <Link href="/posts?status=failed" className="btn-ghost !py-2 text-xs">
-                Ver os que falharam
-              </Link>
-            </>
+            <Link href="/posts?status=failed" className={LOOSE_LINK_SM}>
+              Ver os que falharam
+            </Link>
           )}
           {overdue > 0 && stuck === 0 && failed === 0 && (
-            <Link href="/posts?status=scheduled" className="btn-ghost !py-2 text-xs">
+            <Link href="/posts?status=scheduled" className={LOOSE_LINK_SM}>
               Ver agendados
             </Link>
           )}
         </div>
 
-        {overdue > 0 && (
-          <p className="text-xs text-amber-200/80 mt-3">
-            {overdue} post(s) passaram do horário e continuam “Agendado” — sinal de que o WF-01 do
-            n8n pode não estar executando.
+        {(stuckSkipped > 0 || failedSkipped > 0) && (
+          <p className="mt-3 text-sm text-fg-muted">
+            {posts(stuckSkipped + failedSkipped)} com problema{" "}
+            {stuckSkipped + failedSkipped === 1 ? "é" : "são"} de cliente só produção e não{" "}
+            {stuckSkipped + failedSkipped === 1 ? "volta" : "voltam"} à fila.
           </p>
         )}
-      </div>
+
+        {overdue > 0 && (
+          <p className="mt-3 text-sm text-warning-fg">
+            {posts(overdue)} {overdue === 1 ? "passou" : "passaram"} do horário e{" "}
+            {overdue === 1 ? "continua" : "continuam"} “Agendado”: sinal de que o publicador automático pode
+            não estar rodando.
+          </p>
+        )}
+      </section>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={dialog.title}
+        description={dialog.description}
+        consequences={dialog.consequences}
+        confirmLabel={dialog.confirmLabel}
+        busy={busy}
+        busyLabel={dialog.busyLabel}
+        error={error}
+        onConfirm={() => confirm && requeue(confirm)}
+        onCancel={closeConfirm}
+      />
       <Toast toast={toast} onClose={() => setToast(null)} />
     </>
   );
 }
+
+/* Mapas estáticos de classes (H-03). Zero fica apagado; > 0 ganha o tom. */
+const METRIC_VALUE = {
+  ok: "text-fg-faint",
+  warn: "text-warning-fg",
+  bad: "text-danger-fg",
+} as const;
 
 function Metric({
   label,
@@ -190,22 +266,22 @@ function Metric({
 }: {
   label: string;
   value: number;
-  tone: "ok" | "warn" | "bad";
+  tone: "warn" | "bad";
   hint: string;
 }) {
-  const color =
-    value === 0
-      ? "text-[var(--color-text-faint)]"
-      : tone === "bad"
-        ? "text-red-300"
-        : tone === "warn"
-          ? "text-amber-300"
-          : "text-emerald-300";
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-white/[0.02] px-3 py-2.5">
-      <p className={`text-2xl font-semibold tabular-nums leading-none ${color}`}>{value}</p>
-      <p className="text-[11px] text-[var(--color-text-muted)] mt-1.5 leading-tight">{label}</p>
-      <p className="text-[10px] text-[var(--color-text-faint)] leading-tight">{hint}</p>
+    <div className="flex flex-col rounded-control border border-line bg-sunken px-3 py-2.5">
+      <dt className="order-2 mt-1.5 text-xs font-medium leading-tight text-fg-muted">
+        {label}
+        <span className="block font-normal text-fg-faint">{hint}</span>
+      </dt>
+      <dd
+        className={`order-1 font-display text-2xl font-semibold leading-none tracking-display tabular-nums ${
+          METRIC_VALUE[value === 0 ? "ok" : tone]
+        }`}
+      >
+        {value}
+      </dd>
     </div>
   );
 }

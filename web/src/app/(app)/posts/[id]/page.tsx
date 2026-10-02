@@ -1,56 +1,116 @@
-import { prisma } from "@/lib/prisma";
+import type { Metadata } from "next";
+import { cache } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { PageHeader, StatusBadge } from "@/components/ui";
+import { prisma } from "@/lib/prisma";
+import { FormatBadge, PageHeader, PlatformChip, StatusBadge, ToneBadge } from "@/components/ui";
+import { Avatar } from "@/components/Avatar";
+import { buttonClasses } from "@/components/Button";
+import { Callout } from "@/components/Callout";
 import { Icon } from "@/components/Icons";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
+import { capitalizeFirst, formatDate, formatDateTime, TZ } from "@/lib/format-date";
+import { PENDING_KIND, metaOf } from "@/lib/status-meta";
+import { toUserMessage } from "@/lib/user-facing-error";
+import { uuidString } from "@/lib/validators";
+import RetryPostButton from "../../RetryPostButton";
 import ApprovePostButton from "./ApprovePostButton";
 import GenerateArtButton from "./GenerateArtButton";
 
 export const dynamic = "force-dynamic";
 
-const TZ = "America/Sao_Paulo";
+type Props = { params: Promise<{ id: string }> };
 
-export default async function PostDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+/** Tema do post para o título da aba (memorizado no mesmo render da página). */
+const loadPostTheme = cache(async (id: string) =>
+  uuidString.safeParse(id).success
+    ? prisma.post.findUnique({ where: { id }, select: { theme: true } })
+    : null,
+);
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
+  const post = await loadPostTheme(id);
+  if (!post) return { title: "Post não encontrado" };
+  const theme = post.theme?.trim();
+  return { title: theme ? (theme.length > 70 ? `${theme.slice(0, 69)}…` : theme) : "Post sem título" };
+}
+
+/** Proporção da arte por formato (A-008): feed e carrossel 4:5; story e reels 9:16. */
+const RATIO: Record<string, string> = {
+  feed: "aspect-4/5",
+  carrossel: "aspect-4/5",
+  story: "aspect-9/16",
+  reels: "aspect-9/16",
+};
+
+/** Ordem de exibição das legendas por rede (Facebook e Instagram costumam ter o mesmo texto). */
+const CAPTION_ORDER = ["facebook", "instagram", "linkedin"];
+
+/** Texto do WF-03 para post destravado — o antigo ("preso em publishing") e o atual. */
+const STUCK_ERROR = /^destravado:\s*(preso em publishing|travado ao publicar) por 20\+ ?min\.?$/i;
+
+const PUBLISH_ERROR_FALLBACK = "A publicação falhou por um erro técnico da rede social.";
+
+/**
+ * Erro de publicação legível (A-013, A-030): sem o jargão "publishing" do WF-03,
+ * também nas linhas antigas, e sem detalhe técnico (URL, JSON, variável…).
+ */
+function humanizeError(raw: string | null | undefined): string | null {
+  const text = raw?.trim();
+  if (!text) return null;
+  if (STUCK_ERROR.test(text)) return "Ficou travado ao publicar por mais de 20 minutos.";
+  const plain = text.replace(/preso em publishing/gi, "travado ao publicar");
+  return capitalizeFirst(toUserMessage(plain, PUBLISH_ERROR_FALLBACK));
+}
+
+function plural(n: number, one: string, many: string) {
+  return n === 1 ? one : many;
+}
+
+const platformLabel = (p: string) => BRAND[p]?.label ?? p;
+
+export default async function PostDetailPage({ params }: Props) {
+  const { id } = await params;
+  // id que não é uuid faria o Prisma lançar: vira 404
+  if (!uuidString.safeParse(id).success) notFound();
 
   const post = await prisma.post.findUnique({
     where: { id },
     include: {
-      client: { select: { id: true, name: true, tier: true, plan: true } },
+      client: { select: { id: true, name: true, tier: true, plan: true, agencyPublishes: true } },
       publications: { orderBy: { publishedAt: "desc" } },
+      writer: { select: { id: true, name: true } },
+      pendingItems: {
+        where: { resolvedAt: null },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        include: { responsible: { select: { name: true } } },
+      },
     },
   });
 
   if (!post) notFound();
 
-  const editable =
-    post.status === "scheduled" || post.status === "failed" || post.status === "draft";
+  const publishes = post.client.agencyPublishes;
+  const editable = post.status === "scheduled" || post.status === "failed" || post.status === "draft";
   const isDraft = post.status === "draft";
+  const isFailed = post.status === "failed";
 
+  // Legenda por rede: captions[rede] ?? caption (o legado; N-18). Redes com o
+  // mesmo texto viram um bloco só ("Facebook + Instagram").
   const capMap = (post.captions as Record<string, string> | null) ?? {};
-  // FB+IG usam legenda única no sistema: quando o texto é o mesmo, mostra um
-  // bloco só ("Facebook + Instagram") em vez de repetir a legenda duas vezes.
-  const captionEntries: { platforms: string[]; label: string; text: string }[] = [];
-  const igText = post.targets.includes("instagram") ? (capMap.instagram ?? "").trim() : "";
-  const fbText = post.targets.includes("facebook") ? (capMap.facebook ?? "").trim() : "";
-  if (igText && fbText && igText === fbText) {
-    captionEntries.push({
-      platforms: ["facebook", "instagram"],
-      label: "Facebook + Instagram",
-      text: igText,
-    });
-  } else {
-    if (fbText) captionEntries.push({ platforms: ["facebook"], label: BRAND.facebook?.label ?? "Facebook", text: fbText });
-    if (igText) captionEntries.push({ platforms: ["instagram"], label: BRAND.instagram?.label ?? "Instagram", text: igText });
-  }
-  const liText = post.targets.includes("linkedin") ? (capMap.linkedin ?? "").trim() : "";
-  if (liText) {
-    captionEntries.push({ platforms: ["linkedin"], label: BRAND.linkedin?.label ?? "LinkedIn", text: liText });
+  const legacyCaption = (post.caption ?? "").trim();
+  const orderedTargets = [
+    ...CAPTION_ORDER.filter((p) => post.targets.includes(p)),
+    ...post.targets.filter((p) => !CAPTION_ORDER.includes(p)),
+  ];
+  const captionGroups: { platforms: string[]; text: string }[] = [];
+  for (const p of orderedTargets) {
+    const text = (capMap[p] ?? "").trim() || legacyCaption;
+    if (!text) continue;
+    const same = captionGroups.find((g) => g.text === text);
+    if (same) same.platforms.push(p);
+    else captionGroups.push({ platforms: [p], text });
   }
 
   const slides = Array.isArray(post.slides)
@@ -66,234 +126,360 @@ export default async function PostDetailPage({
       : [];
   const isVideo = (it: { url: string; type?: string }) =>
     it.type === "video" || /\.(mp4|mov|webm|m4v)$/i.test(it.url);
-  const when = new Intl.DateTimeFormat("pt-BR", {
+  const ratio = RATIO[post.format] ?? "aspect-4/5";
+  const frameWidth = ratio === "aspect-9/16" ? "max-w-xs" : "max-w-md";
+  const mediaAlt = post.theme ? `Arte do post: ${post.theme}` : "Arte do post";
+
+  // "sexta-feira, 4 de setembro de 2026 às 12:45": só a 1ª letra maiúscula (A-019)
+  const whenText = new Intl.DateTimeFormat("pt-BR", {
     timeZone: TZ,
     dateStyle: "full",
     timeStyle: "short",
   }).format(post.scheduledAt);
 
+  const lastError = humanizeError(post.lastError);
+  const showFailure = isFailed || (post.retryCount > 0 && !!lastError);
+  // reenvio só para cliente que publica (A-013): o servidor também pula os de só produção
+  const canRetry = isFailed && publishes;
+
   return (
-    <div className="p-8 max-w-6xl mx-auto animate-fade-up">
+    <div className="page animate-fade-up">
       <PageHeader
-        title={post.theme || "Post"}
-        subtitle={`${(post.format ?? "feed").replace(/^\w/, (c) => c.toUpperCase())}${mediaList.length > 1 ? ` · ${mediaList.length} mídias` : ""}`}
+        title={post.theme?.trim() || "Post sem título"}
+        subtitle={mediaList.length > 1 ? `${mediaList.length} mídias` : undefined}
         back="/posts"
+        backLabel="Voltar para Posts"
+        badges={
+          <>
+            <StatusBadge status={post.status} size="md" />
+            <FormatBadge format={post.format} size="md" />
+          </>
+        }
         action={
           editable && (
-            <div className="flex items-center gap-2">
-              <Link href={`/posts/${post.id}/edit`} className="btn-ghost">
-                <Icon.edit className="w-4 h-4" />
+            <>
+              <Link href={`/posts/${post.id}/edit`} className={buttonClasses({ variant: "secondary" })}>
+                <Icon.edit className="size-4.5" />
                 Editar
               </Link>
               {post.client.tier === "basica" && <GenerateArtButton postId={post.id} />}
-              {isDraft && (
+              {isDraft && publishes && (
                 <ApprovePostButton
                   postId={post.id}
-                  hasMedia={!!post.mediaUrl || mediaList.length > 0}
+                  hasMedia={mediaList.length > 0}
                   needsClientApproval={post.client.plan === "aprovacao_cliente"}
                   clientName={post.client.name}
                   scheduleId={post.scheduleId}
+                  scheduledAt={post.scheduledAt.toISOString()}
+                  whenText={whenText}
+                  targets={post.targets}
                 />
               )}
-            </div>
+            </>
           )
         }
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Media preview */}
-        <div className="lg:col-span-3">
+      {!publishes && (
+        <Callout tone="info" title="Este cliente não tem postagem pela agência." className="mb-6">
+          A equipe produz o conteúdo, mas o post fica como rascunho: não é agendado nem publicado por aqui.
+        </Callout>
+      )}
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+        {/* Arte + legenda */}
+        <section aria-label="Arte e legenda" className="lg:col-span-3">
           <div className="card overflow-hidden">
-            {mediaList.length === 0 && post.status === "published" && post.mediaThumb ? (
-              <div className="relative aspect-square bg-black/40">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={post.mediaThumb}
-                  alt="Lembrança da publicação"
-                  className="w-full h-full object-cover"
-                />
-                <span className="absolute bottom-3 left-3 text-[11px] font-medium text-white/90 bg-black/60 backdrop-blur rounded-full px-2.5 py-1">
-                  Lembrança — arquivo original removido após 30 dias
-                </span>
-              </div>
-            ) : mediaList.length === 0 && post.status === "published" ? (
-              <div className="aspect-square bg-black/40 flex items-center justify-center">
-                <div className="text-center text-[var(--color-text-faint)] p-8">
-                  <Icon.check className="w-8 h-8 mx-auto mb-2 text-emerald-400/60" />
-                  <p className="text-sm">Publicado — arquivo removido após 30 dias</p>
+            <div className="bg-sunken p-3 sm:p-6">
+              {mediaList.length === 0 ? (
+                <div className={`relative mx-auto w-full ${frameWidth} ${ratio} overflow-hidden rounded-control`}>
+                  {post.status === "published" && post.mediaThumb ? (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={post.mediaThumb}
+                        alt={`Lembrança da publicação: ${post.theme ?? "post"}`}
+                        className="h-full w-full object-contain"
+                      />
+                      <span className="absolute bottom-3 left-3 right-3 w-fit rounded-full border border-line bg-raised px-2.5 py-1 text-xs font-medium text-fg shadow-card">
+                        Lembrança: o arquivo original foi removido após 30 dias
+                      </span>
+                    </>
+                  ) : (
+                    <div className="grid h-full place-items-center rounded-control border border-dashed border-line-strong bg-surface p-6 text-center">
+                      <div>
+                        <span aria-hidden="true" className="mx-auto mb-2 inline-flex size-8 text-fg-muted [&>svg]:size-full">
+                          {post.status === "published" ? <Icon.check /> : <Icon.alert />}
+                        </span>
+                        <p className="text-sm font-medium text-fg">
+                          {post.status === "published" ? "Publicado" : "Sem arte"}
+                        </p>
+                        <p className="mt-1 text-sm text-fg-muted">
+                          {post.status === "published"
+                            ? "O arquivo foi removido após 30 dias."
+                            : publishes
+                              ? "Sem mídia, a publicação falha no Instagram e no Facebook."
+                              : "Adicione a arte quando ela ficar pronta."}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ) : mediaList.length === 0 ? (
-              <div className="aspect-square bg-black/40 flex items-center justify-center">
-                <div className="text-center text-[var(--color-text-faint)] p-8">
-                  <Icon.alert className="w-8 h-8 mx-auto mb-2" />
-                  <p className="text-sm">Sem mídia definida</p>
+              ) : mediaList.length === 1 ? (
+                <div className={`relative mx-auto w-full ${frameWidth} ${ratio} overflow-hidden rounded-control`}>
+                  {isVideo(mediaList[0]) ? (
+                    <video
+                      src={mediaList[0].url}
+                      controls
+                      aria-label={mediaAlt}
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={mediaList[0].url} alt={mediaAlt} className="h-full w-full object-contain" />
+                  )}
                 </div>
-              </div>
-            ) : mediaList.length === 1 ? (
-              <div className="aspect-square bg-black/40 flex items-center justify-center">
-                {isVideo(mediaList[0]) ? (
-                  <video src={mediaList[0].url} controls className="w-full h-full object-contain" />
-                ) : (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={mediaList[0].url} alt={post.theme ?? "Mídia"} className="w-full h-full object-cover" />
-                )}
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-1 bg-black/40 p-1">
-                {mediaList.map((it, i) => (
-                  <div key={i} className="relative aspect-square">
-                    <span className="absolute top-1 left-1 z-10 text-[10px] font-bold bg-black/60 text-white rounded px-1.5 py-0.5">
-                      {i + 1}
-                    </span>
-                    {isVideo(it) ? (
-                      <video src={it.url} controls className="w-full h-full object-cover rounded" />
-                    ) : (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={it.url} alt={`Mídia ${i + 1}`} className="w-full h-full object-cover rounded" />
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            {captionEntries.length > 0 ? (
-              <div className="p-5 border-t border-[var(--color-border)] space-y-4">
-                {captionEntries.map((e) => (
-                  <div key={e.label}>
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="flex items-center gap-1">
-                        {e.platforms.map((p) => (
+              ) : (
+                <ol aria-label="Mídias do carrossel" className="grid grid-cols-2 gap-2">
+                  {mediaList.map((it, i) => (
+                    <li key={i} className={`relative ${ratio} overflow-hidden rounded-control bg-surface`}>
+                      <span className="absolute left-2 top-2 z-10 rounded-chip border border-line bg-raised px-1.5 text-xs font-semibold text-fg shadow-card">
+                        {i + 1}
+                      </span>
+                      {isVideo(it) ? (
+                        <video src={it.url} controls aria-label={`Mídia ${i + 1}`} className="h-full w-full object-contain" />
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={it.url} alt={`Mídia ${i + 1}`} className="h-full w-full object-contain" />
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+
+            <div className="space-y-4 border-t border-line p-4 sm:p-5">
+              {captionGroups.length === 0 ? (
+                <p className="text-sm text-fg-muted">Sem legenda ainda.</p>
+              ) : (
+                captionGroups.map((g) => (
+                  <div key={g.platforms.join("+")}>
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <span aria-hidden="true" className="flex items-center gap-1">
+                        {g.platforms.map((p) => (
                           <BrandBadge key={p} platform={p} size={20} />
                         ))}
                       </span>
-                      <p className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider">
-                        {e.label}
-                      </p>
+                      <h2 className="text-xs font-semibold uppercase tracking-overline text-fg-muted">
+                        Legenda · {g.platforms.map(platformLabel).join(" + ")}
+                      </h2>
                     </div>
-                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{e.text}</p>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{g.text}</p>
                   </div>
-                ))}
-              </div>
-            ) : (
-              post.caption && (
-                <div className="p-5 border-t border-[var(--color-border)]">
-                  <p className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider mb-2">
-                    Legenda
-                  </p>
-                  <p className="text-sm whitespace-pre-wrap leading-relaxed">{post.caption}</p>
-                </div>
-              )
-            )}
+                ))
+              )}
+            </div>
           </div>
-        </div>
+        </section>
 
-        {/* Meta */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="card p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-[var(--color-text-muted)]">Status</span>
-              <StatusBadge status={post.status} />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-[var(--color-text-muted)]">Cliente</span>
-              <Link
-                href={`/clients/${post.client.id}`}
-                className="text-sm font-medium hover:text-[var(--color-accent)]"
+        {/* Dados do post */}
+        <div className="space-y-4 lg:col-span-2">
+          <section aria-label="Dados do post" className="card p-4 sm:p-5">
+            <dl className="grid gap-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <dt className="text-fg-muted">Status</dt>
+                <dd>
+                  <StatusBadge status={post.status} />
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <dt className="text-fg-muted">Cliente</dt>
+                <dd className="min-w-0 text-right">
+                  <Link
+                    href={`/clients/${post.client.id}`}
+                    className="-my-3 inline-flex min-h-11 min-w-11 items-center justify-end py-3 font-medium text-link underline-offset-2 hover:text-link-hover hover:underline sm:-my-2.5 sm:min-h-10 sm:min-w-10 sm:py-2.5"
+                  >
+                    {post.client.name}
+                  </Link>
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <dt className="text-fg-muted">Redatora</dt>
+                <dd className="flex min-w-0 items-center gap-2">
+                  {post.writer ? (
+                    <>
+                      <Avatar name={post.writer.name} size="xs" />
+                      <span className="truncate font-medium text-fg">{post.writer.name}</span>
+                    </>
+                  ) : (
+                    <span className="text-fg-muted">Sem redatora</span>
+                  )}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <dt className="text-fg-muted">Redes</dt>
+                <dd className="flex flex-wrap justify-end gap-1.5">
+                  {post.targets.map((t) => (
+                    <PlatformChip key={t} platform={t} decorative={false} />
+                  ))}
+                </dd>
+              </div>
+              <div className="border-t border-line pt-3">
+                <dt className="flex items-center gap-2 text-fg-muted">
+                  <Icon.clock className="size-4" />
+                  {publishes ? "Agendado para" : "Data prevista"}
+                </dt>
+                <dd className="mt-1 font-medium text-fg">{capitalizeFirst(whenText)}</dd>
+              </div>
+            </dl>
+
+            {showFailure && (
+              <Callout
+                tone={isFailed ? "danger" : "warning"}
+                title={isFailed ? "A publicação falhou" : undefined}
+                className="mt-4"
+                action={canRetry ? <RetryPostButton postId={post.id} /> : undefined}
               >
-                {post.client.name}
-              </Link>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-[var(--color-text-muted)]">Redes</span>
-              <div className="flex gap-1.5">
-                {post.targets.map((t) => (
-                  <BrandBadge key={t} platform={t} size={24} />
-                ))}
-              </div>
-            </div>
-            <div className="pt-3 border-t border-[var(--color-border)]">
-              <span className="text-sm text-[var(--color-text-muted)] flex items-center gap-2">
-                <Icon.clock className="w-4 h-4" />
-                Agendado para
-              </span>
-              <p className="text-sm font-medium mt-1 capitalize">{when}</p>
-            </div>
-            {post.retryCount > 0 && (
-              <div className="text-xs text-amber-300/90 bg-amber-500/[0.07] border border-amber-500/20 rounded-lg px-3 py-2">
-                {post.retryCount} tentativa(s) de reenvio
-                {post.lastError ? ` · último erro: ${post.lastError}` : ""}
-              </div>
+                {lastError && <p>Último erro: {lastError}</p>}
+                {post.retryCount > 0 && (
+                  <p className={lastError ? "mt-1 text-fg-muted" : "text-fg-muted"}>
+                    {post.retryCount} {plural(post.retryCount, "tentativa", "tentativas")} de reenvio automático.
+                  </p>
+                )}
+                {canRetry && (
+                  <p className="mt-1 text-fg-muted">“Reenviar” coloca o post de novo na fila de publicação.</p>
+                )}
+              </Callout>
             )}
-          </div>
+          </section>
 
           {/* ajuste pedido pelo cliente no link de aprovação */}
           {post.clientNote && (
-            <div className="card p-5 border-violet-500/25 bg-violet-500/[0.05]">
-              <p className="text-xs font-medium text-violet-200 flex items-center gap-1.5 mb-2">
-                <Icon.edit className="w-3.5 h-3.5" />
+            <section
+              aria-labelledby="ajuste-cliente"
+              className="rounded-card border border-brand-line bg-brand-bg p-4 sm:p-5"
+            >
+              <h2 id="ajuste-cliente" className="flex items-center gap-1.5 text-sm font-semibold text-brand-fg">
+                <Icon.edit className="size-4" />
                 Ajuste pedido por {post.client.name}
-              </p>
-              <p className="text-sm whitespace-pre-wrap leading-relaxed">{post.clientNote}</p>
-            </div>
+              </h2>
+              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-fg">{post.clientNote}</p>
+            </section>
+          )}
+
+          {/* nota da equipe: só nas telas internas, nunca nos links públicos */}
+          {post.internalNote && (
+            <section aria-labelledby="nota-interna" className="card p-4 sm:p-5">
+              <h2 id="nota-interna" className="flex items-center gap-1.5 text-sm font-semibold text-fg">
+                <Icon.fileText className="size-4 text-fg-muted" />
+                Nota interna
+              </h2>
+              <p className="mt-0.5 text-xs text-fg-muted">Só a equipe vê. Não aparece no link do cliente.</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-fg">{post.internalNote}</p>
+            </section>
+          )}
+
+          {/* pendências abertas vinculadas a este post */}
+          {post.pendingItems.length > 0 && (
+            <section aria-labelledby="pendencias-post" className="card overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3 sm:px-5">
+                <h2 id="pendencias-post" className="text-sm font-semibold text-fg">
+                  {post.pendingItems.length}{" "}
+                  {plural(post.pendingItems.length, "pendência aberta", "pendências abertas")}
+                </h2>
+                <Link
+                  href={`/pendencias?cliente=${post.client.id}`}
+                  className="inline-flex min-h-11 items-center gap-1 text-sm font-medium text-link underline-offset-2 hover:text-link-hover hover:underline sm:min-h-10"
+                >
+                  Ver pendências do cliente
+                  <Icon.arrowRight className="size-4" />
+                </Link>
+              </div>
+              <ul className="divide-y divide-line">
+                {post.pendingItems.map((item) => {
+                  const kind = metaOf(PENDING_KIND, item.kind);
+                  return (
+                    <li key={item.id} className="px-4 py-3 sm:px-5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <ToneBadge tone={kind.tone}>{kind.label}</ToneBadge>
+                        <p className="min-w-0 flex-1 text-sm font-medium text-fg">{item.title}</p>
+                      </div>
+                      {item.details && (
+                        <p title={item.details} className="mt-1 line-clamp-2 text-sm text-fg-muted">
+                          {item.details}
+                        </p>
+                      )}
+                      <p className="mt-1 text-xs text-fg-muted">
+                        Aberta em {formatDate(item.createdAt)}
+                        {item.responsible ? ` · Responsável: ${item.responsible.name}` : ""}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
           )}
 
           {/* Roteiro por tela (carrossel/reels) */}
           {slides.length > 0 && (
-            <div className="card overflow-hidden">
-              <div className="px-5 py-3.5 border-b border-[var(--color-border)]">
-                <h2 className="font-semibold text-sm">
+            <section aria-labelledby="roteiro-post" className="card overflow-hidden">
+              <div className="border-b border-line px-4 py-3 sm:px-5">
+                <h2 id="roteiro-post" className="text-sm font-semibold text-fg">
                   {post.format === "reels" ? "Telas do reels" : "Páginas do carrossel"}
-                  <span className="ml-2 text-xs font-normal text-[var(--color-text-faint)]">
-                    {slides.length} {slides.length === 1 ? "tela" : "telas"}
+                  <span className="ml-2 text-xs font-normal text-fg-muted">
+                    {slides.length} {plural(slides.length, "tela", "telas")}
                   </span>
                 </h2>
               </div>
-              <div className="divide-y divide-[var(--color-border)]">
+              <ol className="divide-y divide-line">
                 {slides.map((text, i) => (
-                  <div key={i} className="px-5 py-3 flex gap-3">
-                    <span className="shrink-0 text-xs font-semibold text-[var(--color-accent)] mt-0.5">
-                      Arte {i + 1}
-                    </span>
-                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{text}</p>
-                  </div>
+                  <li key={i} className="flex gap-3 px-4 py-3 sm:px-5">
+                    <span className="mt-0.5 shrink-0 text-xs font-semibold text-fg-muted">Arte {i + 1}</span>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{text}</p>
+                  </li>
                 ))}
-              </div>
-            </div>
+              </ol>
+            </section>
           )}
 
-          {/* Publications history */}
-          <div className="card overflow-hidden">
-            <div className="px-5 py-3.5 border-b border-[var(--color-border)]">
-              <h2 className="font-semibold text-sm">Histórico de publicação</h2>
+          {/* Histórico de publicação */}
+          <section aria-labelledby="historico-post" className="card overflow-hidden">
+            <div className="border-b border-line px-4 py-3 sm:px-5">
+              <h2 id="historico-post" className="text-sm font-semibold text-fg">
+                Histórico de publicação
+              </h2>
             </div>
             {post.publications.length === 0 ? (
-              <p className="px-5 py-6 text-center text-sm text-[var(--color-text-muted)]">
-                Ainda não publicado.
+              <p className="px-5 py-6 text-center text-sm text-fg-muted">
+                {publishes ? "Ainda não publicado." : "Sem publicações: a agência não publica para este cliente."}
               </p>
             ) : (
-              <div className="divide-y divide-[var(--color-border)]">
-                {post.publications.map((pub) => (
-                  <div key={pub.id} className="flex items-center gap-3 px-5 py-3">
-                    <BrandBadge platform={pub.platform} size={28} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium">{BRAND[pub.platform]?.label ?? pub.platform}</p>
-                      {pub.publishedAt && (
-                        <p className="text-xs text-[var(--color-text-faint)]">
-                          {new Intl.DateTimeFormat("pt-BR", {
-                            timeZone: TZ,
-                            dateStyle: "short",
-                            timeStyle: "short",
-                          }).format(pub.publishedAt)}
-                        </p>
-                      )}
-                      {pub.error && <p className="text-xs text-red-300 truncate">{pub.error}</p>}
-                    </div>
-                    <StatusBadge status={pub.status === "success" ? "published" : "failed"} />
-                  </div>
-                ))}
-              </div>
+              <ul className="divide-y divide-line">
+                {post.publications.map((pub) => {
+                  const pubError = humanizeError(pub.error);
+                  return (
+                    <li key={pub.id} className="flex items-center gap-3 px-4 py-3 sm:px-5">
+                      <span aria-hidden="true">
+                        <BrandBadge platform={pub.platform} size={28} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-fg">{platformLabel(pub.platform)}</p>
+                        {pub.publishedAt && (
+                          <p className="text-xs text-fg-muted">{formatDateTime(pub.publishedAt)}</p>
+                        )}
+                        {pubError && (
+                          <p title={pubError} className="truncate text-xs text-danger-fg">
+                            {pubError}
+                          </p>
+                        )}
+                      </div>
+                      <StatusBadge status={pub.status === "success" ? "published" : "failed"} />
+                    </li>
+                  );
+                })}
+              </ul>
             )}
-          </div>
+          </section>
         </div>
       </div>
     </div>

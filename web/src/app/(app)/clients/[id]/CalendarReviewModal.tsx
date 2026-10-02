@@ -1,13 +1,21 @@
 "use client";
 
-import { useState } from "react";
-import { Icon } from "@/components/Icons";
-import { BrandBadge, BRAND } from "@/components/BrandIcons";
-import { DateTimePicker } from "@/components/DatePickers";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AssistantPanel } from "@/components/AssistantPanel";
+import { BrandBadge, BRAND } from "@/components/BrandIcons";
+import { Button } from "@/components/Button";
+import { Callout } from "@/components/Callout";
+import { DateTimePicker } from "@/components/DatePickers";
+import { ConfirmDialog, Dialog } from "@/components/Dialog";
+import { Field, Input, Select, Textarea } from "@/components/Field";
+import { Icon } from "@/components/Icons";
 import { MediaField } from "@/components/MediaField";
 import { SlidesEditor } from "@/components/SlidesEditor";
-import { spLocalInputFromISO, spLocalInputToISO } from "@/lib/format-date";
+import { FormatBadge, ToneBadge } from "@/components/ui";
+import { buildMonthFileNames, canonicalMonthFolderName, parseMonthKey, type MonthFileName } from "@/lib/drive-layout";
+import { FORMAT_OPTIONS } from "@/lib/formats";
+import { formatMonthLabel, spLocalInputFromISO, spLocalInputToISO } from "@/lib/format-date";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 export type PreviewPost = {
   theme: string;
@@ -34,7 +42,93 @@ type ReviewPost = {
   withStory: boolean;
 };
 
+/** Post já salvo do cliente: entra na numeração das artes do mês, como no sync. */
+type SavedPost = { id: string; format: string; at: number };
+
+/** O commit gravou, mas o Drive falhou: a equipe precisa ver o aviso antes de sair. */
+type Saved = { created: number; duplicates: number; driveWarning: string };
+
+const STORY_DELAY_MS = 15 * 60_000;
+const SAVE_ERROR = "Não foi possível salvar o cronograma. Tente de novo em instantes.";
+const CONNECTION_ERROR = "Falha de conexão ao salvar. Verifique a internet e tente de novo.";
+
 let uidSeq = 0;
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+
+/** Instante (ms) de um "YYYY-MM-DDTHH:MM" lido como horário de São Paulo; null se inválido. */
+function spLocalToMs(local: string): number | null {
+  try {
+    const ms = Date.parse(spLocalInputToISO(local));
+    return Number.isNaN(ms) ? null : ms;
+  } catch {
+    return null;
+  }
+}
+
+/** Mês civil de SP ("2026-11") de um instante. */
+const spMonthOf = (ms: number) => spLocalInputFromISO(new Date(ms)).slice(0, 7);
+
+/** "2026-11" → "2026/11 - Novembro" (pasta do mês dentro da pasta do cliente). */
+function monthFolderPath(monthKey: string): string | null {
+  try {
+    const { year, month } = parseMonthKey(monthKey);
+    return `${year}/${canonicalMonthFolderName(month)}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Nome da arte do post no Drive, por formato (docs/08-DRIVE-ESTRUTURA.md): story "Nstory.jpg", "Nstory2.jpg"… */
+function artName(format: string, name: MonthFileName): string {
+  const n = name.index;
+  if (format === "story") return `${name.fileStem}.jpg`;
+  if (format === "carrossel") return `${n}/ (pasta com os slides)`;
+  if (format === "reels") return `${n}.mp4`;
+  return `${n}.jpg`;
+}
+
+/**
+ * Caminho das artes de cada post da revisão, com os mesmos nomes do sync
+ * (`buildMonthFileNames`): todos os posts do cliente no mês, em ordem de data,
+ * com o story junto 15 min depois do post. Posts já salvos com o mesmo
+ * horário e formato contam uma vez só (o commit não os duplica).
+ */
+function artPaths(posts: ReviewPost[], saved: SavedPost[]) {
+  type Entry = { id: string; format: string; at: number; rank: number };
+  const fresh: Entry[] = [];
+  posts.forEach((p, i) => {
+    const at = spLocalToMs(p.scheduledLocal);
+    if (at === null) return;
+    fresh.push({ id: p.uid, format: p.format, at, rank: 1 + i * 2 });
+    if (p.withStory && p.format !== "story") {
+      fresh.push({ id: `${p.uid}:story`, format: "story", at: at + STORY_DELAY_MS, rank: 2 + i * 2 });
+    }
+  });
+  const taken = new Set(fresh.map((e) => `${e.at}:${e.format}`));
+  const entries = [
+    ...saved.filter((s) => !taken.has(`${s.at}:${s.format}`)).map((s) => ({ ...s, rank: 0 })),
+    ...fresh,
+  ].sort((a, b) => a.at - b.at || a.rank - b.rank);
+
+  const byMonth = new Map<string, Entry[]>();
+  for (const e of entries) {
+    const key = spMonthOf(e.at);
+    byMonth.set(key, [...(byMonth.get(key) ?? []), e]);
+  }
+  const paths = new Map<string, string>();
+  for (const [key, list] of byMonth) {
+    const folder = monthFolderPath(key);
+    if (!folder) continue;
+    const names = buildMonthFileNames(list);
+    for (const e of list) {
+      const name = names.get(e.id);
+      if (name) paths.set(e.id, `${folder}/${artName(e.format, name)}`);
+    }
+  }
+  return paths;
+}
 
 export default function CalendarReviewModal({
   clientId,
@@ -50,8 +144,10 @@ export default function CalendarReviewModal({
   month: string; // YYYY-MM
   availablePlatforms: string[];
   initialPosts: PreviewPost[];
+  /** descartar a revisão (nada foi salvo) */
   onClose: () => void;
-  onCommitted: () => void;
+  /** o cronograma foi salvo; `openCalendar` = ir para o calendário do mês */
+  onCommitted: (opts: { openCalendar: boolean }) => void;
 }) {
   const [posts, setPosts] = useState<ReviewPost[]>(() =>
     initialPosts.map((p) => {
@@ -80,37 +176,68 @@ export default function CalendarReviewModal({
   const [assistantUid, setAssistantUid] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // alguma edição feita pela equipe (muda o texto da confirmação de descarte)
+  const [edited, setEdited] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const [saved, setSaved] = useState<Saved | null>(null);
+  const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
+  const calendarButtonRef = useRef<HTMLButtonElement>(null);
+  const listId = useId();
 
-  // um clique fora não pode descartar 12 posts gerados sem confirmar
-  function confirmClose() {
-    if (busy) return;
-    if (posts.length === 0 || window.confirm("Descartar este cronograma e todas as edições?")) {
-      onClose();
-    }
-  }
+  // posts que o cliente já tem: a numeração das artes (N.jpg, Nstory.jpg) conta todos
+  // os posts do mês. Sem eles (falha de rede), numera só os desta revisão.
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/posts?clientId=${encodeURIComponent(clientId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: unknown) => {
+        if (!alive || !Array.isArray(data)) return;
+        const list: SavedPost[] = [];
+        for (const p of data as { id?: unknown; format?: unknown; scheduledAt?: unknown }[]) {
+          const at = typeof p.scheduledAt === "string" ? Date.parse(p.scheduledAt) : NaN;
+          if (typeof p.id === "string" && typeof p.format === "string" && !Number.isNaN(at)) {
+            list.push({ id: p.id, format: p.format, at });
+          }
+        }
+        setSavedPosts(list);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [clientId]);
 
-  const FORMATS = [
-    { value: "feed", label: "Feed" },
-    { value: "story", label: "Story" },
-    { value: "carrossel", label: "Carrossel" },
-    { value: "reels", label: "Reels" },
-  ];
+  // salvo com aviso do Drive: o foco vai para a próxima ação
+  useEffect(() => {
+    if (saved) calendarButtonRef.current?.focus();
+  }, [saved]);
 
   const platforms = availablePlatforms.length ? availablePlatforms : ["instagram", "facebook"];
   const withArt = posts.filter((p) => p.mediaUrl.trim()).length;
+  const monthLabel = formatMonthLabel(month);
+  const paths = useMemo(() => artPaths(posts, savedPosts), [posts, savedPosts]);
 
-  const monthLabel = (() => {
-    const [y, m] = month.split("-").map(Number);
-    return new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(
-      new Date(y, m - 1, 15)
-    );
-  })();
+  /** Pedido de fechar (Esc, X, fundo, Cancelar): nunca descarta posts gerados sem confirmar. */
+  function requestClose() {
+    if (busy) return;
+    if (saved) {
+      onCommitted({ openCalendar: false });
+      return;
+    }
+    if (posts.length === 0) {
+      onClose();
+      return;
+    }
+    setConfirmingDiscard(true);
+  }
 
   function update(uid: string, patch: Partial<ReviewPost>) {
+    setEdited(true);
     setPosts((prev) => prev.map((p) => (p.uid === uid ? { ...p, ...patch } : p)));
   }
   // legenda única FB+IG (LinkedIn espelha até ser editado)
   function updateShared(uid: string, text: string) {
+    setEdited(true);
     setPosts((prev) =>
       prev.map((p) =>
         p.uid === uid
@@ -128,14 +255,14 @@ export default function CalendarReviewModal({
     );
   }
   function updateLinkedin(uid: string, text: string) {
+    setEdited(true);
     setLiDirty((d) => ({ ...d, [uid]: true }));
     setPosts((prev) =>
-      prev.map((p) =>
-        p.uid === uid ? { ...p, captions: { ...p.captions, linkedin: text } } : p
-      )
+      prev.map((p) => (p.uid === uid ? { ...p, captions: { ...p.captions, linkedin: text } } : p))
     );
   }
   function toggleTarget(uid: string, platform: string) {
+    setEdited(true);
     setPosts((prev) =>
       prev.map((p) => {
         if (p.uid !== uid) return p;
@@ -177,15 +304,15 @@ export default function CalendarReviewModal({
         });
         const data = await res.json().catch(() => null);
         if (!res.ok) {
-          setError(typeof data?.error === "string" ? data.error : "Falha ao regenerar a postagem.");
+          setError(toUserMessage(data, "Não foi possível refazer a postagem agora. Tente de novo em instantes."));
           return;
         }
-        const g: Record<string, string> = data.captions ?? {};
+        const g: Record<string, string> = data?.captions ?? {};
         const shared = g.instagram ?? g.facebook ?? "";
         setLiDirty((d) => ({ ...d, [uid]: !!g.linkedin && g.linkedin !== shared }));
         update(uid, {
           captions: { instagram: shared, facebook: shared, linkedin: g.linkedin ?? shared },
-          ...(Array.isArray(data.slides) && data.slides.length ? { slides: data.slides } : {}),
+          ...(Array.isArray(data?.slides) && data.slides.length ? { slides: data.slides } : {}),
         });
         return;
       }
@@ -199,25 +326,26 @@ export default function CalendarReviewModal({
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(typeof data?.error === "string" ? data.error : "Falha ao gerar novo post.");
+        setError(toUserMessage(data, "Não foi possível gerar uma nova ideia agora. Tente de novo em instantes."));
         return;
       }
       update(uid, {
-        theme: data.theme ?? post.theme,
-        format: data.format ?? post.format,
-        explanation: data.explanation ?? "",
+        theme: typeof data?.theme === "string" ? data.theme : post.theme,
+        format: typeof data?.format === "string" ? data.format : post.format,
+        explanation: typeof data?.explanation === "string" ? data.explanation : "",
         captions: {},
         slides: [],
         mediaUrl: "",
       });
     } catch {
-      setError("Falha de conexão com a IA. Tente novamente.");
+      setError("Falha de conexão com a IA. Verifique a internet e tente de novo.");
     } finally {
       setRegenerating((r) => ({ ...r, [uid]: false }));
     }
   }
 
   function removePost(uid: string) {
+    setEdited(true);
     setPosts((prev) => prev.filter((p) => p.uid !== uid));
     if (assistantUid === uid) setAssistantUid(null);
   }
@@ -229,7 +357,6 @@ export default function CalendarReviewModal({
     if (last?.scheduledLocal) {
       const d = new Date(`${last.scheduledLocal}:00`);
       d.setDate(d.getDate() + 2);
-      const pad2 = (n: number) => String(n).padStart(2, "0");
       scheduledLocal = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T18:00`;
     } else {
       scheduledLocal = `${month}-05T18:00`;
@@ -246,6 +373,7 @@ export default function CalendarReviewModal({
       mediaUrl: "",
       withStory: true,
     };
+    setEdited(true);
     setPosts((prev) => [...prev, fresh]);
     setExpanded((e) => ({ ...e, [fresh.uid]: true }));
   }
@@ -262,388 +390,432 @@ export default function CalendarReviewModal({
     setBusy(true);
     setError("");
     try {
-    const payload = {
-      clientId,
-      month,
-      // "Story junto" vira um segundo post (story, 15 min depois) — cada um
-      // com seu formato, casando com a convenção de mídia (N.* e Nstory.*)
-      posts: posts.flatMap((p) => {
-        const captions: Record<string, string> = {};
-        for (const t of p.targets) {
-          const c = p.captions[t];
-          if (c && c.trim()) captions[t] = c.trim();
-        }
-        const baseIso = spLocalInputToISO(p.scheduledLocal);
-        const base = {
-          theme: p.theme,
-          explanation: p.explanation.trim() || undefined,
-          captions,
-          mediaUrl: p.mediaUrl.trim(),
-          targets: p.targets,
-        };
-        const slides = p.slides.filter((s) => s.trim()).map((text) => ({ text }));
-        const out: Record<string, unknown>[] = [
-          {
-            ...base,
-            format: p.format,
-            scheduledAt: baseIso,
-            ...(slides.length && (p.format === "carrossel" || p.format === "reels")
-              ? { slides }
-              : {}),
-          },
-        ];
-        if (p.withStory && p.format !== "story") {
-          const storyIso = new Date(new Date(baseIso).getTime() + 15 * 60_000).toISOString();
-          out.push({ ...base, format: "story", mediaUrl: "", scheduledAt: storyIso });
-        }
-        return out;
-      }),
-    };
-    const res = await fetch("/api/ai/calendar/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      setError(typeof data?.error === "string" ? data.error : "Falha ao salvar os rascunhos.");
-      return;
-    }
-    onCommitted();
+      const payload = {
+        clientId,
+        month,
+        // "Story junto" vira um segundo post (story, 15 min depois) — cada um
+        // com seu formato, casando com a convenção de mídia (N.* e Nstory.*)
+        posts: posts.flatMap((p) => {
+          const captions: Record<string, string> = {};
+          for (const t of p.targets) {
+            const c = p.captions[t];
+            if (c && c.trim()) captions[t] = c.trim();
+          }
+          const baseIso = spLocalInputToISO(p.scheduledLocal);
+          const base = {
+            theme: p.theme,
+            explanation: p.explanation.trim() || undefined,
+            captions,
+            mediaUrl: p.mediaUrl.trim(),
+            targets: p.targets,
+          };
+          const slides = p.slides.filter((s) => s.trim()).map((text) => ({ text }));
+          const out: Record<string, unknown>[] = [
+            {
+              ...base,
+              format: p.format,
+              scheduledAt: baseIso,
+              ...(slides.length && (p.format === "carrossel" || p.format === "reels") ? { slides } : {}),
+            },
+          ];
+          if (p.withStory && p.format !== "story") {
+            const storyIso = new Date(new Date(baseIso).getTime() + STORY_DELAY_MS).toISOString();
+            out.push({ ...base, format: "story", mediaUrl: "", scheduledAt: storyIso });
+          }
+          return out;
+        }),
+      };
+      const res = await fetch("/api/ai/calendar/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(toUserMessage(data, SAVE_ERROR));
+        return;
+      }
+      // Drive falhou (S16): o cronograma está salvo, mas a pasta do mês não foi preparada
+      const warning = typeof data?.driveWarning === "string" ? data.driveWarning.trim() : "";
+      if (warning) {
+        setSaved({
+          created: typeof data?.created === "number" ? data.created : 0,
+          duplicates: typeof data?.duplicates === "number" ? data.duplicates : 0,
+          driveWarning: warning,
+        });
+        return;
+      }
+      onCommitted({ openCalendar: true });
     } catch {
-      setError("Falha de conexão ao salvar. Tente novamente.");
+      setError(CONNECTION_ERROR);
     } finally {
       setBusy(false);
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={busy ? undefined : confirmClose} />
+  const assistantPost = assistantUid ? posts.find((p) => p.uid === assistantUid) : undefined;
 
-      <div
-        className="relative w-full max-w-3xl max-h-[90vh] flex flex-col rounded-2xl border border-[var(--color-border-strong)] shadow-2xl"
-        style={{ backgroundColor: "var(--color-surface)" }}
+  if (saved) {
+    return (
+      <Dialog
+        open
+        onClose={requestClose}
+        size="md"
+        title="Cronograma salvo"
+        description={`${clientName} · ${monthLabel}`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => onCommitted({ openCalendar: false })}>
+              Fechar
+            </Button>
+            <Button ref={calendarButtonRef} variant="primary" onClick={() => onCommitted({ openCalendar: true })}>
+              Ver no calendário
+            </Button>
+          </>
+        }
       >
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 p-5 border-b border-[var(--color-border)]">
-          <div>
-            <h2 className="text-lg font-semibold">Revisar cronograma</h2>
-            <p className="text-sm text-[var(--color-text-muted)] mt-0.5">
-              {clientName} · <span className="capitalize">{monthLabel}</span> · {posts.length} post
-              {posts.length !== 1 ? "s" : ""}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <span
-              className={`text-xs font-medium px-2.5 py-1 rounded-full border ${
-                withArt === posts.length && posts.length > 0
-                  ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/25"
-                  : "text-amber-300 bg-amber-500/10 border-amber-500/25"
-              }`}
-            >
-              {withArt}/{posts.length} com arte
-            </span>
-            <button
-              onClick={confirmClose}
-              disabled={busy}
-              className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-white hover:bg-white/5 transition disabled:opacity-50"
-            >
-              <Icon.x className="w-5 h-5" />
-            </button>
-          </div>
+        <div className="grid gap-3 pb-2">
+          <Callout tone="success">
+            {saved.created} {plural(saved.created, "post salvo", "posts salvos")} como rascunho.
+            {saved.duplicates > 0 &&
+              ` ${saved.duplicates} já ${plural(saved.duplicates, "estava salvo e não foi duplicado", "estavam salvos e não foram duplicados")}.`}
+          </Callout>
+          <Callout tone="warning" title="Pastas do Google Drive não preparadas" live="polite">
+            {saved.driveWarning}
+          </Callout>
         </div>
+      </Dialog>
+    );
+  }
 
-        {/* Intro */}
-        <div className="px-5 pt-4">
-          <p className="text-xs text-[var(--color-text-muted)] bg-white/[0.03] border border-[var(--color-border)] rounded-lg px-3 py-2">
-            O cliente aprova <strong>título + explicação</strong> de cada postagem. Ajuste o que
-            precisar e salve — legendas e slides completos são gerados depois que o cronograma for
-            aprovado.
+  return (
+    <Dialog
+      open
+      onClose={requestClose}
+      size="lg"
+      busy={busy}
+      error={error}
+      title="Revisar cronograma"
+      description={
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>
+            {clientName} · {monthLabel} · {posts.length} {plural(posts.length, "post", "posts")}
+          </span>
+          <ToneBadge tone={withArt === posts.length && posts.length > 0 ? "success" : "warning"}>
+            {withArt}/{posts.length} com arte
+          </ToneBadge>
+        </span>
+      }
+      footer={
+        <>
+          <Button variant="secondary" disabled={busy} onClick={requestClose}>
+            Cancelar
+          </Button>
+          <Button
+            variant="primary"
+            leadingIcon={<Icon.check />}
+            loading={busy}
+            loadingText="Salvando…"
+            disabled={posts.length === 0}
+            onClick={approve}
+          >
+            Aprovar e salvar ({posts.length})
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3 pb-3">
+        <Callout tone="info">
+          O cliente aprova <strong>título + explicação</strong> de cada postagem. Ajuste o que precisar e salve:
+          legendas e slides completos são gerados depois que o cronograma for aprovado. As artes no Drive seguem a
+          ordem das datas de todos os posts do mês.
+        </Callout>
+
+        {posts.length === 0 && (
+          <p className="py-8 text-center text-sm text-fg-muted">
+            Nenhuma postagem. Adicione uma abaixo ou cancele e gere de novo.
           </p>
-        </div>
+        )}
 
-        {/* List */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-3">
-          {posts.length === 0 && (
-            <p className="text-center text-sm text-[var(--color-text-muted)] py-10">
-              Nenhuma postagem. Adicione uma abaixo ou cancele e gere novamente.
-            </p>
-          )}
+        <ol id={listId} aria-label="Postagens do cronograma" className="grid gap-3">
           {posts.map((p, i) => {
             const hasArt = !!p.mediaUrl.trim();
-            const open = expanded[p.uid];
+            const open = !!expanded[p.uid];
+            const number = String(i + 1).padStart(2, "0");
+            const titleLabel = p.theme.trim() || `postagem ${number}`;
+            const artPath = paths.get(p.uid);
+            const storyPath = paths.get(`${p.uid}:story`);
+            const captionsId = `${listId}-${p.uid}-legendas`;
+            const storyHelpId = `${listId}-${p.uid}-story`;
             return (
-              <div key={p.uid} className="rounded-xl border border-[var(--color-border)] bg-white/[0.02] p-4">
-                <div className="flex items-start gap-3">
-                  <span className="mt-2.5 text-xs font-mono text-[var(--color-text-faint)] w-5 shrink-0">
-                    {String(i + 1).padStart(2, "0")}
+              <li key={p.uid} className="grid gap-3 rounded-card border border-line bg-surface p-3 sm:p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-sm font-semibold text-fg-muted">
+                    <span className="sr-only">Postagem </span>
+                    {number}
                   </span>
-                  <div className="flex-1 min-w-0 space-y-3">
-                    <input
-                      value={p.theme}
-                      onChange={(e) => update(p.uid, { theme: e.target.value })}
-                      placeholder="Título da postagem"
-                      className="input font-medium"
+                  <FormatBadge format={p.format} />
+                  <ToneBadge tone={hasArt ? "success" : "warning"}>{hasArt ? "Com arte" : "Sem arte"}</ToneBadge>
+                  <div className="ml-auto flex flex-wrap gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      leadingIcon={<Icon.refresh />}
+                      loading={!!regenerating[p.uid]}
+                      loadingText="Gerando…"
+                      disabled={busy}
+                      title="Substituir por um novo post gerado pela IA"
+                      onClick={() => substitute(p.uid)}
+                    >
+                      Substituir
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      leadingIcon={<Icon.zap />}
+                      disabled={busy}
+                      title="Abrir o assistente de IA para este post"
+                      aria-expanded={assistantUid === p.uid}
+                      onClick={() => setAssistantUid(p.uid)}
+                    >
+                      Assistente
+                    </Button>
+                    <Button
+                      iconOnly
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy}
+                      aria-label={`Excluir ${titleLabel}`}
+                      title="Remover este post do cronograma"
+                      onClick={() => removePost(p.uid)}
+                    >
+                      <Icon.trash />
+                    </Button>
+                  </div>
+                </div>
+
+                <Field label="Título da postagem">
+                  <Input
+                    value={p.theme}
+                    onChange={(e) => update(p.uid, { theme: e.target.value })}
+                    placeholder="Ex.: 3 dicas para começar o mês"
+                    className="font-medium"
+                  />
+                </Field>
+
+                <Field label="Explicação para o cliente" help="Aparece no link de aprovação.">
+                  <Textarea
+                    value={p.explanation}
+                    onChange={(e) => update(p.uid, { explanation: e.target.value })}
+                    rows={2}
+                    placeholder="Breve explicação do tema…"
+                  />
+                </Field>
+
+                <div className="grid items-start gap-3 sm:grid-cols-2">
+                  <Field label="Data da postagem">
+                    <DateTimePicker
+                      defaultValue={p.scheduledLocal}
+                      onChange={(v) => update(p.uid, { scheduledLocal: v })}
                     />
-
-                    <textarea
-                      value={p.explanation}
-                      onChange={(e) => update(p.uid, { explanation: e.target.value })}
-                      rows={2}
-                      className="input resize-y text-sm"
-                      placeholder="Breve explicação do tema para o cliente (aparece no link de aprovação)…"
-                    />
-
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="label">Agendar para</label>
-                        <DateTimePicker
-                          defaultValue={p.scheduledLocal}
-                          onChange={(v) => update(p.uid, { scheduledLocal: v })}
-                        />
-                      </div>
-                      <div>
-                        <label className="label">Tipo de postagem</label>
-                        <select
-                          value={p.format}
-                          onChange={(e) =>
-                            update(p.uid, {
-                              format: e.target.value,
-                              ...(e.target.value === "story" ? { withStory: false } : {}),
-                            })
-                          }
-                          className="input"
-                        >
-                          {FORMATS.map((f) => (
-                            <option key={f.value} value={f.value}>{f.label}</option>
-                          ))}
-                        </select>
-                        {p.format !== "story" && (
-                          <label className="flex items-center gap-1.5 mt-1.5 text-xs text-[var(--color-text-muted)] cursor-pointer select-none">
-                            <input
-                              type="checkbox"
-                              checked={p.withStory}
-                              onChange={(e) => update(p.uid, { withStory: e.target.checked })}
-                              className="accent-[var(--color-accent)]"
-                            />
-                            Story junto (15 min depois · arte {String(i + 1)}story)
-                          </label>
-                        )}
-                      </div>
-                      <div>
-                        <label className="label flex items-center gap-2">
-                          Arte (URL da mídia)
-                          <span
-                            className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border ${
-                              hasArt
-                                ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/25"
-                                : "text-amber-300 bg-amber-500/10 border-amber-500/25"
-                            }`}
-                          >
-                            {hasArt ? "Com arte" : "Sem arte"}
-                          </span>
-                        </label>
-                        <MediaField
-                          value={p.mediaUrl}
-                          onChange={(url) => update(p.uid, { mediaUrl: url })}
-                          clientId={clientId}
-                          compact
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      {platforms.map((pl) => {
-                        const on = p.targets.includes(pl);
-                        return (
-                          <button
-                            key={pl}
-                            type="button"
-                            onClick={() => toggleTarget(p.uid, pl)}
-                            className={`flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border text-xs font-medium transition ${
-                              on
-                                ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-white"
-                                : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-strong)]"
-                            }`}
-                          >
-                            <BrandBadge platform={pl} size={18} />
-                            {BRAND[pl]?.label ?? pl}
-                          </button>
-                        );
-                      })}
-                      <button
-                        type="button"
-                        onClick={() => setExpanded((e) => ({ ...e, [p.uid]: !open }))}
-                        className="ml-auto text-xs text-[var(--color-text-muted)] hover:text-white transition"
+                  </Field>
+                  <div className="grid content-start gap-2">
+                    <Field label="Tipo de postagem">
+                      <Select
+                        value={p.format}
+                        onChange={(e) =>
+                          update(p.uid, {
+                            format: e.target.value,
+                            ...(e.target.value === "story" ? { withStory: false } : {}),
+                          })
+                        }
                       >
-                        {open ? "Ocultar legendas" : "Editar legendas"}
-                      </button>
-                    </div>
-
-                    {open && (
-                      <div className="space-y-3 pt-1">
-                        {(p.format === "carrossel" || p.format === "reels") && (
-                          <SlidesEditor
-                            format={p.format}
-                            slides={p.slides}
-                            onChange={(slides) => update(p.uid, { slides })}
+                        {FORMAT_OPTIONS.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    {p.format !== "story" && (
+                      <div>
+                        <label className="flex min-h-10 cursor-pointer select-none items-center gap-2 text-sm text-fg sm:min-h-8">
+                          <input
+                            type="checkbox"
+                            checked={p.withStory}
+                            onChange={(e) => update(p.uid, { withStory: e.target.checked })}
+                            aria-describedby={p.withStory && storyPath ? storyHelpId : undefined}
+                            className="size-4 shrink-0 accent-primary"
                           />
-                        )}
-                        {p.targets.length === 0 && (
-                          <p className="text-xs text-amber-300">Selecione uma rede para editar a legenda.</p>
-                        )}
-                        {(p.targets.includes("instagram") || p.targets.includes("facebook")) && (
-                          <div>
-                            <label className="label flex items-center gap-1.5">
-                              <span className="flex items-center gap-1">
-                                <BrandBadge platform="facebook" size={16} />
-                                <BrandBadge platform="instagram" size={16} />
-                              </span>
-                              Facebook + Instagram (legenda única)
-                            </label>
-                            <textarea
-                              value={p.captions.instagram ?? p.captions.facebook ?? ""}
-                              onChange={(e) => updateShared(p.uid, e.target.value)}
-                              rows={7}
-                              className="input resize-y min-h-24 text-sm leading-relaxed"
-                              placeholder="Legenda para Facebook e Instagram"
-                            />
-                          </div>
-                        )}
-                        {p.targets.includes("linkedin") && (
-                          <div>
-                            <label className="label flex items-center gap-1.5">
-                              <BrandBadge platform="linkedin" size={16} />
-                              LinkedIn
-                              {!liDirty[p.uid] && (
-                                <span className="text-[var(--color-text-faint)] font-normal">· espelhando FB+IG</span>
-                              )}
-                            </label>
-                            <textarea
-                              value={p.captions.linkedin ?? p.captions.instagram ?? p.captions.facebook ?? ""}
-                              onChange={(e) => updateLinkedin(p.uid, e.target.value)}
-                              rows={5}
-                              className="input resize-y min-h-20 text-sm leading-relaxed"
-                              placeholder="Legenda para LinkedIn (por padrão igual à de FB+IG)"
-                            />
-                          </div>
+                          Story junto (sai 15 min depois)
+                        </label>
+                        {p.withStory && storyPath && (
+                          <p id={storyHelpId} className="text-xs text-fg-muted">
+                            Arte do story no Drive: <span className="font-mono">{storyPath}</span>
+                          </p>
                         )}
                       </div>
                     )}
                   </div>
-
-                  <div className="flex flex-col items-stretch gap-1.5 shrink-0 mt-1">
-                    <button
-                      type="button"
-                      onClick={() => substitute(p.uid)}
-                      disabled={regenerating[p.uid] || busy}
-                      title="Substituir por um novo post gerado pela IA"
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-white hover:border-[var(--color-border-strong)] transition disabled:opacity-50"
-                    >
-                      <Icon.refresh className={`w-4 h-4 ${regenerating[p.uid] ? "animate-spin" : ""}`} />
-                      {regenerating[p.uid] ? "Gerando..." : "Substituir"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAssistantUid(p.uid)}
-                      disabled={busy}
-                      title="Abrir o assistente de IA para este post"
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-[var(--color-accent)] border border-[var(--color-border)] hover:border-[var(--color-accent)]/50 hover:bg-[var(--color-accent)]/10 transition disabled:opacity-50"
-                    >
-                      <Icon.zap className="w-4 h-4" />
-                      Assistente
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removePost(p.uid)}
-                      disabled={busy}
-                      title="Remover este post do calendário"
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-[var(--color-text-faint)] border border-transparent hover:text-red-400 hover:border-red-500/30 transition disabled:opacity-50"
-                    >
-                      <Icon.trash className="w-4 h-4" />
-                      Excluir
-                    </button>
-                  </div>
                 </div>
-              </div>
+
+                <Field
+                  label="Arte (URL da mídia)"
+                  help={
+                    artPath ? (
+                      <>
+                        No Drive: <span className="font-mono">{artPath}</span>
+                      </>
+                    ) : undefined
+                  }
+                >
+                  <MediaField
+                    value={p.mediaUrl}
+                    onChange={(url) => update(p.uid, { mediaUrl: url })}
+                    clientId={clientId}
+                    compact
+                  />
+                </Field>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div role="group" aria-label={`Redes de ${titleLabel}`} className="flex flex-wrap gap-2">
+                    {platforms.map((pl) => {
+                      const on = p.targets.includes(pl);
+                      return (
+                        <button
+                          key={pl}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => toggleTarget(p.uid, pl)}
+                          className={`inline-flex min-h-10 items-center gap-1.5 rounded-control border pl-1.5 pr-3 text-sm font-medium transition-colors duration-(--sf-dur-fast) sm:min-h-8 ${
+                            on
+                              ? "border-selected bg-selected text-on-selected"
+                              : "border-line-strong bg-surface text-fg-muted hover:bg-hover hover:text-fg"
+                          }`}
+                        >
+                          <BrandBadge platform={pl} size={20} />
+                          {BRAND[pl]?.label ?? pl}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto"
+                    aria-expanded={open}
+                    aria-controls={open ? captionsId : undefined}
+                    onClick={() => setExpanded((e) => ({ ...e, [p.uid]: !open }))}
+                  >
+                    {open ? "Ocultar legendas" : "Editar legendas"}
+                  </Button>
+                </div>
+
+                {open && (
+                  <div id={captionsId} className="grid gap-3">
+                    {(p.format === "carrossel" || p.format === "reels") && (
+                      <SlidesEditor format={p.format} slides={p.slides} onChange={(slides) => update(p.uid, { slides })} />
+                    )}
+                    {p.targets.length === 0 && (
+                      <p className="text-sm text-warning-fg">Selecione uma rede para editar a legenda.</p>
+                    )}
+                    {(p.targets.includes("instagram") || p.targets.includes("facebook")) && (
+                      <Field
+                        label={
+                          <span className="inline-flex items-center gap-1.5">
+                            <span aria-hidden="true" className="inline-flex items-center gap-1">
+                              <BrandBadge platform="facebook" size={16} />
+                              <BrandBadge platform="instagram" size={16} />
+                            </span>
+                            Facebook + Instagram (legenda única)
+                          </span>
+                        }
+                      >
+                        <Textarea
+                          value={p.captions.instagram ?? p.captions.facebook ?? ""}
+                          onChange={(e) => updateShared(p.uid, e.target.value)}
+                          rows={7}
+                          className="leading-relaxed"
+                          placeholder="Legenda para Facebook e Instagram"
+                        />
+                      </Field>
+                    )}
+                    {p.targets.includes("linkedin") && (
+                      <Field
+                        label={
+                          <span className="inline-flex flex-wrap items-center gap-1.5">
+                            <span aria-hidden="true" className="inline-flex">
+                              <BrandBadge platform="linkedin" size={16} />
+                            </span>
+                            LinkedIn
+                            {!liDirty[p.uid] && <span className="font-normal text-fg-muted">· espelhando FB+IG</span>}
+                          </span>
+                        }
+                      >
+                        <Textarea
+                          value={p.captions.linkedin ?? p.captions.instagram ?? p.captions.facebook ?? ""}
+                          onChange={(e) => updateLinkedin(p.uid, e.target.value)}
+                          rows={5}
+                          className="leading-relaxed"
+                          placeholder="Legenda para LinkedIn (por padrão igual à de FB+IG)"
+                        />
+                      </Field>
+                    )}
+                  </div>
+                )}
+              </li>
             );
           })}
+        </ol>
 
-          {/* nova postagem manual no cronograma */}
-          <button
-            type="button"
-            onClick={addPost}
-            disabled={busy}
-            className="w-full rounded-xl border border-dashed border-[var(--color-border-strong)] px-4 py-3.5 text-sm text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors disabled:opacity-50"
-          >
-            + Adicionar postagem
-          </button>
-        </div>
-
-        {/* Footer */}
-        <div className="p-5 border-t border-[var(--color-border)]">
-          {error && (
-            <p className="mb-3 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-              {error}
-            </p>
-          )}
-          <div className="flex gap-3">
-            <button onClick={confirmClose} disabled={busy} className="btn-ghost flex-1">
-              Cancelar
-            </button>
-            <button onClick={approve} disabled={busy || posts.length === 0} className="btn-primary flex-1">
-              <Icon.check className="w-4 h-4" />
-              {busy ? "Salvando..." : `Aprovar e salvar (${posts.length})`}
-            </button>
-          </div>
-        </div>
+        {/* nova postagem manual no cronograma */}
+        <Button fullWidth leadingIcon={<Icon.plus />} disabled={busy} onClick={addPost} className="border-dashed">
+          Adicionar postagem
+        </Button>
       </div>
 
-      {/* assistente de IA para o post selecionado */}
-      {assistantUid && (() => {
-        const target = posts.find((p) => p.uid === assistantUid);
-        if (!target) return null;
-        return (
-          <div className="absolute inset-y-0 right-0 z-20 w-full max-w-md p-4 flex">
-            <div
-              className="relative flex flex-col w-full rounded-2xl border border-[var(--color-border-strong)] shadow-2xl overflow-hidden"
-              style={{ backgroundColor: "var(--color-surface)" }}
-            >
-              <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
-                <p className="text-xs font-medium text-[var(--color-text-muted)] truncate">
-                  Assistente · {target.theme || "post sem título"}
-                </p>
-                <button
-                  onClick={() => setAssistantUid(null)}
-                  className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-white hover:bg-white/5 transition"
-                  title="Fechar assistente"
-                >
-                  <Icon.x className="w-4 h-4" />
-                </button>
-              </div>
-              <AssistantPanel
-                key={assistantUid}
-                className="flex-1 !border-0 !rounded-none !bg-transparent"
-                clientId={clientId}
-                getPost={() => {
-                  const p = posts.find((x) => x.uid === assistantUid);
-                  return {
-                    theme: p?.theme,
-                    format: p?.format,
-                    targets: p?.targets,
-                    caption: p?.captions.instagram ?? p?.captions.facebook ?? "",
-                    scheduledAt: p?.scheduledLocal,
-                    slides: p?.slides.filter((s) => s.trim()),
-                  };
-                }}
-                onApplyCaption={(text) => updateShared(assistantUid, text)}
-                onApplyTitle={(title) => update(assistantUid, { theme: title })}
-              />
-            </div>
-          </div>
-        );
-      })()}
-    </div>
+      {/* assistente de IA do post escolhido: painel lateral dentro do diálogo (Esc fecha só ele) */}
+      {assistantPost && (
+        <div className="pointer-events-none fixed inset-y-0 right-0 z-10 flex w-full max-w-md flex-col justify-center p-4">
+          <AssistantPanel
+            key={assistantPost.uid}
+            className="pointer-events-auto max-h-full shadow-raised"
+            clientId={clientId}
+            subtitle={assistantPost.theme.trim() || "Post sem título"}
+            onClose={() => setAssistantUid(null)}
+            getPost={() => {
+              const p = posts.find((x) => x.uid === assistantPost.uid);
+              return {
+                theme: p?.theme,
+                format: p?.format,
+                targets: p?.targets,
+                caption: p?.captions.instagram ?? p?.captions.facebook ?? "",
+                scheduledAt: p?.scheduledLocal,
+                slides: p?.slides.filter((s) => s.trim()),
+              };
+            }}
+            onApplyCaption={(text) => updateShared(assistantPost.uid, text)}
+            onApplyTitle={(title) => update(assistantPost.uid, { theme: title })}
+          />
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmingDiscard}
+        tone="danger"
+        title={edited ? "Descartar o cronograma e as suas edições?" : "Descartar o cronograma gerado?"}
+        consequences={[
+          `${posts.length} ${plural(posts.length, "postagem não é salva", "postagens não são salvas")}${edited ? ", com as edições feitas aqui" : ""}.`,
+          "Para ter o cronograma de novo, será preciso gerar outra vez com a IA.",
+        ]}
+        cancelLabel="Continuar revisando"
+        confirmLabel="Descartar cronograma"
+        onCancel={() => setConfirmingDiscard(false)}
+        onConfirm={() => {
+          setConfirmingDiscard(false);
+          onClose();
+        }}
+      />
+    </Dialog>
   );
 }

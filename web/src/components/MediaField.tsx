@@ -1,19 +1,27 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
+import { Button } from "./Button";
+import { Label, useFieldControl } from "./Field";
 import { Icon } from "./Icons";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 const ACCEPT = "image/png,image/jpeg,image/webp";
+const UPLOAD_ERROR = "Não foi possível enviar o arquivo. Tente de novo em instantes.";
 
 function isVideoUrl(u: string) {
   return /\.(mp4|mov|webm|m4v)$/i.test(u);
 }
+
+const URL_INPUT =
+  "h-11 w-full min-w-0 rounded-control border bg-surface px-3 text-base text-fg transition-colors duration-(--sf-dur-fast) placeholder:text-fg-faint hover:border-fg-muted focus:border-focus focus:outline-2 focus:outline-offset-1 focus:outline-focus sm:h-10 sm:text-sm";
 
 /**
  * Mídia do post: sobe o arquivo direto ou cola uma URL pública.
  *
  * Antes só existia o campo de URL, então era preciso hospedar a imagem em
  * outro lugar antes de agendar — e a prévia só aparecia depois de salvar.
+ * Dentro de um <Field>, o campo de URL recebe o id, a descrição e o erro dele.
  */
 export function MediaField({
   value,
@@ -32,6 +40,12 @@ export function MediaField({
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
+  const field = useFieldControl();
+  const ownId = useId();
+  const errorId = useId();
+  const urlId = field?.id ?? ownId;
+  const invalid = !!error || !!field?.invalid;
+  const describedBy = [field?.describedBy, error ? errorId : null].filter(Boolean).join(" ") || undefined;
 
   async function upload(file: File) {
     setError("");
@@ -44,13 +58,13 @@ export function MediaField({
 
       const r = await fetch("/api/upload", { method: "POST", body: fd });
       const d = await r.json().catch(() => null);
-      if (!r.ok) {
-        setError(typeof d?.error === "string" ? d.error : "Falha no upload.");
+      if (!r.ok || typeof d?.url !== "string") {
+        setError(toUserMessage(d, UPLOAD_ERROR));
         return;
       }
-      onChange(d.url as string);
+      onChange(d.url);
     } catch {
-      setError("Falha de conexão no upload. Tente novamente.");
+      setError("Falha de conexão no envio. Verifique a internet e tente de novo.");
     } finally {
       setUploading(false);
       if (inputRef.current) inputRef.current.value = "";
@@ -70,104 +84,106 @@ export function MediaField({
     />
   );
 
+  const urlInput = (placeholder: string, extra: string) => (
+    <input
+      id={urlId}
+      type="url"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      // compacto e sem <Field>: não há rótulo visível ligado ao campo
+      aria-label={compact && !field ? "URL da arte" : undefined}
+      aria-describedby={describedBy}
+      aria-invalid={invalid || undefined}
+      className={`${URL_INPUT} ${invalid ? "border-danger-solid" : "border-line-strong"} ${extra}`}
+    />
+  );
+
+  const errorText = error ? (
+    <p id={errorId} role="alert" className="mt-1.5 text-xs font-medium text-danger-fg">
+      {error}
+    </p>
+  ) : null;
+
+  const thumb = (size: string, iconSize: string, alt: string) => (
+    <span
+      className={`${size} flex shrink-0 items-center justify-center overflow-hidden rounded-control border border-line bg-sunken`}
+    >
+      {value ? (
+        isVideoUrl(value) ? (
+          <video src={value} muted playsInline preload="metadata" className="size-full object-cover" />
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={value} alt={alt} className="size-full object-cover" />
+        )
+      ) : (
+        <Icon.alert className={`${iconSize} text-fg-muted`} />
+      )}
+    </span>
+  );
+
   if (compact) {
     return (
       <div>
         <div className="flex items-center gap-2">
-          <span className="w-9 h-9 shrink-0 rounded-lg overflow-hidden border border-[var(--color-border)] bg-black/30 flex items-center justify-center">
-            {value ? (
-              isVideoUrl(value) ? (
-                <video src={value} muted playsInline preload="metadata" className="w-full h-full object-cover" />
-              ) : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={value} alt="" className="w-full h-full object-cover" />
-              )
-            ) : (
-              <Icon.alert className="w-3.5 h-3.5 text-[var(--color-text-faint)]" />
-            )}
-          </span>
-          <input
-            type="url"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder="https://… ou envie o arquivo →"
-            className="input font-mono text-xs flex-1 min-w-0"
-          />
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            disabled={uploading}
+          {thumb("size-9", "size-3.5", "")}
+          {urlInput("https://… ou envie o arquivo →", "flex-1 font-mono")}
+          <Button
+            size="sm"
+            leadingIcon={<Icon.upload />}
+            loading={uploading}
+            loadingText="Enviando…"
             title="Enviar imagem do computador"
-            className="btn-ghost !py-2 !px-2.5 text-xs shrink-0"
+            onClick={() => inputRef.current?.click()}
+            className="shrink-0"
           >
-            <Icon.folder className="w-3.5 h-3.5" />
-            {uploading ? "..." : "Enviar"}
-          </button>
+            Enviar
+          </Button>
         </div>
         {hiddenInput}
-        {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
+        {errorText}
       </div>
     );
   }
 
   return (
     <div>
-      <label className="label">{label}</label>
+      {!field && (
+        <Label htmlFor={urlId} className="mb-1.5 block">
+          {label}
+        </Label>
+      )}
 
-      <div className="flex items-start gap-3 flex-wrap">
+      <div className="flex flex-wrap items-start gap-3">
         {/* prévia */}
-        <div className="w-24 h-24 shrink-0 rounded-xl overflow-hidden border border-[var(--color-border)] bg-black/30 flex items-center justify-center">
-          {value ? (
-            isVideoUrl(value) ? (
-              <video src={value} muted playsInline preload="metadata" className="w-full h-full object-cover" />
-            ) : (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={value} alt="Prévia da mídia" className="w-full h-full object-cover" />
-            )
-          ) : (
-            <Icon.alert className="w-5 h-5 text-[var(--color-text-faint)]" />
-          )}
-        </div>
+        {thumb("size-24", "size-5", "Prévia da mídia")}
 
-        <div className="flex-1 min-w-56 space-y-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
+        <div className="min-w-56 flex-1 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              leadingIcon={<Icon.upload />}
+              loading={uploading}
+              loadingText="Enviando…"
               onClick={() => inputRef.current?.click()}
-              disabled={uploading}
-              className="btn-ghost !py-2 text-xs"
             >
-              <Icon.folder className="w-3.5 h-3.5" />
-              {uploading ? "Enviando..." : value ? "Trocar imagem" : "Enviar imagem"}
-            </button>
+              {value ? "Trocar imagem" : "Enviar imagem"}
+            </Button>
             {value && (
-              <button
-                type="button"
-                onClick={() => onChange("")}
-                disabled={uploading}
-                className="text-xs text-[var(--color-text-muted)] hover:text-white"
-              >
+              <Button variant="ghost" size="sm" disabled={uploading} onClick={() => onChange("")}>
                 Remover
-              </button>
+              </Button>
             )}
-            <span className="text-[11px] text-[var(--color-text-faint)]">
-              png, jpg ou webp · até 8MB
-            </span>
+            <span className="text-xs text-fg-muted">png, jpg ou webp · até 8MB</span>
           </div>
 
           {hiddenInput}
 
-          <input
-            type="url"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            className="input text-sm"
-            placeholder="ou cole a URL pública: https://exemplo.com/imagem.jpg"
-          />
+          {urlInput("ou cole a URL pública: https://exemplo.com/imagem.jpg", "")}
         </div>
       </div>
 
-      {error && <p className="text-xs text-red-400 mt-1.5">{error}</p>}
+      {errorText}
     </div>
   );
 }

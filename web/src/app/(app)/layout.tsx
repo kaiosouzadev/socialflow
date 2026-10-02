@@ -1,8 +1,18 @@
 import { auth, signOut } from "@/auth";
 import { redirect } from "next/navigation";
-import { Logo } from "@/components/Logo";
-import { NavLinks } from "@/components/NavLinks";
+import { BrandLockup } from "@/components/Logo";
+import { MobileNav, NavLinks } from "@/components/NavLinks";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { Icon } from "@/components/Icons";
+
+/** Iniciais do avatar: 1ª letra da 1ª e da última palavra ("?" sem nome). */
+function initials(name: string) {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  const first = words[0][0];
+  const last = words.length > 1 ? words[words.length - 1][0] : "";
+  return `${first}${last}`.toUpperCase();
+}
 
 export default async function AppLayout({
   children,
@@ -13,63 +23,79 @@ export default async function AppLayout({
   if (!session) redirect("/login");
 
   const isAdmin = (session.user as { role?: string } | undefined)?.role === "admin";
+  const name = session.user?.name ?? "";
+  const email = session.user?.email ?? "";
+
+  // Rodapé da sidebar, repetido na gaveta do celular: tema, usuário e Sair.
+  const footer = (
+    <div className="shrink-0 space-y-2 border-t border-line p-3">
+      <div className="flex items-center justify-between gap-2 pl-1">
+        <span aria-hidden="true" className="text-xs text-fg-muted">
+          Tema
+        </span>
+        <ThemeToggle variant="icons" />
+      </div>
+      <div className="flex items-center gap-3 px-1 py-1">
+        <span
+          aria-hidden="true"
+          className="grid size-10 shrink-0 place-items-center rounded-full bg-neutral-bg text-sm font-semibold text-fg"
+        >
+          {initials(name)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-fg" title={name}>
+            {name}
+          </p>
+          <p className="truncate text-xs text-fg-muted" title={email}>
+            {email}
+          </p>
+        </div>
+      </div>
+      <form
+        action={async () => {
+          "use server";
+          await signOut({ redirectTo: "/login" });
+        }}
+      >
+        <button
+          type="submit"
+          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-control px-4 text-sm font-semibold text-fg-muted transition-colors duration-(--sf-dur-fast) hover:bg-hover hover:text-fg active:bg-press active:text-fg sm:min-h-10"
+        >
+          <Icon.logout className="size-4.5 shrink-0" />
+          Sair
+        </button>
+      </form>
+    </div>
+  );
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 flex flex-col shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)]/60 backdrop-blur-xl">
-        <div className="flex items-center gap-2.5 px-5 h-16 border-b border-[var(--color-border)]">
-          <Logo size={30} />
-          <span className="font-semibold tracking-tight text-[15px]">
-            Social<span className="gradient-text">Flow</span>
-          </span>
-        </div>
+    <>
+      <a
+        href="#conteudo"
+        className="fixed left-4 top-4 z-60 inline-flex h-10 -translate-y-24 items-center rounded-control bg-selected px-4 font-medium text-on-selected focus:translate-y-0"
+      >
+        Pular para o conteúdo
+      </a>
 
-        <NavLinks isAdmin={isAdmin} />
-
-        <div className="px-3 py-4 border-t border-[var(--color-border)]">
-          <div className="flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl">
-            <div
-              className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold text-white shrink-0"
-              style={{ background: "linear-gradient(135deg,#7c5cff,#ec4899)" }}
-            >
-              {session.user?.name?.[0]?.toUpperCase() ?? "U"}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{session.user?.name}</p>
-              <p className="text-xs text-[var(--color-text-faint)] truncate">
-                {session.user?.email}
-              </p>
-            </div>
+      <div className="min-h-dvh md:grid md:grid-cols-[256px_minmax(0,1fr)]">
+        <aside className="sticky top-0 hidden h-dvh flex-col border-r border-line bg-surface md:flex">
+          <div className="flex h-16 shrink-0 items-center border-b border-line px-5">
+            <BrandLockup size="md" href="/" />
           </div>
-          <form
-            action={async () => {
-              "use server";
-              await signOut({ redirectTo: "/login" });
-            }}
-          >
-            <button
-              type="submit"
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-[var(--color-text-muted)] hover:text-white hover:bg-white/[0.03] transition-colors"
-            >
-              <Icon.logout className="w-[18px] h-[18px]" />
-              Sair
-            </button>
-          </form>
-        </div>
-      </aside>
+          <NavLinks isAdmin={isAdmin} />
+          {footer}
+        </aside>
 
-      {/* Main content */}
-      <main className="relative flex-1 overflow-auto">
-        <div
-          className="pointer-events-none absolute inset-x-0 top-0 h-64"
-          style={{
-            background:
-              "radial-gradient(60rem 18rem at 30% -8rem, rgba(139,109,255,0.10), transparent 70%)",
-          }}
-        />
-        <div className="relative">{children}</div>
-      </main>
-    </div>
+        <div className="min-w-0">
+          <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-line bg-surface px-2 md:hidden">
+            <MobileNav isAdmin={isAdmin} footer={footer} />
+            <BrandLockup size="sm" />
+          </header>
+          <main id="conteudo" tabIndex={-1} className="outline-none">
+            {children}
+          </main>
+        </div>
+      </div>
+    </>
   );
 }

@@ -62,14 +62,17 @@ export function BrandBadge({
 }) {
   const brand = BRAND[platform];
   const glyph = Math.round(size * 0.58);
+  // raio padrão só quando quem usa não passou o seu (evita duas classes rounded-* disputando)
+  const radius = /(^|\s)rounded(-|\s|$)/.test(className) ? "" : "rounded-control";
 
   if (!brand) {
+    // rede desconhecida: iniciais em tokens neutros (texto mínimo de 12 px)
     return (
       <span
-        className={`inline-flex items-center justify-center rounded-lg bg-white/10 text-[10px] font-bold ${className}`}
+        className={`inline-flex shrink-0 items-center justify-center bg-neutral-bg text-xs font-semibold leading-none text-neutral-fg ${radius} ${className}`}
         style={{ width: size, height: size }}
       >
-        {platform.slice(0, 2).toUpperCase()}
+        {platform.slice(0, size < 24 ? 1 : 2).toUpperCase()}
       </span>
     );
   }
@@ -77,7 +80,7 @@ export function BrandBadge({
   const { Icon, gradient } = brand;
   return (
     <span
-      className={`inline-flex items-center justify-center rounded-lg text-white shrink-0 ${className}`}
+      className={`inline-flex items-center justify-center text-white shrink-0 ${radius} ${className}`}
       style={{ width: size, height: size, background: gradient }}
     >
       <Icon className="" style={{ width: glyph, height: glyph }} />

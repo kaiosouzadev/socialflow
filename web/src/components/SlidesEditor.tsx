@@ -1,9 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
+import { Button } from "./Button";
 import { Icon } from "./Icons";
 
 const MAX_SLIDES = 20;
+
+const TEXTAREA =
+  "min-h-24 w-full resize-y rounded-control border border-line-strong bg-surface px-3 py-2.5 text-base text-fg transition-colors duration-(--sf-dur-fast) placeholder:text-fg-faint hover:border-fg-muted focus:border-focus focus:outline-2 focus:outline-offset-1 focus:outline-focus sm:text-sm";
 
 /**
  * Roteiro por tela para carrossel/reels: abas "Slide 1..N" + botão de adicionar,
@@ -20,13 +24,18 @@ export function SlidesEditor({
   onChange: (slides: string[]) => void;
 }) {
   const [active, setActive] = useState(0);
+  const titleId = useId();
+  const textId = useId();
 
   const label = format === "reels" ? "Telas do reels" : "Páginas do carrossel";
   const unit = format === "reels" ? "tela" : "slide";
+  const Unit = format === "reels" ? "Tela" : "Slide";
+  const ofUnit = format === "reels" ? "da tela" : "do slide";
   const current = Math.min(active, Math.max(0, slides.length - 1));
+  const full = slides.length >= MAX_SLIDES;
 
   function add() {
-    if (slides.length >= MAX_SLIDES) return;
+    if (full) return;
     onChange([...slides, ""]);
     setActive(slides.length);
   }
@@ -43,33 +52,39 @@ export function SlidesEditor({
 
   return (
     <div>
-      <label className="label">{label}</label>
+      <p id={titleId} className="mb-1.5 text-sm font-medium text-fg">
+        {label}
+      </p>
 
       {slides.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 mb-3">
-          {slides.map((_, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => setActive(i)}
-              className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                i === current
-                  ? "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-white"
-                  : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-strong)]"
-              }`}
-            >
-              Slide {i + 1}
-            </button>
-          ))}
-          <button
-            type="button"
+        <div role="group" aria-labelledby={titleId} className="mb-3 flex flex-wrap items-center gap-1.5">
+          {slides.map((_, i) => {
+            const on = i === current;
+            return (
+              <button
+                key={i}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setActive(i)}
+                className={`inline-flex min-h-10 items-center rounded-control border px-3 text-sm font-medium transition-colors duration-(--sf-dur-fast) sm:min-h-8 ${
+                  on ? "border-selected bg-selected text-on-selected" : "border-line-strong bg-surface text-fg-muted hover:bg-hover hover:text-fg"
+                }`}
+              >
+                {Unit} {i + 1}
+              </button>
+            );
+          })}
+          <Button
+            iconOnly
+            variant="secondary"
+            size="sm"
+            aria-label={`Adicionar ${unit}`}
+            title={full ? `Limite de ${MAX_SLIDES} atingido` : `Adicionar ${unit}`}
+            disabled={full}
             onClick={add}
-            disabled={slides.length >= MAX_SLIDES}
-            title={`Adicionar ${unit}`}
-            className="flex items-center justify-center w-8 h-8 rounded-lg border border-dashed border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors disabled:opacity-40"
           >
-            <Icon.plus className="w-4 h-4" />
-          </button>
+            <Icon.plus />
+          </Button>
         </div>
       )}
 
@@ -77,31 +92,33 @@ export function SlidesEditor({
         <button
           type="button"
           onClick={add}
-          className="w-full rounded-xl border border-dashed border-[var(--color-border-strong)] px-4 py-6 text-sm text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors"
+          className="w-full rounded-card border border-dashed border-line-strong px-4 py-6 text-sm text-fg-muted transition-colors duration-(--sf-dur-fast) hover:bg-hover hover:text-fg"
         >
           + Adicionar {unit === "tela" ? "a primeira tela" : "o primeiro slide"}
         </button>
       ) : (
         <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-medium text-[var(--color-text-muted)]">
-              Arte do slide {current + 1}
-            </span>
-            <button
-              type="button"
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <label htmlFor={textId} className="text-sm font-medium text-fg-muted">
+              Arte {ofUnit} {current + 1}
+            </label>
+            <Button
+              variant="ghost"
+              size="sm"
+              leadingIcon={<Icon.trash />}
+              aria-label={`Remover ${unit} ${current + 1}`}
               onClick={() => remove(current)}
-              className="flex items-center gap-1 text-xs text-[var(--color-text-faint)] hover:text-red-400 transition-colors"
             >
-              <Icon.trash className="w-3.5 h-3.5" />
               Remover
-            </button>
+            </Button>
           </div>
           <textarea
+            id={textId}
             value={slides[current] ?? ""}
             onChange={(e) => setText(current, e.target.value)}
             rows={4}
-            className="input text-sm"
-            placeholder={`Insira o conteúdo visual/textual ${unit === "tela" ? "da tela" : "do slide"} aqui…`}
+            className={TEXTAREA}
+            placeholder={`Insira o conteúdo visual/textual ${ofUnit} aqui…`}
           />
         </div>
       )}

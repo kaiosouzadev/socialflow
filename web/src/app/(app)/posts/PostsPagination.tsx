@@ -2,7 +2,12 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { buttonClasses } from "@/components/Button";
 import { Icon } from "@/components/Icons";
+
+/** Mesma medida do Button secondary sm, no estado desabilitado (por tokens, sem opacity). */
+const DISABLED =
+  "inline-flex min-h-10 cursor-not-allowed select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-control border border-line bg-disabled px-3 text-sm font-semibold text-fg-disabled sm:min-h-8";
 
 export default function PostsPagination({
   page,
@@ -28,43 +33,52 @@ export default function PostsPagination({
   const to = Math.min(page * pageSize, total);
   const hasPrev = page > 1;
   const hasNext = page < totalPages;
+  const enabled = buttonClasses({ variant: "secondary", size: "sm" });
 
-  const navClass =
-    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--color-border)] text-sm font-medium transition-colors";
-  const enabled = "text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-border-strong)]";
-  const disabled = "text-[var(--color-text-faint)] opacity-50 pointer-events-none";
+  const prev = (
+    <>
+      <Icon.chevronLeft className="size-4 shrink-0" />
+      Anterior
+    </>
+  );
+  const next = (
+    <>
+      Próxima
+      <Icon.chevronRight className="size-4 shrink-0" />
+    </>
+  );
 
   return (
-    <div className="flex items-center justify-between gap-3 mt-4 flex-wrap">
-      <p className="text-sm text-[var(--color-text-muted)]">
-        Mostrando <span className="text-[var(--color-text)] font-medium">{from}</span>–
-        <span className="text-[var(--color-text)] font-medium">{to}</span> de{" "}
-        <span className="text-[var(--color-text)] font-medium">{total}</span>
+    <nav aria-label="Paginação" className="mt-4 flex flex-wrap items-center justify-between gap-3">
+      <p className="text-sm text-fg-muted tabular-nums">
+        Mostrando <span className="font-medium text-fg">{from}</span>–<span className="font-medium text-fg">{to}</span> de{" "}
+        <span className="font-medium text-fg">{total}</span>
       </p>
 
       <div className="flex items-center gap-2">
-        <Link
-          href={hrefForPage(page - 1)}
-          aria-disabled={!hasPrev}
-          tabIndex={hasPrev ? undefined : -1}
-          className={`${navClass} ${hasPrev ? enabled : disabled}`}
-        >
-          <Icon.chevronLeft className="w-4 h-4" />
-          Anterior
-        </Link>
-        <span className="text-sm text-[var(--color-text-muted)] px-1">
-          página <span className="text-[var(--color-text)] font-medium">{page}</span> de {totalPages}
+        {hasPrev ? (
+          <Link href={hrefForPage(page - 1)} className={enabled} aria-label="Página anterior">
+            {prev}
+          </Link>
+        ) : (
+          // link desabilitado (sem href): "indisponível" para leitor de tela; contraste isento (WCAG 1.4.3)
+          <a role="link" aria-disabled="true" aria-label="Página anterior" className={DISABLED}>
+            {prev}
+          </a>
+        )}
+        <span className="px-1 text-sm text-fg-muted tabular-nums">
+          Página <span className="font-medium text-fg">{page}</span> de {totalPages}
         </span>
-        <Link
-          href={hrefForPage(page + 1)}
-          aria-disabled={!hasNext}
-          tabIndex={hasNext ? undefined : -1}
-          className={`${navClass} ${hasNext ? enabled : disabled}`}
-        >
-          Próximo
-          <Icon.chevronRight className="w-4 h-4" />
-        </Link>
+        {hasNext ? (
+          <Link href={hrefForPage(page + 1)} className={enabled} aria-label="Próxima página">
+            {next}
+          </Link>
+        ) : (
+          <a role="link" aria-disabled="true" aria-label="Próxima página" className={DISABLED}>
+            {next}
+          </a>
+        )}
       </div>
-    </div>
+    </nav>
   );
 }

@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { Button, Spinner } from "./Button";
+import { Callout } from "./Callout";
 import { Icon } from "./Icons";
+import { hasOpenPopover } from "./Popover";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 export type AssistantPostContext = {
   theme?: string;
@@ -20,6 +24,13 @@ type Msg = {
   artPrompt?: string;
 };
 
+const ASSISTANT_ERROR = "O assistente não conseguiu responder agora. Tente de novo em instantes.";
+const DEFAULT_SUBTITLE = "Sugestões de legenda, tom, hashtags e artes";
+const SUGGESTIONS = ["Deixe o tom mais agressivo para vendas", "Sugira hashtags", "Me dê uma ideia de arte"];
+
+const INPUT =
+  "max-h-40 min-h-11 w-full min-w-0 flex-1 resize-none rounded-control border border-line-strong bg-surface px-3 py-2.5 text-base text-fg transition-colors duration-(--sf-dur-fast) placeholder:text-fg-faint hover:border-fg-muted focus:border-focus focus:outline-2 focus:outline-offset-1 focus:outline-focus sm:min-h-10 sm:text-sm";
+
 function BotIcon({ className = "w-4 h-4" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
@@ -29,10 +40,25 @@ function BotIcon({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
+/** Bloco de sugestão (título, legenda ou prompt de arte) dentro da resposta. */
+function Suggestion({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2 rounded-control border border-line bg-sunken p-3">
+      <p className="text-xs font-semibold text-fg-muted">{label}</p>
+      {children}
+    </div>
+  );
+}
+
 /**
  * Chat interno com a IA sobre o post em edição. `getPost` é lido a cada envio,
  * então o assistente sempre vê o estado atual do formulário. Sugestões de
  * legenda chegam com botão "Usar esta legenda" (aplica via onApplyCaption).
+ *
+ * Semântica (A-039): sem `onClose` é um painel fixo da página (<section> com
+ * título). Com `onClose` vira um painel lateral com role="dialog": recebe o
+ * foco ao abrir, Esc (com o foco dentro) e o X chamam `onClose`, e o foco
+ * volta para onde estava ao fechar.
  */
 export function AssistantPanel({
   clientId,
@@ -40,12 +66,18 @@ export function AssistantPanel({
   onApplyCaption,
   onApplyTitle,
   className = "",
+  onClose,
+  subtitle,
 }: {
   clientId: string;
   getPost: () => AssistantPostContext;
   onApplyCaption?: (caption: string) => void;
   onApplyTitle?: (title: string) => void;
   className?: string;
+  /** Pedido de fechar (Esc ou X). Com ele, o painel vira role="dialog" e cuida do foco. */
+  onClose?: () => void;
+  /** Linha sob o título (ex.: o tema do post). Padrão: o que o assistente faz. */
+  subtitle?: React.ReactNode;
 }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -53,10 +85,35 @@ export function AssistantPanel({
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(-1);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const titleId = useId();
+  const subtitleId = useId();
+  const inputId = useId();
+  const isDialog = !!onClose;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);
+
+  // Como painel/diálogo: foco no campo ao abrir e de volta ao gatilho ao fechar.
+  useEffect(() => {
+    if (!isDialog) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    inputRef.current?.focus({ preventScroll: true });
+    return () => {
+      const active = document.activeElement;
+      if ((!active || active === document.body) && previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, [isDialog]);
+
+  function onPanelKeyDown(e: KeyboardEvent<HTMLElement>) {
+    // um Popover aberto (ex.: seletor de data) fecha primeiro, por conta própria
+    if (e.key !== "Escape" || !onClose || e.defaultPrevented || hasOpenPopover()) return;
+    // não deixa o Esc chegar a um Dialog por baixo (nem ao fechamento nativo do <dialog>)
+    e.preventDefault();
+    e.stopPropagation();
+    onClose();
+  }
 
   async function send(text?: string) {
     const content = (text ?? input).trim();
@@ -93,21 +150,21 @@ export function AssistantPanel({
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(typeof data?.error === "string" ? data.error : "Falha ao falar com o assistente.");
+        setError(toUserMessage(data, ASSISTANT_ERROR));
         return;
       }
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          content: typeof data.reply === "string" ? data.reply : "…",
-          title: typeof data.title === "string" ? data.title : undefined,
-          caption: typeof data.caption === "string" ? data.caption : undefined,
-          artPrompt: typeof data.artPrompt === "string" ? data.artPrompt : undefined,
+          content: typeof data?.reply === "string" ? data.reply : "…",
+          title: typeof data?.title === "string" ? data.title : undefined,
+          caption: typeof data?.caption === "string" ? data.caption : undefined,
+          artPrompt: typeof data?.artPrompt === "string" ? data.artPrompt : undefined,
         },
       ]);
     } catch {
-      setError("Falha de conexão com o assistente. Tente novamente.");
+      setError("Falha de conexão com o assistente. Verifique a internet e tente de novo.");
     } finally {
       setBusy(false);
     }
@@ -123,40 +180,61 @@ export function AssistantPanel({
       .catch(() => setError("Não foi possível copiar. Selecione o texto manualmente."));
   }
 
+  const Root = isDialog ? "div" : "section";
+  const rootA11y = isDialog
+    ? { role: "dialog" as const, "aria-labelledby": titleId, "aria-describedby": subtitleId }
+    : { "aria-labelledby": titleId };
+
   return (
-    <div className={`flex flex-col rounded-2xl border border-[var(--color-border)] bg-white/[0.02] ${className}`}>
+    <Root
+      {...rootA11y}
+      onKeyDown={onPanelKeyDown}
+      className={`flex flex-col rounded-card border border-line bg-surface text-fg ${className}`}
+    >
       {/* header */}
-      <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--color-border)]">
+      <div className="flex items-center gap-2.5 border-b border-line px-4 py-3">
         <span
-          className="flex items-center justify-center w-8 h-8 rounded-xl text-white shrink-0"
-          style={{ background: "linear-gradient(135deg,#8b6dff,#a855f7)" }}
+          aria-hidden="true"
+          className="flex size-8 shrink-0 items-center justify-center rounded-control bg-brand text-on-brand"
         >
-          <BotIcon className="w-4.5 h-4.5" />
+          <BotIcon className="size-4.5" />
         </span>
-        <div>
-          <p className="text-sm font-semibold">SocialFlow AI Assistant</p>
-          <p className="text-[11px] text-[var(--color-text-faint)]">
-            Sugestões de legenda, tom, hashtags e artes
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="text-sm font-semibold text-fg">
+            Assistente de IA
+          </h2>
+          <p id={subtitleId} className="text-xs text-fg-muted">
+            {subtitle ?? DEFAULT_SUBTITLE}
           </p>
         </div>
+        {onClose && (
+          <Button iconOnly variant="ghost" size="sm" aria-label="Fechar assistente" onClick={onClose} className="-mr-1.5">
+            <Icon.x />
+          </Button>
+        )}
       </div>
 
       {/* messages */}
-      <div ref={scrollRef} className="flex-1 min-h-40 max-h-[26rem] overflow-y-auto p-4 space-y-3">
+      <div
+        ref={scrollRef}
+        role="log"
+        aria-live="polite"
+        aria-label="Conversa com o assistente"
+        aria-busy={busy || undefined}
+        tabIndex={0}
+        className="max-h-104 min-h-40 flex-1 space-y-3 overflow-y-auto p-4"
+      >
         {messages.length === 0 && (
-          <div className="text-xs text-[var(--color-text-muted)] space-y-2">
+          <div className="space-y-2 text-sm text-fg-muted">
             <p>Peça ajuda com este post. Exemplos:</p>
             <div className="flex flex-wrap gap-1.5">
-              {[
-                "Deixe o tom mais agressivo para vendas",
-                "Sugira hashtags",
-                "Me dê uma ideia de arte",
-              ].map((s) => (
+              {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
                   type="button"
                   onClick={() => send(s)}
-                  className="px-2.5 py-1 rounded-full border border-[var(--color-border)] text-[11px] text-[var(--color-text-muted)] hover:text-white hover:border-[var(--color-accent)]/50 transition-colors"
+                  disabled={busy}
+                  className="inline-flex min-h-10 items-center rounded-full border border-line-strong px-3 py-1.5 text-left text-xs text-fg-muted transition-colors duration-(--sf-dur-fast) hover:bg-hover hover:text-fg disabled:cursor-not-allowed disabled:text-fg-disabled sm:min-h-8"
                 >
                   {s}
                 </button>
@@ -168,94 +246,69 @@ export function AssistantPanel({
         {messages.map((m, i) =>
           m.role === "user" ? (
             <div key={i} className="flex justify-end">
-              <p className="max-w-[85%] rounded-2xl rounded-br-md bg-white/[0.07] px-3.5 py-2 text-sm whitespace-pre-wrap">
+              <p className="max-w-[85%] whitespace-pre-wrap rounded-card rounded-br-chip bg-neutral-bg px-3.5 py-2 text-sm text-fg">
                 {m.content}
               </p>
             </div>
           ) : (
             <div
               key={i}
-              className="max-w-[95%] rounded-2xl rounded-bl-md border border-[var(--color-accent)]/25 bg-[var(--color-accent)]/[0.06] px-3.5 py-2.5 space-y-2.5"
+              className="max-w-[95%] space-y-2.5 rounded-card rounded-bl-chip border border-line bg-raised px-3.5 py-2.5"
             >
-              <p className="text-sm whitespace-pre-wrap leading-relaxed">{m.content}</p>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{m.content}</p>
 
               {m.title && (
-                <div className="rounded-xl border border-[var(--color-border)] bg-black/25 p-3 space-y-2">
-                  <p className="text-[11px] font-medium text-[var(--color-accent)]">
-                    Sugestão de título
-                  </p>
-                  <p className="text-sm font-semibold leading-relaxed">{m.title}</p>
+                <Suggestion label="Sugestão de título">
+                  <p className="text-sm font-semibold leading-relaxed text-fg">{m.title}</p>
                   {onApplyTitle && (
-                    <button
-                      type="button"
-                      onClick={() => onApplyTitle(m.title!)}
-                      className="btn-ghost !py-1.5 !px-3 text-xs"
-                    >
-                      <Icon.check className="w-3.5 h-3.5" />
+                    <Button size="sm" leadingIcon={<Icon.check />} onClick={() => onApplyTitle(m.title!)}>
                       Usar este título
-                    </button>
+                    </Button>
                   )}
-                </div>
+                </Suggestion>
               )}
 
               {m.caption && (
-                <div className="rounded-xl border border-[var(--color-border)] bg-black/25 p-3 space-y-2">
-                  <p className="text-[11px] font-medium text-[var(--color-accent)]">
-                    Sugestão de legenda
-                  </p>
-                  <p className="text-sm whitespace-pre-wrap leading-relaxed">{m.caption}</p>
+                <Suggestion label="Sugestão de legenda">
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{m.caption}</p>
                   {onApplyCaption && (
-                    <button
-                      type="button"
-                      onClick={() => onApplyCaption(m.caption!)}
-                      className="btn-ghost !py-1.5 !px-3 text-xs"
-                    >
-                      <Icon.check className="w-3.5 h-3.5" />
+                    <Button size="sm" leadingIcon={<Icon.check />} onClick={() => onApplyCaption(m.caption!)}>
                       Usar esta legenda
-                    </button>
+                    </Button>
                   )}
-                </div>
+                </Suggestion>
               )}
 
               {m.artPrompt && (
-                <div className="rounded-xl border border-[var(--color-border)] bg-black/25 p-3 space-y-2">
-                  <p className="text-[11px] font-medium text-[var(--color-accent)]">
-                    Sugestão de arte (prompt)
-                  </p>
-                  <p className="text-xs font-mono whitespace-pre-wrap text-[var(--color-text-muted)]">
-                    {m.artPrompt}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => copyArtPrompt(m.artPrompt!, i)}
-                    className="btn-ghost !py-1.5 !px-3 text-xs"
-                  >
-                    <Icon.link className="w-3.5 h-3.5" />
-                    {copied === i ? "Copiado ✓" : "Copiar prompt"}
-                  </button>
-                </div>
+                <Suggestion label="Sugestão de arte (prompt)">
+                  <p className="whitespace-pre-wrap font-mono text-xs text-fg-muted">{m.artPrompt}</p>
+                  <Button size="sm" leadingIcon={<Icon.copy />} onClick={() => copyArtPrompt(m.artPrompt!, i)}>
+                    {copied === i ? "Copiado" : "Copiar prompt"}
+                  </Button>
+                </Suggestion>
               )}
             </div>
           )
         )}
 
         {busy && (
-          <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-            <Icon.refresh className="w-3.5 h-3.5 animate-spin text-[var(--color-accent)]" />
+          <p className="flex items-center gap-2 text-xs text-fg-muted">
+            <Spinner size={16} />
             Pensando…
-          </div>
-        )}
-        {error && (
-          <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-            {error}
           </p>
         )}
+        {error && <Callout tone="danger">{error}</Callout>}
       </div>
 
       {/* input */}
-      <div className="p-3 border-t border-[var(--color-border)]">
+      <div className="border-t border-line p-3">
         <div className="flex items-end gap-2">
+          <label htmlFor={inputId} className="sr-only">
+            Mensagem para o assistente
+          </label>
           <textarea
+            ref={inputRef}
+            id={inputId}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -266,20 +319,20 @@ export function AssistantPanel({
             }}
             rows={1}
             placeholder="Peça para alterar o tom, sugerir hashtags…"
-            className="input flex-1 resize-none !rounded-2xl text-sm"
+            className={INPUT}
           />
-          <button
-            type="button"
+          <Button
+            iconOnly
+            variant="primary"
+            aria-label="Enviar mensagem"
+            loading={busy}
+            disabled={!input.trim()}
             onClick={() => send()}
-            disabled={busy || !input.trim()}
-            aria-label="Enviar"
-            className="flex items-center justify-center w-10 h-10 rounded-full text-white shrink-0 transition-opacity disabled:opacity-40"
-            style={{ background: "linear-gradient(135deg,#8b6dff,#a855f7)" }}
           >
-            <Icon.send className="w-4 h-4" />
-          </button>
+            <Icon.send />
+          </Button>
         </div>
       </div>
-    </div>
+    </Root>
   );
 }

@@ -1,11 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Icon } from "@/components/Icons";
 import { BrandBadge } from "@/components/BrandIcons";
+import { Button, Spinner } from "@/components/Button";
+import { Dialog } from "@/components/Dialog";
+import { Field, Input, Select } from "@/components/Field";
+import { Icon } from "@/components/Icons";
 import { Toast, type ToastState } from "@/components/Toast";
+import { toUserMessage } from "@/lib/user-facing-error";
 
 type Conn = { id: string; name: string };
 type Asset = {
@@ -14,6 +18,9 @@ type Asset = {
   instagramId: string | null;
   instagramUsername: string | null;
 };
+
+const LIST_ERROR =
+  "Não foi possível listar as Páginas e as contas do Instagram desta conexão. Tente de novo em instantes.";
 
 export default function ImportMetaButton({
   clientId,
@@ -43,35 +50,23 @@ export default function ImportMetaButton({
       const res = await fetch(`/api/meta/connections/${id}/assets${refresh ? "?refresh=1" : ""}`);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(typeof data?.error === "string" ? data.error : "Falha ao listar ativos.");
+        setError(toUserMessage(data, LIST_ERROR));
         return;
       }
-      setAssets(data.assets ?? []);
+      setAssets(Array.isArray(data?.assets) ? data.assets : []);
     } catch {
-      setError("Falha de conexão ao listar as páginas. Tente novamente.");
+      setError("Falha de conexão ao listar as páginas. Verifique a internet e tente de novo.");
     } finally {
       setLoading(false);
     }
   }
 
-  // load assets for the preselected connection as soon as the modal opens.
-  // deferred so the effect doesn't call setState synchronously in its body.
-  useEffect(() => {
-    if (open && connId && assets === null && !loading) {
-      const t = setTimeout(() => loadAssets(connId), 0);
-      return () => clearTimeout(t);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  // close on Escape
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  // abre e já carrega as páginas da conexão pré-selecionada
+  function openDialog() {
+    setToast(null);
+    setOpen(true);
+    if (connId && assets === null && !loading) void loadAssets(connId);
+  }
 
   function close() {
     setOpen(false);
@@ -96,23 +91,20 @@ export default function ImportMetaButton({
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(typeof data?.error === "string" ? data.error : "Falha ao conectar.");
+        setError(toUserMessage(data, "Não foi possível vincular a Página. Tente de novo em instantes."));
         return;
       }
 
-      // Recarrega os dados do servidor ANTES de fechar o modal. Fechando
-      // primeiro, a tela reaparecia com a contagem antiga ("0 contas") e só
-      // acertava depois de um F5.
-      const linked = [
-        "Facebook",
-        ...(a.instagramId ? ["Instagram"] : []),
-      ].join(" + ");
+      // Recarrega os dados do servidor junto com o fechamento do diálogo: fechando
+      // antes, a tela reaparecia com a contagem antiga ("0 contas") até um F5.
+      // O Toast só aparece com o diálogo fechado (mesma renderização).
+      const linked = ["Facebook", ...(a.instagramId ? ["Instagram"] : [])].join(" + ");
       setRefreshing(true);
       router.refresh();
-      setToast({ kind: "success", text: `${linked} vinculado(s) em ${a.pageName}` });
+      setToast({ kind: "success", text: `${linked} ${a.instagramId ? "vinculados" : "vinculado"} em ${a.pageName}` });
       close();
     } catch {
-      setError("Falha de conexão ao vincular. Tente novamente.");
+      setError("Falha de conexão ao vincular. Verifique a internet e tente de novo.");
     } finally {
       setConnectingId("");
       setRefreshing(false);
@@ -132,175 +124,125 @@ export default function ImportMetaButton({
 
   return (
     <>
-      <button onClick={() => setOpen(true)} disabled={refreshing} className="btn-ghost">
-        <BrandBadge platform="facebook" size={18} />
-        {refreshing ? "Atualizando..." : "Importar do Meta"}
-      </button>
+      <Button
+        loading={refreshing}
+        loadingText="Atualizando…"
+        leadingIcon={<BrandBadge platform="facebook" size={18} />}
+        onClick={openDialog}
+      >
+        Importar do Meta
+      </Button>
 
       <Toast toast={toast} onClose={() => setToast(null)} />
 
-      {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-up"
-            onClick={close}
-          />
-          <div
-            className="relative z-10 w-full max-w-xl card shadow-2xl flex flex-col max-h-[85vh]"
-            style={{ backgroundColor: "var(--color-surface)" }}
-          >
-            {/* header */}
-            <div className="px-6 py-5 border-b border-[var(--color-border)] flex items-start justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <BrandBadge platform="facebook" size={34} />
-                <div>
-                  <h3 className="font-semibold">Importar conta do Meta</h3>
-                  <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-                    Escolha a conexão e vincule uma Página a este cliente.
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={close}
-                className="p-2 -mr-2 rounded-lg text-[var(--color-text-muted)] hover:text-white hover:bg-white/5 transition-colors"
-                title="Fechar"
+      <Dialog
+        open={open}
+        onClose={close}
+        title="Importar conta do Meta"
+        description="Escolha a conexão e vincule uma Página a este cliente."
+        error={error}
+        footer={<Button onClick={close}>Fechar</Button>}
+      >
+        {connections.length === 0 ? (
+          <p className="py-6 text-center text-sm text-fg-muted">
+            Nenhuma conexão com a Meta.{" "}
+            <Link href="/meta" className="font-medium text-link underline underline-offset-2 hover:text-link-hover">
+              Conecte um Gerenciador de Negócios
+            </Link>{" "}
+            primeiro.
+          </p>
+        ) : (
+          <div className="grid gap-4 pb-2">
+            <Field label="Conexão">
+              <Select
+                value={connId}
+                placeholderOption="Selecione…"
+                onChange={(e) => loadAssets(e.target.value)}
               >
-                <Icon.x className="w-4 h-4" />
-              </button>
-            </div>
+                {connections.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
 
-            {connections.length === 0 ? (
-              <div className="px-6 py-10 text-center text-sm text-[var(--color-text-muted)]">
-                Nenhuma conexão Meta.{" "}
-                <Link href="/meta" className="text-[var(--color-accent)] hover:underline">
-                  Conectar um Business Manager
-                </Link>{" "}
-                primeiro.
+            {assets && assets.length > 0 && (
+              <div className="flex items-end gap-2">
+                <Field label="Buscar página" className="flex-1">
+                  <Input
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Nome, ID ou @instagram"
+                    leadingIcon={<Icon.search />}
+                  />
+                </Field>
+                <Button
+                  iconOnly
+                  aria-label="Buscar a lista atualizada na Meta"
+                  title="Buscar a lista atualizada na Meta"
+                  loading={loading}
+                  onClick={() => loadAssets(connId, true)}
+                >
+                  <Icon.refresh />
+                </Button>
               </div>
-            ) : (
-              <>
-                {/* controls */}
-                <div className="px-6 pt-5 pb-3 space-y-3">
-                  <div>
-                    <label className="label">Conexão</label>
-                    <select
-                      value={connId}
-                      onChange={(e) => loadAssets(e.target.value)}
-                      className="input"
+            )}
+
+            {loading && (
+              <p role="status" className="flex flex-col items-center gap-3 py-8 text-sm text-fg-muted">
+                <Spinner size={20} />
+                Carregando as Páginas do Gerenciador de Negócios…
+              </p>
+            )}
+
+            {!loading && !connId && (
+              <p className="py-8 text-center text-sm text-fg-muted">Selecione uma conexão para ver as páginas.</p>
+            )}
+
+            {!loading && assets && assets.length === 0 && (
+              <p className="py-8 text-center text-sm text-fg-muted">Nenhuma Página nesta conexão.</p>
+            )}
+
+            {!loading && filtered && filtered.length === 0 && assets && assets.length > 0 && (
+              <p className="py-8 text-center text-sm text-fg-muted">Nenhuma página corresponde a “{query}”.</p>
+            )}
+
+            {!loading && filtered && filtered.length > 0 && (
+              <ul aria-label="Páginas da conexão" className="divide-y divide-line overflow-hidden rounded-card border border-line">
+                {filtered.map((a) => (
+                  <li key={a.pageId} className="flex items-center gap-3 px-4 py-3">
+                    <BrandBadge platform="facebook" size={32} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-fg">{a.pageName}</p>
+                      <p className="truncate font-mono text-xs text-fg-muted">{a.pageId}</p>
+                      {a.instagramId ? (
+                        <span className="mt-1 inline-flex items-center gap-1 text-xs text-fg-muted">
+                          <BrandBadge platform="instagram" size={14} />@{a.instagramUsername ?? a.instagramId}
+                        </span>
+                      ) : (
+                        <span className="mt-1 inline-block text-xs text-fg-muted">sem Instagram vinculado</span>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      leadingIcon={<Icon.link />}
+                      loading={connectingId === a.pageId}
+                      loadingText="Vinculando…"
+                      disabled={connectingId !== "" && connectingId !== a.pageId}
+                      onClick={() => connect(a)}
                     >
-                      <option value="">Selecione…</option>
-                      {connections.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {assets && assets.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <Icon.search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-faint)] pointer-events-none" />
-                        <input
-                          value={query}
-                          onChange={(e) => setQuery(e.target.value)}
-                          placeholder="Buscar página…"
-                          className="input pl-9"
-                        />
-                      </div>
-                      <button
-                        onClick={() => loadAssets(connId, true)}
-                        disabled={loading}
-                        title="Buscar a lista atualizada no Meta"
-                        className="btn-ghost !py-2.5 shrink-0"
-                      >
-                        <Icon.refresh className="w-4 h-4" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* page list */}
-                <div className="flex-1 overflow-auto px-6 pb-6">
-                  {loading && (
-                    <div className="py-10 flex flex-col items-center gap-3 text-sm text-[var(--color-text-muted)]">
-                      <Icon.refresh className="w-5 h-5 animate-spin text-[var(--color-accent)]" />
-                      <span>Carregando páginas do Business Manager…</span>
-                    </div>
-                  )}
-
-                  {!loading && !connId && (
-                    <div className="py-10 text-center text-sm text-[var(--color-text-muted)]">
-                      Selecione uma conexão para ver as páginas.
-                    </div>
-                  )}
-
-                  {!loading && assets && assets.length === 0 && (
-                    <div className="py-10 text-center text-sm text-[var(--color-text-muted)]">
-                      Nenhuma Página nesta conexão.
-                    </div>
-                  )}
-
-                  {!loading && filtered && filtered.length === 0 && assets!.length > 0 && (
-                    <div className="py-10 text-center text-sm text-[var(--color-text-muted)]">
-                      Nenhuma página corresponde a “{query}”.
-                    </div>
-                  )}
-
-                  {!loading && filtered && filtered.length > 0 && (
-                    <div className="rounded-xl border border-[var(--color-border)] divide-y divide-[var(--color-border)] overflow-hidden">
-                      {filtered.map((a) => (
-                        <div
-                          key={a.pageId}
-                          className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] transition-colors"
-                        >
-                          <BrandBadge platform="facebook" size={32} />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate">{a.pageName}</p>
-                            <p className="text-[11px] text-[var(--color-text-faint)] font-mono truncate">
-                              {a.pageId}
-                            </p>
-                            {a.instagramId ? (
-                              <span className="inline-flex items-center gap-1 mt-1 text-[11px] text-[var(--color-text-muted)]">
-                                <BrandBadge platform="instagram" size={14} />
-                                @{a.instagramUsername ?? a.instagramId}
-                              </span>
-                            ) : (
-                              <span className="inline-block mt-1 text-[11px] text-[var(--color-text-faint)]">
-                                sem Instagram vinculado
-                              </span>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => connect(a)}
-                            disabled={connectingId === a.pageId}
-                            className="btn-primary !py-1.5 !px-3 text-xs shrink-0"
-                          >
-                            {connectingId === a.pageId ? (
-                              "Conectando…"
-                            ) : (
-                              <>
-                                <Icon.link className="w-3.5 h-3.5" />
-                                Vincular
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {error && (
-                    <p className="mt-4 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-                      {error}
-                    </p>
-                  )}
-                </div>
-              </>
+                      Vincular<span className="sr-only"> {a.pageName}</span>
+                    </Button>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
-        </div>
-      )}
+        )}
+      </Dialog>
     </>
   );
 }
