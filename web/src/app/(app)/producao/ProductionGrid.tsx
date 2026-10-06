@@ -334,12 +334,12 @@ export function ProductionLegend() {
                   <span className={`${SAMPLE_BASE} rounded-chip border-[1.5px] ${STAGE_FILLED.texto_ok}`}>T</span>
                 }
               >
-                Cheio: já tem arte
+                Cheio: arte feita (marcada no Design ou já no post)
               </LegendItem>
               <LegendItem
                 sample={<span className={`${SAMPLE_BASE} rounded-chip border-2 ${STAGE_HOLLOW.texto_ok}`}>T</span>}
               >
-                Vazado: ainda sem arte
+                Vazado: arte a fazer
               </LegendItem>
               <LegendItem
                 sample={

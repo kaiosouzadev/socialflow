@@ -6,8 +6,9 @@ import { prisma } from "@/lib/prisma";
 import { Avatar } from "@/components/Avatar";
 import { buttonClasses } from "@/components/Button";
 import { Icon } from "@/components/Icons";
-import { EmptyState, PageHeader, PlatformChip, StatusBadge, ToneBadge } from "@/components/ui";
+import { EmptyState, FormatBadge, PageHeader, PlatformChip, StatusBadge, ToneBadge } from "@/components/ui";
 import { formatDateTime } from "@/lib/format-date";
+import { dateWindow, spDateKey } from "@/lib/date-range";
 import { uuidString } from "@/lib/validators";
 import { listBasicMonths } from "@/lib/basic-plan";
 import ClientChecklist from "./ClientChecklist";
@@ -41,18 +42,29 @@ function plural(n: number, one: string, many: string) {
   return n === 1 ? one : many;
 }
 
+/** U-05: "Próximos posts" = de hoje (00:00 em São Paulo) em diante, do mais próximo ao mais distante. */
+const UPCOMING_TAKE = 8;
+
 export default async function ClientDetailPage({ params }: Props) {
   const { id } = await params;
   // id que não é uuid faria o Prisma lançar: vira 404
   if (!uuidString.safeParse(id).success) notFound();
+
+  const todayStart = dateWindow("day", spDateKey())!.gte;
 
   const [client, metaConnections, users, openPending, queuedPostsCount] = await Promise.all([
     prisma.client.findUnique({
       where: { id },
       include: {
         socialAccounts: { orderBy: { platform: "asc" } },
-        posts: { take: 5, orderBy: { scheduledAt: "desc" } },
+        posts: {
+          where: { scheduledAt: { gte: todayStart } },
+          take: UPCOMING_TAKE,
+          orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+          select: { id: true, theme: true, format: true, targets: true, scheduledAt: true, status: true },
+        },
         responsible: { select: { id: true, name: true } },
+        designer: { select: { id: true, name: true } },
         _count: { select: { posts: true } },
       },
     }),
@@ -61,7 +73,7 @@ export default async function ClientDetailPage({ params }: Props) {
       select: { id: true, name: true },
       orderBy: { createdAt: "desc" },
     }),
-    // GET /api/users é só para admin: a lista de redatoras vem do servidor
+    // GET /api/users é só para admin: a lista de redatoras e designers vem do servidor
     prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.pendingItem.count({ where: { clientId: id, resolvedAt: null } }),
     prisma.post.count({ where: { clientId: id, status: { in: ["scheduled", "failed"] } } }),
@@ -109,8 +121,19 @@ export default async function ClientDetailPage({ params }: Props) {
                 className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-surface pl-0.5 pr-2.5 text-sm font-medium text-fg"
               >
                 <Avatar name={client.responsible.name} size="xs" />
-                <span className="sr-only">Redatora: </span>
+                {/* papel visível: os dois selos (redatora e designer) têm a mesma forma */}
+                <span className="font-normal text-fg-muted">Redatora</span>
                 {client.responsible.name}
+              </span>
+            )}
+            {client.designer && (
+              <span
+                title="Designer responsável"
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-surface pl-0.5 pr-2.5 text-sm font-medium text-fg"
+              >
+                <Avatar name={client.designer.name} size="xs" />
+                <span className="font-normal text-fg-muted">Designer</span>
+                {client.designer.name}
               </span>
             )}
             {openPending > 0 && (
@@ -163,32 +186,35 @@ export default async function ClientDetailPage({ params }: Props) {
           agencyPublishes={client.agencyPublishes}
         />
 
-        <ClientInfoEditor
-          client={{
-            id: client.id,
-            name: client.name,
-            email: client.email,
-            extraEmails: client.extraEmails,
-            plan: client.plan,
-            tier: client.tier,
-            agencyPublishes: client.agencyPublishes,
-            status: client.status,
-            segment: client.segment,
-            responsibleUserId: client.responsibleUserId,
-            toneOfVoice: client.toneOfVoice,
-            driveFolderId: client.driveFolderId,
-            logoUrl: client.logoUrl,
-            brandColor: client.brandColor,
-            showContacts: client.showContacts,
-          }}
-          users={users}
-          queuedPostsCount={queuedPostsCount}
-        />
+        <div id="cadastro" className="scroll-mt-20">
+          <ClientInfoEditor
+            client={{
+              id: client.id,
+              name: client.name,
+              email: client.email,
+              extraEmails: client.extraEmails,
+              plan: client.plan,
+              tier: client.tier,
+              agencyPublishes: client.agencyPublishes,
+              status: client.status,
+              segment: client.segment,
+              responsibleUserId: client.responsibleUserId,
+              designerUserId: client.designerUserId,
+              toneOfVoice: client.toneOfVoice,
+              driveFolderId: client.driveFolderId,
+              logoUrl: client.logoUrl,
+              brandColor: client.brandColor,
+              showContacts: client.showContacts,
+            }}
+            users={users}
+            queuedPostsCount={queuedPostsCount}
+          />
+        </div>
 
         {client.tier === "basica" && <BasicPlanManager clientId={client.id} initial={basicMonths} />}
 
         <div className="grid gap-6 lg:grid-cols-3">
-          <div className="min-w-0 lg:col-span-2">
+          <div id="briefing" className="min-w-0 scroll-mt-20 lg:col-span-2">
             <ClientBriefingEditor
               client={{
                 id: client.id,
@@ -203,7 +229,7 @@ export default async function ClientDetailPage({ params }: Props) {
               }}
             />
           </div>
-          <div className="min-w-0">
+          <div id="credenciais" className="min-w-0 scroll-mt-20">
             <CredentialsManager clientId={client.id} hasCredentials={!!client.credentialsEnc} />
           </div>
         </div>
@@ -217,12 +243,14 @@ export default async function ClientDetailPage({ params }: Props) {
           ))}
         </dl>
 
-        <AccountsManager clientId={client.id} accounts={accounts} metaConnections={metaConnections} />
+        <div id="contas" className="scroll-mt-20">
+          <AccountsManager clientId={client.id} accounts={accounts} metaConnections={metaConnections} />
+        </div>
 
-        <section aria-labelledby="posts-recentes" className="card overflow-hidden">
+        <section aria-labelledby="proximos-posts" className="card overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3">
-            <h2 id="posts-recentes" className="font-display text-lg font-semibold tracking-title text-fg">
-              Posts recentes
+            <h2 id="proximos-posts" className="font-display text-lg font-semibold tracking-title text-fg">
+              Próximos posts
             </h2>
             <Link
               href={`/posts?clientId=${client.id}`}
@@ -235,8 +263,12 @@ export default async function ClientDetailPage({ params }: Props) {
             <EmptyState
               size="inline"
               headingLevel={3}
-              title="Nenhum post ainda"
-              description="Crie um post ou gere o cronograma do mês com IA."
+              title={client._count.posts === 0 ? "Nenhum post ainda" : "Nenhum post de hoje em diante"}
+              description={
+                client._count.posts === 0
+                  ? "Crie um post ou gere o cronograma do mês com IA."
+                  : "Os posts anteriores estão em “Ver todos os posts”. Crie um post ou gere o cronograma do mês com IA."
+              }
               action={
                 <Link href={`/posts/new?clientId=${client.id}`} className={buttonClasses({ variant: "secondary" })}>
                   Criar post
@@ -246,24 +278,26 @@ export default async function ClientDetailPage({ params }: Props) {
           ) : (
             <ul className="divide-y divide-line">
               {client.posts.map((post) => (
-                <li key={post.id}>
-                  <Link
-                    href={`/posts/${post.id}`}
-                    className="flex items-center gap-4 px-5 py-3 transition-colors hover:bg-hover focus-visible:-outline-offset-2"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-fg">{post.theme?.trim() || "Sem tema"}</p>
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <span className="flex gap-1">
-                          {post.targets.map((t) => (
-                            <PlatformChip key={t} platform={t} />
-                          ))}
-                        </span>
-                        <span className="text-xs text-fg-muted">{formatDateTime(post.scheduledAt)}</span>
-                      </div>
+                // linha inteira clicável (after:inset-0 do link do tema); o nome acessível do link é só o tema
+                <li key={post.id} className="relative flex items-center gap-4 px-5 py-3 transition-colors hover:bg-hover">
+                  <div className="min-w-0 flex-1">
+                    <Link
+                      href={`/posts/${post.id}`}
+                      className="block truncate text-sm font-medium text-fg after:absolute after:inset-0 hover:text-link hover:underline focus-visible:outline-offset-2"
+                    >
+                      {post.theme?.trim() || "Sem tema"}
+                    </Link>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <FormatBadge format={post.format} />
+                      <span className="flex gap-1">
+                        {post.targets.map((t) => (
+                          <PlatformChip key={t} platform={t} />
+                        ))}
+                      </span>
+                      <span className="text-xs text-fg-muted">{formatDateTime(post.scheduledAt)}</span>
                     </div>
-                    <StatusBadge kind="post" status={post.status} />
-                  </Link>
+                  </div>
+                  <StatusBadge kind="post" status={post.status} />
                 </li>
               ))}
             </ul>

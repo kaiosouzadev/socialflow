@@ -8,6 +8,7 @@ import { Icon } from "@/components/Icons";
 import {
   approvalDeadline,
   effectiveCaption,
+  hasArt as hasArtRule,
   isLate,
   productionStage,
   STAGE_META,
@@ -88,6 +89,7 @@ export default async function ProducaoPage({ searchParams }: { searchParams: Sea
       status: true,
       agencyPublishes: true,
       responsible: { select: { id: true, name: true } },
+      designer: { select: { id: true, name: true } },
     },
   });
 
@@ -97,6 +99,9 @@ export default async function ProducaoPage({ searchParams }: { searchParams: Sea
   const writerMap = new Map<string, WriterOption>();
   for (const c of allClients) if (c.responsible) writerMap.set(c.responsible.id, c.responsible);
   const writers = [...writerMap.values()].sort(byName);
+  const designerMap = new Map<string, WriterOption>();
+  for (const c of allClients) if (c.designer) designerMap.set(c.designer.id, c.designer);
+  const designers = [...designerMap.values()].sort(byName);
 
   // Filtros: listas fechadas; valor fora da lista é ignorado (DESIGN, fluxo do Quadro).
   const rawStatus = first(sp.status);
@@ -105,6 +110,7 @@ export default async function ProducaoPage({ searchParams }: { searchParams: Sea
   const values: ProductionFilterValues = {
     mes,
     redatora: writerMap.has(first(sp.redatora)) ? first(sp.redatora) : "",
+    designer: designerMap.has(first(sp.designer)) ? first(sp.designer) : "",
     segmento: (SEGMENTS as readonly string[]).includes(first(sp.segmento)) ? first(sp.segmento) : "",
     aprovacao: rawAprovacao === "com" || rawAprovacao === "sem" ? rawAprovacao : "",
     status: ([...CLIENT_STATUSES, "todos"] as string[]).includes(rawStatus)
@@ -118,6 +124,7 @@ export default async function ProducaoPage({ searchParams }: { searchParams: Sea
       (c) =>
         (values.status === "todos" || c.status === values.status) &&
         (!values.redatora || c.responsible?.id === values.redatora) &&
+        (!values.designer || c.designer?.id === values.designer) &&
         (!values.segmento || c.segment === values.segmento) &&
         (!values.aprovacao || (c.plan === "aprovacao_cliente") === (values.aprovacao === "com")) &&
         (!values.publica || c.agencyPublishes === (values.publica === "sim")),
@@ -149,6 +156,8 @@ export default async function ProducaoPage({ searchParams }: { searchParams: Sea
         mediaItems: true,
         clientApproval: true,
         weeklyReviewId: true,
+        artDoneAt: true,
+        artDoneByUser: { select: { name: true } },
         schedule: { select: { status: true, monthRef: true } },
       },
     }),
@@ -232,9 +241,8 @@ export default async function ProducaoPage({ searchParams }: { searchParams: Sea
       now,
       approvalDeadline({ scheduledAt: p.scheduledAt, weeklyReviewId: p.weeklyReviewId, schedule: p.schedule }),
     );
-    // publicado já teve arte (a mídia sai do R2 depois de 30 dias e fica só a lembrança)
-    const hasArt =
-      p.status === "published" || !!p.mediaUrl || (Array.isArray(p.mediaItems) && p.mediaItems.length > 0);
+    // regra única da arte (marcada no Design, com mídia ou publicada): a mesma da fila /design
+    const hasArt = hasArtRule(p);
     const adjustments = adjustmentsByPost.get(p.id) ?? 0;
     const pendingKinds = pendingKindsByPost.get(p.id) ?? [];
     const publication: MarkerModel["publication"] =
@@ -243,7 +251,8 @@ export default async function ProducaoPage({ searchParams }: { searchParams: Sea
       p.status === "failed" ? "failed" : adjustments > 0 ? "adjustment" : pendingKinds.length > 0 ? "waitingMaterial" : null;
 
     const label = [row.client.name, `${String(day).padStart(2, "0")}/${mm}`, format.label, STAGE_META[stage].label];
-    if (!hasArt) label.push("sem arte");
+    if (p.artDoneAt) label.push(p.artDoneByUser ? `arte feita por ${p.artDoneByUser.name}` : "arte feita");
+    else if (!hasArt) label.push("arte a fazer");
     if (adjustments > 0) label.push(adjustments === 1 ? "ajuste pendente" : `${adjustments} ajustes pendentes`);
     if (pendingKinds.length > 0)
       label.push(pendingKinds.includes("aguardando_material") ? "aguardando material" : "pendência aberta");
@@ -284,9 +293,20 @@ export default async function ProducaoPage({ searchParams }: { searchParams: Sea
         <PageHeader
           title="Produção"
           subtitle={`${monthLabel} · ${plural(board.rows.length, "cliente", "clientes")} · ${plural(board.total, "post", "posts")}`}
-          action={<MonthNav values={values} />}
+          action={
+            <>
+              <MonthNav values={values} />
+              <Link
+                href={`/design?${new URLSearchParams({ mes, designer: values.designer || "todos" })}`}
+                className={buttonClasses({ variant: "secondary" })}
+              >
+                <Icon.edit className="size-4.5" />
+                Ver no Design
+              </Link>
+            </>
+          }
         />
-        <ProductionFilters values={values} writers={writers} />
+        <ProductionFilters values={values} writers={writers} designers={designers} />
         <ProductionBusyArea scrollKey={mes}>
           {board.rows.length === 0 ? (
             <EmptyState

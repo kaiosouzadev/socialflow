@@ -5,7 +5,9 @@ import { PageHeader, EmptyState } from "@/components/ui";
 import { buttonClasses } from "@/components/Button";
 import { approvalLink } from "@/lib/approval";
 import { clientRecipients } from "@/lib/client-emails";
+import { spDateKey } from "@/lib/deadlines";
 import { formatMonthLabel, TZ } from "@/lib/format-date";
+import { approvalDeadline } from "@/lib/production";
 import SchedulesManager, { type ScheduleRow } from "./SchedulesManager";
 import AdjustmentsPanel, { type AdjustmentRow } from "./AdjustmentsPanel";
 import WeeklyRunButton from "./WeeklyRunButton";
@@ -16,6 +18,14 @@ export const metadata: Metadata = { title: "Aprovações" };
 
 /** Cronograma aberto para o cliente: ajuste pedido aqui bloqueia a aprovação do cronograma. */
 const OPEN_FOR_CLIENT = ["enviado_cliente", "em_revisao"];
+
+const DAY = 86_400_000;
+
+/** Dias civis (fuso SP) entre duas chaves "AAAA-MM-DD". */
+function civilDaysBetween(fromKey: string, toKey: string): number {
+  const utc = (k: string) => Date.UTC(Number(k.slice(0, 4)), Number(k.slice(5, 7)) - 1, Number(k.slice(8, 10)));
+  return Math.round((utc(toKey) - utc(fromKey)) / DAY);
+}
 
 const YEAR = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, year: "numeric" });
 const DAY_MONTH = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "2-digit" });
@@ -77,7 +87,9 @@ export default async function AprovacoesPage() {
     }),
   ]);
 
-  const currentYear = YEAR.format(new Date());
+  const now = new Date();
+  const currentYear = YEAR.format(now);
+  const todayKey = spDateKey(now);
 
   // ajustes abertos por cronograma: o "Ver ajustes (N)" da linha leva ao painel
   const pendingBySchedule = new Map<string, number>();
@@ -88,6 +100,13 @@ export default async function AprovacoesPage() {
 
   const rows: ScheduleRow[] = schedules.map((s) => {
     const drafts = s.posts.filter((p) => p.status === "draft");
+    // U-09: com o cliente (enviado e sem resposta) → idade do envio e prazo do cliente (dia 25 do mês
+    // anterior, a mesma regra do /producao). O cronograma não tem data de post: scheduledAt só cumpre o
+    // tipo, pois sem weeklyReviewId o prazo vem do cronograma.
+    const waiting = s.status === "enviado_cliente" && s.sentAt !== null;
+    const deadline = waiting
+      ? approvalDeadline({ scheduledAt: s.monthRef, schedule: { status: s.status, monthRef: s.monthRef } })
+      : null;
     return {
       id: s.id,
       client: s.client.name,
@@ -107,6 +126,9 @@ export default async function AprovacoesPage() {
       clientNote: s.clientNote,
       changesAskedAt: s.changesAskedAt ? shortDateTime(s.changesAskedAt, currentYear) : null,
       sentAt: s.sentAt ? shortDateTime(s.sentAt, currentYear) : null,
+      waitingDays: waiting && s.sentAt ? Math.max(0, civilDaysBetween(spDateKey(s.sentAt), todayKey)) : null,
+      clientDeadline: deadline ? shortDate(deadline, currentYear) : null,
+      overdue: !!deadline && now.getTime() > deadline.getTime(),
       approvedAt: s.approvedAt ? shortDate(s.approvedAt, currentYear) : null,
       link: s.approvalToken ? approvalLink(s.approvalToken) : null,
     };

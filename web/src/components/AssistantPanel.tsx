@@ -89,6 +89,7 @@ export function AssistantPanel({
   const titleId = useId();
   const subtitleId = useId();
   const inputId = useId();
+  const sendHintId = useId();
   const isDialog = !!onClose;
 
   useEffect(() => {
@@ -327,10 +328,16 @@ export function AssistantPanel({
             aria-label="Enviar mensagem"
             loading={busy}
             disabled={!input.trim()}
+            // desabilitado: diz por quê (U-07) no title e para o leitor de tela
+            title={!input.trim() && !busy ? "Escreva uma mensagem para enviar." : undefined}
+            aria-describedby={!input.trim() && !busy ? sendHintId : undefined}
             onClick={() => send()}
           >
             <Icon.send />
           </Button>
+          <span id={sendHintId} className="sr-only">
+            Escreva uma mensagem para enviar.
+          </span>
         </div>
       </div>
     </Root>

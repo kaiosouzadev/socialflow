@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { prisma } from "@/lib/prisma";
-import { PageHeader } from "@/components/ui";
 import TemplatesManager from "./TemplatesManager";
 
 export const dynamic = "force-dynamic";
@@ -12,10 +11,7 @@ export default async function TemplatesPage() {
 
   return (
     <div className="page">
-      <PageHeader
-        title="Calendário de artes básicas"
-        subtitle="Banco mensal de artes que a IA personaliza (logo, cor, contatos) para cada cliente básico"
-      />
+      {/* o cabeçalho (h1 "Artes-base", igual ao menu) fica no TemplatesManager: as ações abrem diálogos (U-13) */}
       <TemplatesManager
         initial={templates.map((t) => ({
           id: t.id,

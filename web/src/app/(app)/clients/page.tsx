@@ -31,9 +31,10 @@ export default async function ClientsPage() {
         status: true,
         segment: true,
         responsibleUserId: true,
+        designerUserId: true,
       },
     }),
-    // GET /api/users é só para admin: a lista de redatoras vem do servidor
+    // GET /api/users é só para admin: a lista de redatoras e designers vem do servidor
     prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
   ]);
 

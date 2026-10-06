@@ -11,6 +11,9 @@
  *
  * Atraso: "sem texto" com data em até 3 dias (fuso SP, inclui datas passadas)
  * ou "em aprovação" com o prazo de resposta vencido (lib/deadlines.ts).
+ *
+ * Arte (independente do estágio): `hasArt` / `artStatus` — marcada como feita
+ * pela designer (Post.artDoneAt), com mídia ou já publicado.
  */
 import {
   addDaysToKey,
@@ -101,6 +104,37 @@ export function productionStage(input: ProductionInput): ProductionStage {
   if (status === "enviado_cliente" || status === "em_revisao") return "em_aprovacao";
   if (status === "aprovado_cliente") return "tema_aprovado";
   return "texto_ok";
+}
+
+/** Situação da arte de um post: regra única do sistema (Quadro de Produção e fila /design). */
+export type ArtStatus = "feita" | "a_fazer";
+
+/** O que a regra da arte lê do post (campos do Prisma; todos opcionais para aceitar selects parciais). */
+export type ArtInput = {
+  /** Post.artDoneAt: a designer marcou a arte como feita */
+  artDoneAt?: Date | string | null;
+  mediaUrl?: string | null;
+  /** Post.mediaItems (Json): itens do carrossel */
+  mediaItems?: unknown;
+  status?: string | null;
+};
+
+/**
+ * O post tem arte? Regra única (Quadro de Produção, fila de artes, contagens):
+ * - a designer marcou a arte como feita (`artDoneAt`), OU
+ * - o post já tem mídia (`mediaUrl` com texto ou `mediaItems` lista não vazia), OU
+ * - o post foi publicado (a mídia sai do R2 depois de 30 dias e fica só a lembrança).
+ */
+export function hasArt(post: ArtInput): boolean {
+  if (post.artDoneAt) return true;
+  if (typeof post.mediaUrl === "string" && post.mediaUrl.trim() !== "") return true;
+  if (Array.isArray(post.mediaItems) && post.mediaItems.length > 0) return true;
+  return post.status === "published";
+}
+
+/** "feita" quando `hasArt`; senão "a_fazer". */
+export function artStatus(post: ArtInput): ArtStatus {
+  return hasArt(post) ? "feita" : "a_fazer";
 }
 
 function asDate(d: Date | string): Date {

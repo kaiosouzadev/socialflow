@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Button } from "./Button";
 import { Icon } from "./Icons";
 
@@ -39,11 +39,19 @@ export function Toast({
   const [focused, setFocused] = useState(false);
   const paused = hovered || focused;
 
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const dismiss = useCallback(() => {
     setLeaving(true);
     // deixa a transição de saída rodar antes de desmontar
-    setTimeout(onClose, 180);
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(onClose, 180);
   }, [onClose]);
+  // toast novo antes do fim da saída: o fechamento pendente não pode apagar o novo.
+  // Se o pai só escondeu o aviso (toast null), o fechamento segue e chega ao onClose.
+  useEffect(() => {
+    if (toast) clearTimeout(closeTimer.current);
+  }, [toast]);
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
 
   // toast novo reinicia a animação de saída — ajuste de estado durante o
   // render (padrão do React), em vez de um efeito que dispara setState
@@ -51,6 +59,11 @@ export function Toast({
   if (toast !== prevToast) {
     setPrevToast(toast);
     setLeaving(false);
+    // o aviso saiu da tela sem mouseleave/blur: mouse e foco nele não podem pausar os próximos
+    if (!toast) {
+      setHovered(false);
+      setFocused(false);
+    }
   }
 
   useEffect(() => {

@@ -11,6 +11,7 @@ type NavItem = { href: string; label: string; icon: (p: { className?: string }) 
 const MAIN_ITEMS: NavItem[] = [
   { href: "/", label: "Dashboard", icon: Icon.dashboard },
   { href: "/producao", label: "Produção", icon: Icon.board },
+  { href: "/design", label: "Design", icon: Icon.edit },
   { href: "/clients", label: "Clientes", icon: Icon.users },
   { href: "/posts", label: "Posts", icon: Icon.list },
   { href: "/calendar", label: "Calendário", icon: Icon.grid },
@@ -31,15 +32,18 @@ function isActive(pathname: string, href: string) {
 /**
  * Itens da navegação principal. Na gaveta (< md) use `variant="drawer"`
  * (alvos de 44 px) e `onNavigate` para fechá-la ao seguir um link.
+ * `designCount`: artes a fazer da fila /design (selo no item "Design"; 0/omitido = sem selo).
  */
 export function NavLinks({
   isAdmin = false,
   onNavigate,
   variant = "sidebar",
+  designCount = 0,
 }: {
   isAdmin?: boolean;
   onNavigate?: () => void;
   variant?: "sidebar" | "drawer";
+  designCount?: number;
 }) {
   const pathname = usePathname();
   const adminLabelId = useId();
@@ -47,11 +51,14 @@ export function NavLinks({
   const renderItem = (item: NavItem) => {
     const active = isActive(pathname, item.href);
     const ItemIcon = item.icon;
+    const count = item.href === "/design" && designCount > 0 ? designCount : 0;
     return (
       <Link
         key={item.href}
         href={item.href}
         aria-current={active ? "page" : undefined}
+        // nome acessível com a contagem: "Design, 5 a fazer" (o selo é só visual)
+        aria-label={count > 0 ? `${item.label}, ${count} a fazer` : undefined}
         onClick={onNavigate}
         className={`flex items-center gap-3 rounded-control px-3 text-sm font-medium transition-colors duration-(--sf-dur-fast) ${
           variant === "drawer" ? "h-11" : "h-10"
@@ -59,6 +66,16 @@ export function NavLinks({
       >
         <ItemIcon className="size-4.5 shrink-0" />
         <span className="truncate">{item.label}</span>
+        {count > 0 && (
+          <span
+            aria-hidden="true"
+            className={`ml-auto inline-grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-xs font-semibold tabular-nums leading-none ${
+              active ? "bg-surface text-fg" : "bg-brand text-on-brand"
+            }`}
+          >
+            {count > 99 ? "99+" : count}
+          </span>
+        )}
       </Link>
     );
   };
@@ -95,7 +112,16 @@ const FOCUSABLE =
  * mudança de rota ou ao alargar a tela até md. O foco volta ao botão.
  * `footer` = o mesmo rodapé da sidebar (tema, usuário, Sair).
  */
-export function MobileNav({ isAdmin = false, footer }: { isAdmin?: boolean; footer?: ReactNode }) {
+export function MobileNav({
+  isAdmin = false,
+  footer,
+  designCount = 0,
+}: {
+  isAdmin?: boolean;
+  footer?: ReactNode;
+  /** ver `NavLinks` */
+  designCount?: number;
+}) {
   const pathname = usePathname();
   // aberta = aberta nesta rota; trocar de rota fecha sem precisar de efeito
   const [openOn, setOpenOn] = useState<string | null>(null);
@@ -179,7 +205,7 @@ export function MobileNav({ isAdmin = false, footer }: { isAdmin?: boolean; foot
               <Icon.x className="size-5" />
             </button>
           </div>
-          <NavLinks isAdmin={isAdmin} onNavigate={close} variant="drawer" />
+          <NavLinks isAdmin={isAdmin} onNavigate={close} variant="drawer" designCount={designCount} />
           {footer}
         </div>
       </dialog>

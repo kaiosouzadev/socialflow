@@ -91,9 +91,17 @@ export function MultiEmailInput({
   }
 
   /** Adiciona os e-mails do texto; o que não entrar fica no campo com a explicação. */
-  function addFrom(text: string) {
+  function addFrom(text: string, fromButton = false) {
     const tokens = text.split(SEPARATORS).map((t) => t.trim()).filter(Boolean);
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) {
+      // "Adicionar" fica sempre habilitado: com o campo vazio, explica em vez de não fazer nada (U-07)
+      if (fromButton) {
+        setDraft("");
+        setInputError("Digite o e-mail que você quer adicionar.");
+        inputRef.current?.focus();
+      }
+      return;
+    }
     const single = tokens.length === 1;
     const next = [...value];
     const added: string[] = [];
@@ -243,8 +251,10 @@ export function MultiEmailInput({
           variant="secondary"
           size="sm"
           leadingIcon={<Icon.plus />}
-          disabled={blocked || atLimit || draft.trim() === ""}
-          onClick={() => addFrom(draft)}
+          disabled={blocked || atLimit}
+          // no limite, o motivo está escrito logo abaixo ("Limite de 10…")
+          aria-describedby={atLimit ? limitId : undefined}
+          onClick={() => addFrom(draft, true)}
           className="sm:mt-1"
         >
           Adicionar

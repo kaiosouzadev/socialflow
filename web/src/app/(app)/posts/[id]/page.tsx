@@ -15,11 +15,36 @@ import { toUserMessage } from "@/lib/user-facing-error";
 import { uuidString } from "@/lib/validators";
 import RetryPostButton from "../../RetryPostButton";
 import ApprovePostButton from "./ApprovePostButton";
+import ArtStatusCard from "./ArtStatusCard";
 import GenerateArtButton from "./GenerateArtButton";
 
 export const dynamic = "force-dynamic";
 
-type Props = { params: Promise<{ id: string }> };
+type Props = {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+};
+
+/** "qui, 07/10 às 18:00" no fuso SP (com o ano quando não é o atual): retorno do Novo post (U-02). */
+function shortWhen(d: Date): string {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("pt-BR", {
+      timeZone: TZ,
+      weekday: "short",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(d)
+      .map((p) => [p.type, p.value]),
+  );
+  const thisYear = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, year: "numeric" }).format(new Date());
+  const year = parts.year !== thisYear ? `/${parts.year}` : "";
+  return `${parts.weekday.replace(".", "")}, ${parts.day}/${parts.month}${year} às ${parts.hour}:${parts.minute}`;
+}
 
 /** Tema do post para o título da aba (memorizado no mesmo render da página). */
 const loadPostTheme = cache(async (id: string) =>
@@ -70,8 +95,10 @@ function plural(n: number, one: string, many: string) {
 
 const platformLabel = (p: string) => BRAND[p]?.label ?? p;
 
-export default async function PostDetailPage({ params }: Props) {
+export default async function PostDetailPage({ params, searchParams }: Props) {
   const { id } = await params;
+  // ?criado=1: veio do Novo post (U-02) → aviso de sucesso no topo
+  const justCreated = (await searchParams).criado === "1";
   // id que não é uuid faria o Prisma lançar: vira 404
   if (!uuidString.safeParse(id).success) notFound();
 
@@ -179,6 +206,27 @@ export default async function PostDetailPage({ params }: Props) {
           )
         }
       />
+
+      {/* retorno do Novo post (U-02); a data vem do banco, não da URL */}
+      {justCreated && (
+        <Callout
+          tone="success"
+          live="polite"
+          className="mb-6"
+          title={
+            post.status === "scheduled"
+              ? `Post agendado para ${shortWhen(post.scheduledAt)}`
+              : isDraft
+                ? publishes
+                  ? "Rascunho salvo"
+                  : "Post salvo"
+                : "Post criado"
+          }
+        >
+          {isDraft && `${publishes ? "Fica fora da fila até alguém agendar. " : ""}Data prevista: ${shortWhen(post.scheduledAt)}. `}
+          <Link href={`/posts/new?clientId=${post.client.id}`}>Criar outro post</Link>
+        </Callout>
+      )}
 
       {!publishes && (
         <Callout tone="info" title="Este cliente não tem postagem pela agência." className="mb-6">
@@ -352,6 +400,9 @@ export default async function PostDetailPage({ params }: Props) {
               </Callout>
             )}
           </section>
+
+          {/* arte: feita/a fazer, quem marcou, arquivo no Drive (fila /design) */}
+          <ArtStatusCard postId={post.id} />
 
           {/* ajuste pedido pelo cliente no link de aprovação */}
           {post.clientNote && (

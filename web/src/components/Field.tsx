@@ -107,8 +107,10 @@ export function Field({
     );
   }
 
+  // content-start: lado a lado num grid, o Field estica até a altura do vizinho; sem isso as
+  // linhas internas se distribuem e o controle desce (U-08). A sobra fica embaixo.
   return (
-    <div className={`grid gap-1.5 ${className}`}>
+    <div className={`grid content-start gap-1.5 ${className}`}>
       <Label id={labelId} htmlFor={id} className={labelHidden ? "sr-only" : ""}>
         {labelContent}
       </Label>

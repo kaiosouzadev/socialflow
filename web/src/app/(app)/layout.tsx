@@ -4,6 +4,50 @@ import { BrandLockup } from "@/components/Logo";
 import { MobileNav, NavLinks } from "@/components/NavLinks";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Icon } from "@/components/Icons";
+import { prisma } from "@/lib/prisma";
+import { spDateFromKey, spDateKey } from "@/lib/deadlines";
+import { uuidString } from "@/lib/validators";
+
+/**
+ * Selo do item "Design" no menu: artes A FAZER do mês atual (SP) — as da usuária
+ * (clientes em que ela é a designer) ou, se ela não é designer de nenhum cliente
+ * ativo, todas. É o mesmo número que a página /design mostra no padrão
+ * (mês atual, "Minhas"/"Todas", "A fazer"). Regra da arte = `hasArt` (lib/production):
+ * sem art_done_at, sem mídia e não publicado. Uma consulta só; erro → sem selo.
+ */
+async function designBadgeCount(user: { id?: string; email?: string | null } | undefined): Promise<number> {
+  try {
+    const id = user?.id && uuidString.safeParse(user.id).success ? user.id : null;
+    const email = user?.email ?? null;
+    if (!id && !email) return 0;
+    const month = spDateKey(new Date()).slice(0, 7);
+    const [y, m] = month.split("-").map(Number);
+    const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+    const rows = await prisma.$queryRaw<{ n: number }[]>`
+      WITH me AS (
+        SELECT u.id FROM users u
+        WHERE (${id}::uuid IS NOT NULL AND u.id = ${id}::uuid) OR (${id}::uuid IS NULL AND u.email = ${email})
+        LIMIT 1
+      ), mine AS (
+        SELECT EXISTS (
+          SELECT 1 FROM clients c WHERE c.status = 'ativo' AND c.designer_user_id = (SELECT id FROM me)
+        ) AS is_designer
+      )
+      SELECT count(*)::int AS n
+      FROM posts p JOIN clients c ON c.id = p.client_id
+      WHERE c.status = 'ativo'
+        AND p.status <> 'published'
+        AND p.scheduled_at >= ${spDateFromKey(`${month}-01`)} AND p.scheduled_at < ${spDateFromKey(`${next}-01`)}
+        AND p.art_done_at IS NULL
+        AND (p.media_url IS NULL OR p.media_url !~ '[^[:space:]]')
+        AND (p.media_items IS NULL OR jsonb_typeof(p.media_items) <> 'array' OR jsonb_array_length(p.media_items) = 0)
+        AND (NOT (SELECT is_designer FROM mine) OR c.designer_user_id = (SELECT id FROM me))`;
+    return rows[0]?.n ?? 0;
+  } catch (e) {
+    console.error("[layout] selo do Design", e);
+    return 0;
+  }
+}
 
 /** Iniciais do avatar: 1ª letra da 1ª e da última palavra ("?" sem nome). */
 function initials(name: string) {
@@ -25,6 +69,7 @@ export default async function AppLayout({
   const isAdmin = (session.user as { role?: string } | undefined)?.role === "admin";
   const name = session.user?.name ?? "";
   const email = session.user?.email ?? "";
+  const designCount = await designBadgeCount(session.user as { id?: string; email?: string | null } | undefined);
 
   // Rodapé da sidebar, repetido na gaveta do celular: tema, usuário e Sair.
   const footer = (
@@ -82,13 +127,13 @@ export default async function AppLayout({
           <div className="flex h-16 shrink-0 items-center border-b border-line px-5">
             <BrandLockup size="md" href="/" />
           </div>
-          <NavLinks isAdmin={isAdmin} />
+          <NavLinks isAdmin={isAdmin} designCount={designCount} />
           {footer}
         </aside>
 
         <div className="min-w-0">
           <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-line bg-surface px-2 md:hidden">
-            <MobileNav isAdmin={isAdmin} footer={footer} />
+            <MobileNav isAdmin={isAdmin} footer={footer} designCount={designCount} />
             <BrandLockup size="sm" />
           </header>
           <main id="conteudo" tabIndex={-1} className="outline-none">

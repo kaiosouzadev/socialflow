@@ -16,9 +16,12 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   // redatora responsável (carteira), redatora do post e responsável por pendências
-  responsibleClients      Client[]
-  writtenPosts            Post[]
+  responsibleClients      Client[]      @relation("ClientResponsible")
+  writtenPosts            Post[]        @relation("PostWriter")
   responsiblePendingItems PendingItem[]
+  // designer responsável (carteira) e artes que a usuária marcou como feitas
+  designedClients         Client[]      @relation("ClientDesigner")
+  artDonePosts            Post[]        @relation("PostArtDoneBy")
 
   @@map("users")
 }
@@ -58,15 +61,19 @@ model Client {
   segment       String? // CORR | CARE | COLETIVO
   // redatora responsável pelo cliente
   responsibleUserId String? @map("responsible_user_id") @db.Uuid
+  // designer responsável pelo cliente (fila de artes em /design)
+  designerUserId String?  @map("designer_user_id") @db.Uuid
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  responsible    User?     @relation(fields: [responsibleUserId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  responsible    User?     @relation("ClientResponsible", fields: [responsibleUserId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  designer       User?     @relation("ClientDesigner", fields: [designerUserId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   socialAccounts SocialAccount[]
   schedules      Schedule[]
   posts          Post[]
   weeklyReviews  WeeklyReview[]
   pendingItems   PendingItem[]
 
+  @@index([designerUserId], map: "idx_clients_designer")
   @@map("clients")
 }
 
@@ -165,18 +172,24 @@ model Post {
   writerId     String?   @map("writer_id") @db.Uuid
   // nota interna da equipe (ex.: "NÃO FAZER CAPA") — nunca aparece nas páginas públicas
   internalNote String?   @map("internal_note")
+  // arte marcada como feita pela designer (null = não marcada; regra completa em lib/production.ts hasArt)
+  artDoneAt    DateTime? @map("art_done_at") @db.Timestamptz(6)
+  // quem marcou a arte como feita (users.id)
+  artDoneBy    String?   @map("art_done_by") @db.Uuid
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   client       Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
   schedule     Schedule?     @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
   weeklyReview WeeklyReview? @relation(fields: [weeklyReviewId], references: [id], onDelete: SetNull)
-  writer       User?         @relation(fields: [writerId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  writer       User?         @relation("PostWriter", fields: [writerId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  artDoneByUser User?        @relation("PostArtDoneBy", fields: [artDoneBy], references: [id], onDelete: SetNull, onUpdate: NoAction)
   publications Publication[]
   adjustments  PostAdjustment[]
   pendingItems PendingItem[]
 
   @@index([scheduledAt], map: "idx_posts_due")
   @@index([clientId], map: "idx_posts_client")
+  @@index([artDoneAt], map: "idx_posts_art_done_at")
   @@map("posts")
 }
 

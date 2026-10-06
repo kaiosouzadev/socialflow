@@ -215,6 +215,9 @@ export function Dialog({
       aria-busy={busy || undefined}
       onKeyDown={onKeyDown}
       onCancel={(e) => {
+        // o "cancel" de um <input type="file"> (seletor fechado sem escolher) borbulha até
+        // aqui; só o do próprio <dialog> (Esc) fecha
+        if (e.target !== e.currentTarget) return;
         e.preventDefault();
         requestClose();
       }}

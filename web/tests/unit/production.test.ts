@@ -5,6 +5,8 @@ import {
   STAGES,
   STAGE_META,
   approvalDeadline,
+  artStatus,
+  hasArt,
   isLate,
   productionStage,
   type ProductionStage,
@@ -135,5 +137,34 @@ describe("approvalDeadline", () => {
       approvalDeadline({ scheduledAt: new Date(), schedule: { status: "aprovado_cliente", monthRef: new Date() } }),
       null
     );
+  });
+});
+
+describe("hasArt / artStatus — o Quadro e a fila /design usam a mesma regra (F6)", () => {
+  test("arte marcada como feita pela designer (art_done_at) conta como arte, mesmo sem mídia", () => {
+    const marcada = { artDoneAt: new Date("2026-10-06T15:00:00Z"), mediaUrl: null, mediaItems: null, status: "draft" };
+    assert.equal(hasArt(marcada), true);
+    assert.equal(artStatus(marcada), "feita");
+    // aceita também a data serializada (JSON)
+    assert.equal(hasArt({ artDoneAt: "2026-10-06T15:00:00.000Z" }), true);
+  });
+
+  test("comportamento anterior do Quadro preservado: mídia ou publicado = tem arte", () => {
+    assert.equal(hasArt({ mediaUrl: "https://r2.example.com/x.jpg", status: "scheduled" }), true);
+    assert.equal(hasArt({ mediaItems: [{ url: "https://r2.example.com/1.jpg" }], status: "draft" }), true);
+    assert.equal(hasArt({ status: "published" }), true);
+    assert.equal(hasArt({ mediaUrl: null, mediaItems: null, status: "scheduled", artDoneAt: null }), false);
+    assert.equal(artStatus({ status: "failed" }), "a_fazer");
+  });
+
+  test("mídia vazia não conta: mediaUrl só com espaços, mediaItems vazio ou não-lista", () => {
+    for (const mediaItems of [[], {}, "x", null, undefined]) {
+      assert.equal(hasArt({ mediaUrl: "  ", mediaItems, status: "draft" }), false, JSON.stringify(mediaItems));
+    }
+  });
+
+  test("a arte não muda o estágio de produção (texto): são eixos independentes", () => {
+    assert.equal(productionStage({ caption: null, plan: SEM }), "sem_texto");
+    assert.equal(hasArt({ artDoneAt: new Date() }), true);
   });
 });

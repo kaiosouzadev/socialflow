@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Avatar } from "@/components/Avatar";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
 import { Button } from "@/components/Button";
@@ -116,7 +116,7 @@ function StateBadge({ post }: { post: Post }) {
 
 /* ------------------------------- mídia ------------------------------- */
 
-function Media({ post }: { post: Post }) {
+function Media({ post, label }: { post: Post; label: string }) {
   const items = post.mediaItems?.length ? post.mediaItems : post.mediaUrl ? [{ url: post.mediaUrl }] : [];
   const [active, setActive] = useState(0);
   const [broken, setBroken] = useState<string[]>([]);
@@ -177,7 +177,7 @@ function Media({ post }: { post: Post }) {
               key={m.url + i}
               type="button"
               onClick={() => setActive(i)}
-              aria-label={`Mídia ${i + 1} de ${items.length}`}
+              aria-label={`Mídia ${i + 1} de ${items.length}: ${label}`}
               aria-pressed={i === active}
               className={`size-14 shrink-0 overflow-hidden rounded-control border-2 ${
                 i === active ? "border-selected" : "border-line"
@@ -240,7 +240,18 @@ function Caption({ post }: { post: Post }) {
 
 /* ------------------------------ cartão ------------------------------ */
 
-function PostCard({ token, post, onChange }: { token: string; post: Post; onChange: (p: Post) => void }) {
+function PostCard({
+  token,
+  post,
+  label,
+  onChange,
+}: {
+  token: string;
+  post: Post;
+  /** nome único da postagem nesta semana (tema; repetido → com formato e data), para os nomes acessíveis (U-11) */
+  label: string;
+  onChange: (p: Post) => void;
+}) {
   const uid = useId();
   const [showForm, setShowForm] = useState(false);
   const [comment, setComment] = useState("");
@@ -254,7 +265,24 @@ function PostCard({ token, post, onChange }: { token: string; post: Post; onChan
   const canAnswer = !post.approved && pending === 0;
   const remaining = MIN_ADJUST - comment.trim().length;
 
+  // foco: abrir o pedido leva à caixa de texto; cancelar devolve ao "Pedir ajuste" (o botão some enquanto o
+  // formulário está aberto, então o foco não pode ficar no vazio)
+  const adjustBtnRef = useRef<HTMLButtonElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const formRef = useRef<HTMLDivElement>(null);
+  const focusNext = useRef<"" | "textarea" | "adjust">("");
+  useEffect(() => {
+    const target = focusNext.current;
+    focusNext.current = "";
+    if (target === "textarea") {
+      // o formulário inteiro (caixa + Cancelar/Enviar) entra na tela, não só a parte visível da caixa
+      textareaRef.current?.focus({ preventScroll: true });
+      formRef.current?.scrollIntoView({ block: "nearest" });
+    } else if (target === "adjust") adjustBtnRef.current?.focus();
+  }, [showForm]);
+
   function cancelAdjust() {
+    focusNext.current = "adjust";
     setShowForm(false);
     setComment("");
     setError("");
@@ -334,7 +362,7 @@ function PostCard({ token, post, onChange }: { token: string; post: Post; onChan
       </div>
 
       <div className="grid gap-5 p-4 sm:p-5">
-        <Media post={post} />
+        <Media post={post} label={label} />
 
         {/* roteiro das telas (carrossel/reels) */}
         {post.slides.length > 0 && (
@@ -378,11 +406,10 @@ function PostCard({ token, post, onChange }: { token: string; post: Post; onChan
           </div>
         )}
 
-        {/* resposta do cliente: cada estado diz, em texto, o que cada ação faz */}
-        <section aria-labelledby={`${uid}-resposta`} className="grid gap-3 border-t border-line pt-4">
-          <h3 id={`${uid}-resposta`} className="text-base font-semibold text-fg">
-            Sua resposta
-          </h3>
+        {/* resposta do cliente: o que cada ação faz está UMA vez no topo da página (U-10); aqui só o estado,
+            os dois botões e uma linha curta. A região e os botões levam o tema no nome acessível (U-11). */}
+        <section aria-label={`Sua resposta: ${label}`} className="grid gap-3 border-t border-line pt-4">
+          <h3 className="text-base font-semibold text-fg">Sua resposta</h3>
 
           {post.approved ? (
             <p className="text-sm text-fg-muted">
@@ -394,25 +421,11 @@ function PostCard({ token, post, onChange }: { token: string; post: Post; onChan
               Você pediu um ajuste nesta postagem. Enquanto a equipe não concluir, não é possível aprovar nem pedir
               outro ajuste. Quando ela concluir, o ajuste feito aparece aqui e você poderá responder de novo.
             </p>
-          ) : (
-            <>
-              {resolved > 0 && (
-                <p className="text-sm font-medium text-fg">
-                  A equipe concluiu o seu ajuste. Revise a postagem de novo e responda.
-                </p>
-              )}
-              <ul className="grid gap-1 text-sm text-fg-muted">
-                <li>
-                  <span className="font-semibold text-fg">Aprovar postagem:</span> confirma o texto e a arte. Depois
-                  disso, não dá mais para pedir ajuste por este link.
-                </li>
-                <li>
-                  <span className="font-semibold text-fg">Pedir ajuste:</span> devolve a postagem para a equipe. Você
-                  só poderá aprovar depois que a equipe concluir o ajuste.
-                </li>
-              </ul>
-            </>
-          )}
+          ) : resolved > 0 ? (
+            <p className="text-sm font-medium text-fg">
+              A equipe concluiu o seu ajuste. Revise a postagem de novo e responda.
+            </p>
+          ) : null}
 
           {done && (
             <Callout tone="success" live="polite">
@@ -426,36 +439,46 @@ function PostCard({ token, post, onChange }: { token: string; post: Post; onChan
           )}
 
           {canAnswer && !showForm && (
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <Button
-                variant="secondary"
-                size="lg"
-                leadingIcon={<Icon.edit />}
-                onClick={() => {
-                  setDone("");
-                  setError("");
-                  setShowForm(true);
-                }}
-                disabled={busy !== ""}
-              >
-                Pedir ajuste
-              </Button>
-              <Button
-                variant="primary"
-                size="lg"
-                leadingIcon={<Icon.check />}
-                onClick={() => act("approve")}
-                loading={busy === "approve"}
-                loadingText="Aprovando…"
-                disabled={busy !== ""}
-              >
-                Aprovar postagem
-              </Button>
+            <div className="grid gap-2">
+              <p id={`${uid}-ajuda`} className="text-sm text-fg-muted">
+                Depois de aprovar, não dá mais para pedir ajuste nesta postagem.
+              </p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  leadingIcon={<Icon.edit />}
+                  ref={adjustBtnRef}
+                  aria-label={`Pedir ajuste: ${label}`}
+                  onClick={() => {
+                    setDone("");
+                    setError("");
+                    focusNext.current = "textarea";
+                    setShowForm(true);
+                  }}
+                  disabled={busy !== ""}
+                >
+                  Pedir ajuste
+                </Button>
+                <Button
+                  variant="primary"
+                  size="lg"
+                  leadingIcon={<Icon.check />}
+                  aria-label={busy === "approve" ? undefined : `Aprovar postagem: ${label}`}
+                  aria-describedby={`${uid}-ajuda`}
+                  onClick={() => act("approve")}
+                  loading={busy === "approve"}
+                  loadingText="Aprovando…"
+                  disabled={busy !== ""}
+                >
+                  Aprovar postagem
+                </Button>
+              </div>
             </div>
           )}
 
           {canAnswer && showForm && (
-            <div className="grid gap-3 rounded-card border border-line bg-surface p-4">
+            <div ref={formRef} className="grid gap-3 rounded-card border border-line bg-surface p-4">
               <Field
                 label="O que você quer mudar nesta postagem?"
                 help={
@@ -467,6 +490,7 @@ function PostCard({ token, post, onChange }: { token: string; post: Post; onChan
                 }
               >
                 <Textarea
+                  ref={textareaRef}
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
                   rows={4}
@@ -482,6 +506,7 @@ function PostCard({ token, post, onChange }: { token: string; post: Post; onChan
                 <Button
                   variant="primary"
                   size="lg"
+                  aria-label={busy === "adjust" ? undefined : `Enviar pedido de ajuste: ${label}`}
                   onClick={() => act("adjust")}
                   loading={busy === "adjust"}
                   loadingText="Enviando…"
@@ -518,6 +543,19 @@ export default function WeeklyView({
   // respondida = aprovada ou com pedido de ajuste aberto
   const answered = useMemo(() => posts.filter((p) => p.approved || pendingOf(p) > 0).length, [posts]);
   const pct = posts.length ? Math.round((answered / posts.length) * 100) : 0;
+  // nome de cada postagem nos nomes acessíveis: o tema; se o tema se repete na semana (ex.: reels + story),
+  // entra o formato e a data, para nenhuma região ou botão ficar com nome igual (U-11)
+  const labels = useMemo(() => {
+    const themeOf = (p: Post) => p.theme || "Postagem sem tema";
+    const count = new Map<string, number>();
+    for (const p of initialPosts) count.set(themeOf(p), (count.get(themeOf(p)) ?? 0) + 1);
+    return new Map(
+      initialPosts.map((p) => [
+        p.id,
+        (count.get(themeOf(p)) ?? 0) > 1 ? `${themeOf(p)} (${formatLabel(p.format)}, ${p.when})` : themeOf(p),
+      ])
+    );
+  }, [initialPosts]);
 
   function handleChange(updated: Post) {
     setPosts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
@@ -536,6 +574,19 @@ export default function WeeklyView({
           <p className="mt-1 text-base text-fg-muted">
             Semana de {weekRange}. Responda até o prazo de cada postagem.
           </p>
+          {/* o que cada resposta faz: uma vez aqui, não em cada cartão (U-10) */}
+          {posts.length > 0 && (
+            <ul className="mt-3 grid gap-1 text-sm text-fg-muted">
+              <li>
+                <span className="font-semibold text-fg">Aprovar postagem:</span> confirma o texto e a arte. Depois
+                disso, não dá mais para pedir ajuste por este link.
+              </li>
+              <li>
+                <span className="font-semibold text-fg">Pedir ajuste:</span> devolve a postagem para a equipe. Você só
+                poderá aprovar depois que a equipe concluir o ajuste.
+              </li>
+            </ul>
+          )}
         </div>
 
         {posts.length > 0 && (
@@ -563,7 +614,13 @@ export default function WeeklyView({
         )}
 
         {posts.map((p) => (
-          <PostCard key={p.id} token={token} post={p} onChange={handleChange} />
+          <PostCard
+            key={p.id}
+            token={token}
+            post={p}
+            label={labels.get(p.id) ?? (p.theme || "Postagem sem tema")}
+            onChange={handleChange}
+          />
         ))}
 
         {posts.length === 0 && (

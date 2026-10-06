@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Avatar } from "@/components/Avatar";
@@ -23,6 +23,9 @@ import { CLIENT_STATUS, CLIENT_STATUSES, PLAN, PLANS, SEGMENTS, TIER, TIERS, lab
  * clients/new) e edição (`ClientInfoEditor`, no detalhe), com os mesmos
  * campos. Também exporta a confirmação "Agência publica: Sim → Não"
  * (`StopPublishingDialog`), usada aqui e na Carteira (ClientsTable).
+ *
+ * Gancho `#editar-<campo>` (U-17): um link com esse hash na página do cliente
+ * abre a edição e foca o campo (ex.: #editar-toneOfVoice no checklist).
  */
 
 export type UserOption = { id: string; name: string };
@@ -38,6 +41,8 @@ export type ClientInfo = {
   status: string;
   segment: string | null;
   responsibleUserId: string | null;
+  /** designer responsável (fila de artes em /design) */
+  designerUserId: string | null;
   toneOfVoice: string | null;
   driveFolderId: string | null;
   logoUrl: string | null;
@@ -62,6 +67,7 @@ type FieldKey =
   | "tier"
   | "agencyPublishes"
   | "responsibleUserId"
+  | "designerUserId"
   | "segment"
   | "status"
   | "toneOfVoice"
@@ -86,6 +92,7 @@ const FIELD_ORDER: FieldKey[] = [
   "tier",
   "agencyPublishes",
   "responsibleUserId",
+  "designerUserId",
   "segment",
   "status",
   "toneOfVoice",
@@ -109,6 +116,7 @@ const SERVER_FIELD_MESSAGE: Record<FieldKey, string> = {
   tier: "Escolha um tipo de gestão da lista.",
   agencyPublishes: "Escolha Sim ou Não.",
   responsibleUserId: "Escolha uma redatora da lista.",
+  designerUserId: "Escolha um designer da lista.",
   segment: "Escolha um segmento da lista.",
   status: "Escolha um status da lista.",
   toneOfVoice: "Confira o tom de voz.",
@@ -359,6 +367,7 @@ type FormValues = {
   tier: string;
   agencyPublishes: boolean;
   responsibleUserId: string;
+  designerUserId: string;
   segment: string;
   status: string;
   toneOfVoice: string;
@@ -381,6 +390,7 @@ const EMPTY_VALUES: FormValues = {
   tier: "completa",
   agencyPublishes: true,
   responsibleUserId: "",
+  designerUserId: "",
   segment: "",
   status: "ativo",
   toneOfVoice: "",
@@ -405,6 +415,7 @@ function valuesFromClient(c: ClientInfo): FormValues {
     tier: c.tier,
     agencyPublishes: c.agencyPublishes,
     responsibleUserId: c.responsibleUserId ?? "",
+    designerUserId: c.designerUserId ?? "",
     segment: c.segment ?? "",
     status: c.status,
     toneOfVoice: c.toneOfVoice ?? "",
@@ -434,6 +445,33 @@ function focusFirstInvalid(prefix: string, errors: FormErrors) {
     const el = document.getElementById(`${prefix}-${key}`);
     if (el && !(el as HTMLInputElement).disabled) el.focus();
   });
+}
+
+const FOCUSABLE =
+  "input:not([disabled]):not([type=hidden]), textarea:not([disabled]), select:not([disabled]), button:not([disabled])";
+
+/**
+ * Foca o campo `${prefix}-${campo}` assim que ele existir (o formulário pode montar no próximo quadro).
+ * Campo em grupo (Field kind="group", sem id no controle): foca o 1º controle do fieldset da legenda.
+ */
+function focusFieldWhenReady(prefix: string, key: FieldKey) {
+  let tries = 0;
+  const step = () => {
+    const id = `${prefix}-${key}`;
+    const direct = document.getElementById(id);
+    const el = direct?.matches(FOCUSABLE)
+      ? direct
+      : document.getElementById(`${id}-label`)?.closest("fieldset")?.querySelector<HTMLElement>(FOCUSABLE);
+    if (el) {
+      el.focus({ preventScroll: true });
+      // só rola se o campo não está inteiro à vista (abaixo do cabeçalho fixo do celular, 56 px)
+      const r = el.getBoundingClientRect();
+      if (r.top < 64 || r.bottom > window.innerHeight) el.scrollIntoView({ block: "center" });
+      return;
+    }
+    if (++tries < 30) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 /** Lista única das mensagens para o Callout do topo. */
@@ -614,7 +652,7 @@ function ClientFormFields({
 
       <fieldset className={GROUP}>
         <legend className={LEGEND}>Carteira</legend>
-        <div className={`grid gap-4 sm:grid-cols-2 ${mode === "edit" ? "lg:grid-cols-3" : ""}`}>
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field id={`${prefix}-responsibleUserId`} label="Redatora responsável" optional error={errors.responsibleUserId}>
             <Select
               value={values.responsibleUserId}
@@ -622,6 +660,26 @@ function ClientFormFields({
               disabled={disabled}
             >
               <option value="">Sem redatora</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field
+            id={`${prefix}-designerUserId`}
+            label="Designer"
+            optional
+            help="Recebe as artes deste cliente na página Design."
+            error={errors.designerUserId}
+          >
+            <Select
+              value={values.designerUserId}
+              onChange={(e) => set({ designerUserId: e.target.value })}
+              disabled={disabled}
+            >
+              <option value="">Sem designer</option>
               {users.map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.name}
@@ -919,6 +977,7 @@ export function NewClientForm({ users }: { users: UserOption[] }) {
       agencyPublishes: v.agencyPublishes,
       ...(v.extraEmails.length > 0 ? { extraEmails: v.extraEmails } : {}),
       ...(v.responsibleUserId ? { responsibleUserId: v.responsibleUserId } : {}),
+      ...(v.designerUserId ? { designerUserId: v.designerUserId } : {}),
       ...(v.segment ? { segment: v.segment } : {}),
       ...(v.toneOfVoice.trim() ? { toneOfVoice: v.toneOfVoice } : {}),
       ...(v.driveFolderId.trim() ? { driveFolderId: v.driveFolderId.trim() } : {}),
@@ -1022,6 +1081,7 @@ export default function ClientInfoEditor({
   const editButtonRef = useRef<HTMLButtonElement>(null);
 
   const writer = users.find((u) => u.id === client.responsibleUserId);
+  const designer = users.find((u) => u.id === client.designerUserId);
   const tone = client.toneOfVoice?.trim() ?? "";
   const toneIsLong = tone.length > 400 || tone.split("\n").length > 6;
 
@@ -1029,14 +1089,35 @@ export default function ClientInfoEditor({
     setValues((v) => ({ ...v, ...patch }));
   }
 
-  function startEditing() {
-    setValues(valuesFromClient(client));
-    setErrors({});
-    setItemErrors({});
-    setSummary(null);
-    setEditing(true);
-    requestAnimationFrame(() => document.getElementById(`${EDIT_PREFIX}-name`)?.focus());
+  function startEditing(focusKey: FieldKey = "name") {
+    if (!editing) {
+      setValues(valuesFromClient(client));
+      setErrors({});
+      setItemErrors({});
+      setSummary(null);
+      setEditing(true);
+    }
+    focusFieldWhenReady(EDIT_PREFIX, focusKey);
   }
+
+  // Gancho #editar-<campo>: abre a edição no campo pedido e tira o hash da URL (o mesmo link funciona de novo).
+  const onEditHash = useEffectEvent(() => {
+    const match = /^#editar-([A-Za-z]+)$/.exec(window.location.hash);
+    if (!match || !isFieldKey(match[1])) return;
+    window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+    startEditing(match[1]);
+  });
+
+  useEffect(() => {
+    const onHashChange = () => onEditHash();
+    // hash já na URL ao abrir a página (link de outra tela): trata depois do 1º quadro
+    const raf = requestAnimationFrame(onHashChange);
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, []);
 
   function stopEditing() {
     setEditing(false);
@@ -1054,6 +1135,7 @@ export default function ClientInfoEditor({
       tier: v.tier,
       agencyPublishes: v.agencyPublishes,
       responsibleUserId: v.responsibleUserId || null,
+      designerUserId: v.designerUserId || null,
       segment: v.segment || null,
       status: v.status,
       toneOfVoice: v.toneOfVoice,
@@ -1131,7 +1213,7 @@ export default function ClientInfoEditor({
           </div>
         </div>
         {!editing && (
-          <Button ref={editButtonRef} size="sm" leadingIcon={<Icon.edit />} onClick={startEditing}>
+          <Button ref={editButtonRef} size="sm" leadingIcon={<Icon.edit />} onClick={() => startEditing()}>
             Editar
           </Button>
         )}
@@ -1164,6 +1246,7 @@ export default function ClientInfoEditor({
             )}
           </InfoItem>
           <InfoItem label="Redatora">{writer?.name ?? <span className="text-fg-muted">Sem redatora</span>}</InfoItem>
+          <InfoItem label="Designer">{designer?.name ?? <span className="text-fg-muted">Sem designer</span>}</InfoItem>
           <InfoItem label="Segmento">
             {client.segment ? (
               <StatusBadge kind="segment" status={client.segment} />

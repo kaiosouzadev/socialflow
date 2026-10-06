@@ -68,6 +68,8 @@ const updateSchema = z.object({
   segment: z.enum(SEGMENTS, { error: "Segmento inválido: use CORR, CARE ou COLETIVO." }).nullable().optional(),
   // redatora responsável (users.id); null limpa
   responsibleUserId: uuidString.nullable().optional(),
+  // designer responsável (users.id); null limpa
+  designerUserId: uuidString.nullable().optional(),
 });
 
 // posts que "Sim → Não" devolve para draft (publishing é barrado no publicador)
@@ -163,7 +165,7 @@ export async function PATCH(
     }
   }
 
-  const { extraEmails, email, status, responsibleUserId, agencyPublishes } = parsed.data;
+  const { extraEmails, email, status, responsibleUserId, designerUserId, agencyPublishes } = parsed.data;
   if (extraEmails !== undefined) {
     const normalized = normalizeExtraEmails(email ?? current.email, extraEmails);
     if (!normalized.ok) {
@@ -182,6 +184,9 @@ export async function PATCH(
 
   if (responsibleUserId && !(await prisma.user.findUnique({ where: { id: responsibleUserId }, select: { id: true } }))) {
     return Response.json({ error: "Usuário responsável não encontrado.", field: "responsibleUserId" }, { status: 400 });
+  }
+  if (designerUserId && !(await prisma.user.findUnique({ where: { id: designerUserId }, select: { id: true } }))) {
+    return Response.json({ error: "Designer não encontrado.", field: "designerUserId" }, { status: 400 });
   }
 
   try {

@@ -17,6 +17,10 @@ import { Toast, type ToastState } from "@/components/Toast";
  * O page.tsx (servidor) monta a tabela/cartões e usa `RowCheckbox` e `SelectPageCheckbox`
  * dentro deste provedor. A seleção zera ao trocar filtro/página (o page.tsx troca a `key`),
  * com Esc (sem diálogo aberto) e depois de excluir.
+ *
+ * Os ids de "todos os M deste filtro" vêm de GET /api/posts/ids só quando a pessoa pede (U-37).
+ * Com a barra visível, o `html` ganha `scroll-padding-bottom` da altura dela: o item que recebe
+ * o foco nunca fica escondido atrás da barra (WCAG 2.4.11; U-12).
  */
 
 export type SelectablePost = { id: string; status: string };
@@ -27,6 +31,12 @@ const CHECK_HIT =
 const CHECKBOX = "size-4.5 cursor-pointer rounded-chip accent-selected";
 
 const fmt = (n: number) => n.toLocaleString("pt-BR");
+
+/** Máximo da seleção "todos deste filtro" (o mesmo limite do POST /api/posts/bulk-delete). */
+const BULK_LIMIT = 500;
+
+/** Folga entre o item com foco e a barra fixa (além da distância da barra ao rodapé). */
+const FOCUS_GAP = 12;
 const postsWord = (n: number) => (n === 1 ? "post" : "posts");
 
 type PageState = "none" | "some" | "all";
@@ -65,16 +75,19 @@ function resultToast(d: unknown): Exclude<ToastState, null> {
 
 export default function PostsSelection({
   pageItems,
-  filterItems,
   total,
+  filterQuery,
+  canExpandFilter,
   children,
 }: {
   /** posts desta página, na ordem da lista */
   pageItems: SelectablePost[];
-  /** todos os posts do filtro atual (no máximo 500), para "Selecionar todos os M deste filtro" */
-  filterItems: SelectablePost[];
   /** total de posts do filtro (pode passar de 500) */
   total: number;
+  /** query string do filtro atual para GET /api/posts/ids ("todos os M deste filtro") */
+  filterQuery: string;
+  /** a página está entre os primeiros 500 do filtro (senão "todos deste filtro" não a incluiria) */
+  canExpandFilter: boolean;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -83,6 +96,10 @@ export default function PostsSelection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
+  /** posts do filtro (no máximo 500), carregados ao pedir "todos deste filtro" */
+  const [filterItems, setFilterItems] = useState<SelectablePost[]>([]);
+  const [loadingAll, setLoadingAll] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -90,9 +107,10 @@ export default function PostsSelection({
   const lastToggledRef = useRef<HTMLElement | null>(null);
   /** para onde vai o foco quando a barra some (ela desmonta com o elemento focado dentro) */
   const focusAfterClearRef = useRef<"last" | "list" | null>(null);
+  /** muda a cada troca de seleção: a resposta de "todos deste filtro" que chega atrasada é ignorada */
+  const versionRef = useRef(0);
 
   const pageIds = useMemo(() => pageItems.map((p) => p.id), [pageItems]);
-  const filterIds = useMemo(() => filterItems.map((p) => p.id), [filterItems]);
   const statusById = useMemo(() => {
     const m = new Map<string, string>();
     for (const p of filterItems) m.set(p.id, p.status);
@@ -110,28 +128,58 @@ export default function PostsSelection({
 
   // "Selecionar todos os M deste filtro": página inteira marcada e o filtro tem mais posts que ela.
   const pageIdSet = useMemo(() => new Set(pageIds), [pageIds]);
-  const filterIdSet = useMemo(() => new Set(filterIds), [filterIds]);
   const beyondPage = effective.some((id) => !pageIdSet.has(id));
-  const canExpand =
-    !beyondPage &&
-    pageState === "all" &&
-    filterIds.length > pageIds.length &&
-    pageIds.every((id) => filterIdSet.has(id));
+  const filterSize = Math.min(total, BULK_LIMIT);
+  const canExpand = !beyondPage && pageState === "all" && total > pageIds.length && canExpandFilter;
   const expandLabel =
-    total > filterIds.length
-      ? `Selecionar os primeiros ${fmt(filterIds.length)} de ${fmt(total)} posts deste filtro`
-      : `Selecionar todos os ${fmt(filterIds.length)} posts deste filtro`;
+    total > filterSize
+      ? `Selecionar os primeiros ${fmt(filterSize)} de ${fmt(total)} posts deste filtro`
+      : `Selecionar todos os ${fmt(filterSize)} posts deste filtro`;
 
   /** Troca a seleção (atualização funcional: cliques rápidos não se perdem). */
   function select(next: (prev: ReadonlySet<string>) => Set<string>, grows: boolean) {
+    versionRef.current++;
+    setLoadError(null);
     setSelected(next);
     // marcar algo dispensa o aviso da exclusão anterior (o Toast cobriria a barra)
     if (grows) setToast(null);
   }
 
   function clear(focusTo: "last" | "list" | null) {
+    versionRef.current++;
+    setLoadError(null);
     focusAfterClearRef.current = focusTo;
     setSelected(new Set());
+  }
+
+  /** "Todos os M deste filtro": busca os ids agora (U-37), na ordem da lista. */
+  async function selectWholeFilter() {
+    if (loadingAll) return;
+    const version = ++versionRef.current;
+    setLoadError(null);
+    setLoadingAll(true);
+    try {
+      const res = await fetch(`/api/posts/ids${filterQuery ? `?${filterQuery}` : ""}`, { cache: "no-store" });
+      const d = await res.json().catch(() => null);
+      if (version !== versionRef.current) return; // a pessoa mudou a seleção enquanto carregava
+      const items: SelectablePost[] | null = Array.isArray(d?.items)
+        ? (d.items as unknown[]).filter(
+            (i): i is SelectablePost =>
+              !!i && typeof (i as SelectablePost).id === "string" && typeof (i as SelectablePost).status === "string"
+          )
+        : null;
+      if (!res.ok || !items) {
+        // N-14: só mostra `error` do servidor quando é texto
+        setLoadError(typeof d?.error === "string" ? d.error : "Não foi possível selecionar todos os posts. Tente de novo.");
+        return;
+      }
+      setFilterItems(items);
+      select(() => new Set(items.map((i) => i.id)), true);
+    } catch {
+      if (version === versionRef.current) setLoadError("Falha de conexão. Verifique a internet e tente de novo.");
+    } finally {
+      setLoadingAll(false);
+    }
   }
 
   const api: SelectionApi = {
@@ -183,6 +231,26 @@ export default function PostsSelection({
     return () => cancelAnimationFrame(frame);
   }, [count]);
 
+  // U-12 (WCAG 2.4.11): com a barra visível, a rolagem por foco (Tab) para acima dela.
+  const barVisible = count > 0;
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!barVisible || !bar) return;
+    const html = document.documentElement;
+    const previous = html.style.scrollPaddingBottom;
+    const apply = () => {
+      const offset = Number.parseFloat(getComputedStyle(bar).bottom) || 0;
+      html.style.scrollPaddingBottom = `${Math.ceil(bar.offsetHeight + offset + FOCUS_GAP)}px`;
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(bar);
+    return () => {
+      ro.disconnect();
+      html.style.scrollPaddingBottom = previous;
+    };
+  }, [barVisible]);
+
   // Esc limpa a seleção quando nenhum diálogo/popover está aberto e o foco não está num campo de texto.
   useEffect(() => {
     if (count === 0) return;
@@ -201,6 +269,7 @@ export default function PostsSelection({
       }
       // foco dentro da barra (que vai sumir) → volta para a última caixa usada
       focusAfterClearRef.current = barRef.current?.contains(document.activeElement) ? "last" : null;
+      versionRef.current++; // descarta um "todos deste filtro" ainda carregando
       setSelected(new Set());
     }
     document.addEventListener("keydown", onKeyDown);
@@ -309,13 +378,19 @@ export default function PostsSelection({
                 Limpar seleção
               </Button>
               {(canExpand || beyondPage) && (
-                // o mesmo botão alterna os dois modos: o foco não se perde ao clicar
+                // o mesmo botão alterna os dois modos: o foco não se perde ao clicar (por isso não
+                // fica desabilitado enquanto carrega; aria-busy + texto avisam)
                 <Button
                   variant="ghost"
                   className="w-full sm:w-auto"
-                  onClick={() => select(() => new Set(beyondPage ? pageIds : filterIds), true)}
+                  aria-busy={loadingAll || undefined}
+                  onClick={() => (beyondPage ? select(() => new Set(pageIds), true) : void selectWholeFilter())}
                 >
-                  {beyondPage ? `Selecionar só os ${fmt(pageIds.length)} desta página` : expandLabel}
+                  {beyondPage
+                    ? `Selecionar só os ${fmt(pageIds.length)} desta página`
+                    : loadingAll
+                      ? "Selecionando todos deste filtro…"
+                      : expandLabel}
                 </Button>
               )}
               <Button
@@ -327,6 +402,11 @@ export default function PostsSelection({
                 Excluir selecionados
               </Button>
             </div>
+            {loadError && (
+              <p role="alert" className="mt-2 pl-1 text-sm font-medium text-danger-fg">
+                {loadError}
+              </p>
+            )}
           </div>
         )}
       </div>

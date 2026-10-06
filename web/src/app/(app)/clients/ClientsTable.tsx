@@ -22,7 +22,7 @@ import {
 
 /*
  * Carteira de clientes (DESIGN g.4): filtros + edição em linha de redatora,
- * segmento, status e "Agência publica?". Tabela a partir de xl; cartões abaixo.
+ * designer, segmento, status e "Agência publica?". Tabela a partir de xl; cartões abaixo.
  */
 
 export type ClientRow = {
@@ -38,9 +38,10 @@ export type ClientRow = {
   status: string;
   segment: string | null;
   responsibleUserId: string | null;
+  designerUserId: string | null;
 };
 
-type EditableField = "responsibleUserId" | "segment" | "status" | "agencyPublishes";
+type EditableField = "responsibleUserId" | "designerUserId" | "segment" | "status" | "agencyPublishes";
 type CellValue = string | boolean;
 type CellState = { state: "saving" } | { state: "saved" } | { state: "error"; message: string };
 /** valor otimista; vale enquanto o servidor ainda mostra `base` (o valor de antes) */
@@ -50,6 +51,7 @@ const INLINE_ERROR = "Não foi possível salvar. Tente de novo.";
 
 const SAVED_MESSAGE: Record<EditableField, (name: string) => string> = {
   responsibleUserId: (n) => `Redatora de ${n} salva.`,
+  designerUserId: (n) => `Designer de ${n} salvo.`,
   segment: (n) => `Segmento de ${n} salvo.`,
   status: (n) => `Status de ${n} salvo.`,
   agencyPublishes: (n) => `“Agência publica” de ${n} salvo.`,
@@ -57,6 +59,7 @@ const SAVED_MESSAGE: Record<EditableField, (name: string) => string> = {
 
 function serverValue(c: ClientRow, field: EditableField): CellValue {
   if (field === "responsibleUserId") return c.responsibleUserId ?? "";
+  if (field === "designerUserId") return c.designerUserId ?? "";
   if (field === "segment") return c.segment ?? "";
   if (field === "status") return c.status;
   return c.agencyPublishes;
@@ -73,13 +76,22 @@ function plural(n: number, one: string, many: string) {
 type Filters = {
   q: string;
   writer: string; // "todas" | "sem" | userId
+  designer: string; // "todos" | "sem" | userId
   segment: string; // "todos" | "sem" | segmento
   status: string; // "todos" | status
   plan: string; // "todas" | plano
   publishes: string; // "todos" | "sim" | "nao"
 };
 
-const DEFAULT_FILTERS: Filters = { q: "", writer: "todas", segment: "todos", status: "ativo", plan: "todas", publishes: "todos" };
+const DEFAULT_FILTERS: Filters = {
+  q: "",
+  writer: "todas",
+  designer: "todos",
+  segment: "todos",
+  status: "ativo",
+  plan: "todas",
+  publishes: "todos",
+};
 
 function sameFilters(a: Filters, b: Filters) {
   return (Object.keys(a) as (keyof Filters)[]).every((k) => a[k] === b[k]);
@@ -92,6 +104,7 @@ function matches(c: ClientRow, f: Filters): boolean {
     if (!hay.includes(q)) return false;
   }
   if (f.writer === "sem" ? c.responsibleUserId : f.writer !== "todas" && c.responsibleUserId !== f.writer) return false;
+  if (f.designer === "sem" ? c.designerUserId : f.designer !== "todos" && c.designerUserId !== f.designer) return false;
   if (f.segment === "sem" ? c.segment : f.segment !== "todos" && c.segment !== f.segment) return false;
   if (f.status !== "todos" && c.status !== f.status) return false;
   if (f.plan !== "todas" && c.plan !== f.plan) return false;
@@ -124,10 +137,13 @@ function Feedback({ cell }: { cell?: CellState }) {
   );
 }
 
-function WriterOptions({ users }: { users: UserOption[] }) {
+/** `short`: na tabela o vazio vira "—" (como o Segmento) para o nome da pessoa caber na coluna. */
+function UserOptions({ users, empty, short = false }: { users: UserOption[]; empty: string; short?: boolean }) {
   return (
     <>
-      <option value="">Sem redatora</option>
+      <option value="" aria-label={empty}>
+        {short ? "—" : empty}
+      </option>
       {users.map((u) => (
         <option key={u.id} value={u.id}>
           {u.name}
@@ -178,12 +194,14 @@ function ClientIdentity({ c, compact }: { c: ClientRow; compact: boolean }) {
         />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2">
+          {/* U-01: max-w-full + span min-w-0 deixam o truncate agir (nome longo não alarga a página);
+              min-w-11/min-h-11 mantêm o alvo de toque mínimo para nomes curtos */}
           <Link
             href={`/clients/${c.id}`}
-            className="inline-flex min-h-11 min-w-11 items-center text-sm font-semibold text-fg hover:text-link hover:underline sm:min-h-10 sm:min-w-10"
+            className="inline-flex min-h-11 min-w-11 max-w-full items-center text-sm font-semibold text-fg hover:text-link hover:underline sm:min-h-10 sm:min-w-10"
           >
-            <span className="truncate" title={c.name}>
+            <span className="min-w-0 truncate" title={c.name}>
               {c.name}
             </span>
           </Link>
@@ -272,7 +290,9 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
     setOverrides((o) => ({ ...o, [key]: { value, base: serverValue(c, field) } }));
     setCell(key, { state: "saving" });
     const body: Record<string, unknown> =
-      field === "responsibleUserId" || field === "segment" ? { [field]: value || null } : { [field]: value };
+      field === "responsibleUserId" || field === "designerUserId" || field === "segment"
+        ? { [field]: value || null }
+        : { [field]: value };
     const result = await patchClient(c.id, body);
     if (!result.ok) {
       clearOverride(key);
@@ -364,7 +384,7 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
     <div className="grid gap-4">
       {/* ---------- filtros ---------- */}
       <div className="card grid gap-4 p-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-7">
           <div className="self-end sm:col-span-2 lg:col-span-3 2xl:col-span-1">
             <Input
               type="search"
@@ -380,6 +400,17 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
             <Select size="sm" value={filters.writer} onChange={(e) => setFilter({ writer: e.target.value })}>
               <option value="todas">Todas</option>
               <option value="sem">Sem redatora</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Designer">
+            <Select size="sm" value={filters.designer} onChange={(e) => setFilter({ designer: e.target.value })}>
+              <option value="todos">Todos</option>
+              <option value="sem">Sem designer</option>
               {users.map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.name}
@@ -459,7 +490,7 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
         <>
           {/* ---------- tabela (≥ xl; entre 1280 e ~1440 rola na horizontal dentro do card) ---------- */}
           <div className="card hidden overflow-x-auto xl:block">
-            <table className="w-full min-w-258 table-fixed border-collapse text-left">
+            <table className="w-full min-w-266 table-fixed border-collapse text-left">
               <caption className="sr-only">Carteira de clientes</caption>
               <thead>
                 <tr className="border-b border-line text-xs font-semibold uppercase tracking-overline text-fg-muted">
@@ -469,7 +500,10 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                   <th scope="col" className="w-44 px-2 py-3 font-semibold">
                     Redatora
                   </th>
-                  <th scope="col" className="w-40 px-2 py-3 font-semibold">
+                  <th scope="col" className="w-44 px-2 py-3 font-semibold">
+                    Designer
+                  </th>
+                  <th scope="col" className="w-36 px-2 py-3 font-semibold">
                     Segmento
                   </th>
                   <th scope="col" className="w-33 px-2 py-3 font-semibold">
@@ -478,17 +512,15 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                   <th scope="col" className="w-28 px-2 py-3 font-semibold">
                     Agência publica?
                   </th>
-                  <th scope="col" className="w-40 px-2 py-3 font-semibold">
+                  <th scope="col" className="w-36 px-2 py-3 pr-4 font-semibold">
                     Status
-                  </th>
-                  <th scope="col" className="w-28 px-2 py-3 pr-4 font-semibold">
-                    Gestão
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {visible.map((c) => {
                   const w = cellOf(c, "responsibleUserId");
+                  const d = cellOf(c, "designerUserId");
                   const s = cellOf(c, "segment");
                   const p = cellOf(c, "agencyPublishes");
                   const st = cellOf(c, "status");
@@ -509,13 +541,35 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                             onChange={(e) => void saveInline(c, "responsibleUserId", e.target.value)}
                             className="min-w-0 flex-1"
                           >
-                            <WriterOptions users={users} />
+                            <UserOptions users={users} empty="Sem redatora" short />
                           </Select>
                           <Feedback cell={w.cell} />
                         </div>
                         {w.error && (
                           <p id={w.errorId} className="mt-1 text-xs text-danger-fg">
                             {w.error}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-2 py-3" aria-busy={d.saving || undefined}>
+                        <div className="flex items-center gap-1.5">
+                          <Select
+                            size="sm"
+                            aria-label={`Designer de ${c.name}`}
+                            value={shown(c, "designerUserId") as string}
+                            disabled={d.saving}
+                            invalid={!!d.error}
+                            aria-describedby={d.error ? d.errorId : undefined}
+                            onChange={(e) => void saveInline(c, "designerUserId", e.target.value)}
+                            className="min-w-0 flex-1"
+                          >
+                            <UserOptions users={users} empty="Sem designer" short />
+                          </Select>
+                          <Feedback cell={d.cell} />
+                        </div>
+                        {d.error && (
+                          <p id={d.errorId} className="mt-1 text-xs text-danger-fg">
+                            {d.error}
                           </p>
                         )}
                       </td>
@@ -543,6 +597,8 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                       </td>
                       <td className="px-2 py-4">
                         <StatusBadge kind="plan" status={c.plan} />
+                        {/* a antiga coluna Gestão virou 2ª linha aqui: assim a coluna Designer cabe a 1440 */}
+                        <p className="mt-1.5 text-xs text-fg-muted">{labelOf(TIER, c.tier)}</p>
                       </td>
                       <td className="px-2 py-2" aria-busy={p.saving || undefined}>
                         <div className="flex items-center gap-1.5">
@@ -564,7 +620,7 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                           </p>
                         )}
                       </td>
-                      <td className="px-2 py-3" aria-busy={st.saving || undefined}>
+                      <td className="px-2 py-3 pr-4" aria-busy={st.saving || undefined}>
                         <div className="flex items-center gap-1.5">
                           <Select
                             size="sm"
@@ -586,7 +642,6 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                           </p>
                         )}
                       </td>
-                      <td className="px-2 py-4 pr-4 text-sm text-fg-muted">{labelOf(TIER, c.tier)}</td>
                     </tr>
                   );
                 })}
@@ -598,13 +653,14 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
           <ul className="grid gap-3 xl:hidden" aria-label="Clientes">
             {visible.map((c) => {
               const w = cellOf(c, "responsibleUserId");
+              const d = cellOf(c, "designerUserId");
               const s = cellOf(c, "segment");
               const p = cellOf(c, "agencyPublishes");
               const st = cellOf(c, "status");
               return (
-                <li key={c.id} className="card p-4">
+                <li key={c.id} className="card min-w-0 p-4">
                   <ClientIdentity c={c} compact />
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                     <Field label="Redatora" error={w.error}>
                       <div className="flex items-center gap-1.5" aria-busy={w.saving || undefined}>
                         <Select
@@ -614,9 +670,23 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                           onChange={(e) => void saveInline(c, "responsibleUserId", e.target.value)}
                           className="min-w-0 flex-1"
                         >
-                          <WriterOptions users={users} />
+                          <UserOptions users={users} empty="Sem redatora" />
                         </Select>
                         <Feedback cell={w.cell} />
+                      </div>
+                    </Field>
+                    <Field label="Designer" error={d.error}>
+                      <div className="flex items-center gap-1.5" aria-busy={d.saving || undefined}>
+                        <Select
+                          size="sm"
+                          value={shown(c, "designerUserId") as string}
+                          disabled={d.saving}
+                          onChange={(e) => void saveInline(c, "designerUserId", e.target.value)}
+                          className="min-w-0 flex-1"
+                        >
+                          <UserOptions users={users} empty="Sem designer" />
+                        </Select>
+                        <Feedback cell={d.cell} />
                       </div>
                     </Field>
                     <Field label="Segmento" error={s.error}>

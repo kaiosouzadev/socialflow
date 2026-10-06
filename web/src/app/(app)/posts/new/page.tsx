@@ -95,7 +95,10 @@ function NewPostForm() {
     content: `${ids}-conteudo`,
     date: `${ids}-data`,
   };
+  const mediaFieldId = `${ids}-midia`;
+  const footerHintId = `${ids}-motivo`;
   const backRef = useRef<HTMLButtonElement>(null);
+  const captionsRef = useRef<HTMLDivElement>(null);
 
   // null = carregando a lista
   const [clients, setClients] = useState<Client[] | null>(null);
@@ -121,7 +124,10 @@ function NewPostForm() {
   const [dateError, setDateError] = useState<string | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<PostStatus | null>(null);
-  const [confirmingImminent, setConfirmingImminent] = useState(false);
+  // confirmação antes de agendar: data iminente e/ou cliente "com aprovação"
+  const [confirming, setConfirming] = useState(false);
+  // tentou agendar: a partir daí, arte e legenda que faltam aparecem como erro no campo (U-06)
+  const [scheduleTried, setScheduleTried] = useState(false);
 
   // conteúdo digitado para um cliente não pode vazar para outro — reset
   // síncrono na troca (padrão prev-state durante o render, como CalendarFilters)
@@ -133,6 +139,7 @@ function NewPostForm() {
     setSlides([]);
     setError(null);
     setTargetsError(null);
+    setScheduleTried(false);
   }
 
   // load clients once
@@ -195,8 +202,20 @@ function NewPostForm() {
   const availablePlatforms = loaded ? offeredPlatforms(loaded) : [];
   const contentReady = availablePlatforms.length > 0;
   const needsClientApproval = !productionOnly && loaded?.plan === "aprovacao_cliente";
-  const primaryStatus: PostStatus = productionOnly ? "draft" : "scheduled";
+  // só produção e "com aprovação": a ação principal (e o Enter) grava rascunho (U-26)
+  const draftIsPrimary = productionOnly || needsClientApproval;
   const clientName = clients?.find((c) => c.id === clientId)?.name ?? "Cliente";
+
+  // para AGENDAR: legenda em cada rede e arte para Instagram/Facebook (U-06); rascunho continua livre
+  const captionMissing = targets.length > 0 && targets.some((t) => !(captions[t] ?? "").trim());
+  const mediaMissing = targets.some((t) => t === "instagram" || t === "facebook") && !mediaUrl.trim();
+  const showScheduleErrors = scheduleTried && !productionOnly;
+  const captionError =
+    showScheduleErrors && captionMissing ? "Escreva a legenda para agendar, ou salve como rascunho." : null;
+  const mediaError =
+    showScheduleErrors && mediaMissing
+      ? "Adicione a arte para agendar: sem ela a publicação falha no Instagram e no Facebook."
+      : null;
 
   function retryClient() {
     setClientInfo(null);
@@ -258,8 +277,17 @@ function NewPostForm() {
         body: JSON.stringify(data),
       });
       if (res.ok) {
-        // segue "carregando" até a navegação trocar de tela (evita clique duplo)
-        router.push(status === "draft" ? "/posts?status=draft" : "/posts");
+        // vai para o post criado, que mostra "Post agendado para …" / "Rascunho salvo" (U-02, ?criado=1).
+        // Segue "carregando" até a navegação trocar de tela (evita clique duplo).
+        const created: unknown = await res.json().catch(() => null);
+        const id = created && typeof created === "object" ? (created as { id?: unknown }).id : undefined;
+        router.push(
+          typeof id === "string"
+            ? `/posts/${id}?criado=1`
+            : status === "draft"
+              ? "/posts?status=draft"
+              : "/posts"
+        );
         router.refresh();
         return;
       }
@@ -267,7 +295,7 @@ function NewPostForm() {
       // 409 CLIENT_NO_PUBLISH: o cliente virou "só produção" depois que a tela carregou
       if (res.status === 409 && d?.code === PUBLISH_BLOCKED.code) {
         setSubmitting(null);
-        setConfirmingImminent(false);
+        setConfirming(false);
         setClientInfo((prev) =>
           prev?.ok && prev.clientId === clientId ? { ...prev, agencyPublishes: false } : prev
         );
@@ -291,19 +319,36 @@ function NewPostForm() {
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting || !contentReady) return;
-    // só produção: a ação primária grava rascunho, nunca agenda
-    if (productionOnly) {
+    // só produção e "com aprovação": a ação primária grava rascunho, nunca agenda
+    if (draftIsPrimary) {
       void create("draft");
       return;
     }
+    requestSchedule();
+  }
+
+  /** Agendar: exige redes, data, legenda e arte; depois confirma se for iminente ou "com aprovação". */
+  function requestSchedule() {
+    if (submitting || !contentReady || productionOnly) return;
+    setError(null);
+    setScheduleTried(true);
     if (!validate()) return;
+    if (captionMissing || mediaMissing) {
+      // leva ao 1º campo que falta (legenda vem antes da arte no formulário)
+      const emptyCaption = captionMissing
+        ? Array.from(captionsRef.current?.querySelectorAll("textarea") ?? []).find((t) => !t.value.trim())
+        : undefined;
+      const target = emptyCaption ?? (mediaMissing ? document.getElementById(mediaFieldId) : null);
+      target?.focus();
+      return;
+    }
     // recalcula na hora do envio: o formulário pode ter ficado aberto um tempo
     const mins = minutesFromNow(scheduledLocal);
     setMinutesUntil(mins);
-    // agendamento quase imediato passa por confirmação antes de entrar na fila
-    if (mins < IMMINENT_MINUTES) {
+    // agendamento quase imediato ou que pula a aprovação do cliente passa por confirmação
+    if (mins < IMMINENT_MINUTES || needsClientApproval) {
       setDialogError(null);
-      setConfirmingImminent(true);
+      setConfirming(true);
       return;
     }
     void create("scheduled");
@@ -311,6 +356,22 @@ function NewPostForm() {
 
   const isImminent = !productionOnly && minutesUntil !== null && minutesUntil < IMMINENT_MINUTES;
   const minutesText = minutesUntil === null ? 0 : Math.max(0, Math.round(minutesUntil));
+  const timingText =
+    minutesUntil !== null && minutesUntil < 0
+      ? "A data escolhida já passou: o post entra na fila assim que for criado e vai para as redes do cliente."
+      : `Faltam cerca de ${minutesText} ${minutesText === 1 ? "minuto" : "minutos"} para a data escolhida. O post vai para as redes do cliente em seguida.`;
+
+  // por que "Salvar rascunho" / "Agendar post" estão desabilitados (U-07: padrão do Importar)
+  const footerBlockedText = contentReady
+    ? null
+    : !clientId
+      ? "Escolha o cliente para continuar."
+      : loadingClient
+        ? "Carregando o cliente…"
+        : !loaded
+          ? "Não foi possível carregar o cliente. Tente de novo no passo 2."
+          : "Conecte uma conta social do cliente para continuar.";
+  const footerDescribedBy = footerBlockedText ? footerHintId : undefined;
 
   // aviso do passo 3 quando o conteúdo ainda não pode ser escrito
   const contentBlockedText = !clientId
@@ -351,6 +412,13 @@ function NewPostForm() {
           {productionOnly && (
             <Callout tone="info" className="mt-3">
               Este cliente é só produção: o post é salvo como rascunho e nunca entra na fila.
+            </Callout>
+          )}
+          {/* plano com aprovação: avisa já na escolha do cliente (U-26); agendar aqui pula o cronograma */}
+          {needsClientApproval && (
+            <Callout tone="warning" title="Este cliente é do plano “com aprovação”" className="mt-3">
+              Salve como rascunho e envie pelo cronograma em <Link href="/aprovacoes">Aprovações</Link>.
+              “Agendar sem aprovação” publica <strong>sem</strong> passar pelo cliente.
             </Callout>
           )}
         </section>
@@ -453,25 +521,36 @@ function NewPostForm() {
                 <SlidesEditor format={format} slides={slides} onChange={setSlides} />
               )}
 
-              <CaptionFields
-                key={clientId}
-                clientId={clientId}
-                theme={theme}
-                targets={targets}
-                captions={captions}
-                setCaptions={setCaptions}
-                aiDisabled={!clientId}
-              />
+              {/* grupo só para ligar o erro de "agendar sem legenda" (U-06); o título visível é do CaptionFields */}
+              <Field kind="group" label="Legendas" labelHidden error={captionError}>
+                <div ref={captionsRef}>
+                  <CaptionFields
+                    key={clientId}
+                    clientId={clientId}
+                    theme={theme}
+                    targets={targets}
+                    captions={captions}
+                    setCaptions={setCaptions}
+                    aiDisabled={!clientId}
+                  />
+                </div>
+              </Field>
 
-              <div>
+              <Field
+                id={mediaFieldId}
+                label="Mídia do post"
+                error={mediaError}
+                help={
+                  mediaMissing && !productionOnly && !mediaError ? (
+                    <span className="text-warning-fg">
+                      Sem mídia a publicação falha no Instagram e no Facebook. Você pode salvar como rascunho e
+                      adicionar a arte depois.
+                    </span>
+                  ) : undefined
+                }
+              >
                 <MediaField value={mediaUrl} onChange={setMediaUrl} clientId={clientId} />
-                {!mediaUrl && !productionOnly && (
-                  <p className="mt-1.5 text-xs text-warning-fg">
-                    Sem mídia a publicação falha no Instagram e no Facebook. Você pode salvar como rascunho e
-                    adicionar a arte depois.
-                  </p>
-                )}
-              </div>
+              </Field>
 
               {/* prévia de como o post vai aparecer */}
               {(mediaUrl || captions.instagram || captions.facebook) && (
@@ -515,25 +594,36 @@ function NewPostForm() {
           </Field>
         </section>
 
-        {/* o cliente é do plano com aprovação: agendar aqui pula o cronograma */}
-        {needsClientApproval && (
-          <Callout tone="warning" title="Este cliente é do plano “com aprovação”">
-            Agendar por aqui publica <strong>sem</strong> passar pela aprovação dele. Para seguir o fluxo normal,
-            salve como rascunho e envie pelo cronograma em <Link href="/aprovacoes">Aprovações</Link>.
-          </Callout>
-        )}
-
         {error && (
           <Callout tone="danger" live="assertive">
             {error}
           </Callout>
         )}
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+          {footerBlockedText && (
+            <p id={footerHintId} className="text-sm text-fg-muted sm:mr-auto">
+              {footerBlockedText}
+            </p>
+          )}
           <Link href="/posts" className={buttonClasses({ variant: "secondary" })}>
             Cancelar
           </Link>
-          {!productionOnly && (
+          {/* agendar é secundário no "com aprovação" (U-26) e não existe no só produção */}
+          {needsClientApproval && (
+            <Button
+              variant="secondary"
+              leadingIcon={<Icon.send />}
+              onClick={requestSchedule}
+              disabled={!contentReady || submitting === "draft"}
+              loading={submitting === "scheduled"}
+              loadingText="Agendando…"
+              aria-describedby={footerDescribedBy}
+            >
+              Agendar sem aprovação
+            </Button>
+          )}
+          {!draftIsPrimary && (
             <Button
               variant="secondary"
               leadingIcon={<Icon.edit />}
@@ -542,39 +632,57 @@ function NewPostForm() {
               loading={submitting === "draft"}
               loadingText="Salvando…"
               title="Cria o post fora da fila: nada é publicado até alguém aprovar"
+              aria-describedby={footerDescribedBy}
             >
               Salvar rascunho
             </Button>
           )}
-          <Button
-            type="submit"
-            variant="primary"
-            leadingIcon={productionOnly ? <Icon.check /> : <Icon.send />}
-            disabled={!contentReady || (submitting !== null && submitting !== primaryStatus)}
-            loading={submitting === primaryStatus}
-            loadingText={productionOnly ? "Salvando…" : "Agendando…"}
-          >
-            {productionOnly ? "Salvar post" : "Agendar post"}
-          </Button>
+          {draftIsPrimary ? (
+            <Button
+              type="submit"
+              variant="primary"
+              leadingIcon={productionOnly ? <Icon.check /> : <Icon.edit />}
+              disabled={!contentReady || submitting === "scheduled"}
+              loading={submitting === "draft"}
+              loadingText="Salvando…"
+              title={productionOnly ? undefined : "Cria o post fora da fila: nada é publicado até alguém aprovar"}
+              aria-describedby={footerDescribedBy}
+            >
+              {productionOnly ? "Salvar post" : "Salvar rascunho"}
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              variant="primary"
+              leadingIcon={<Icon.send />}
+              disabled={!contentReady || submitting === "draft"}
+              loading={submitting === "scheduled"}
+              loadingText="Agendando…"
+              aria-describedby={footerDescribedBy}
+            >
+              Agendar post
+            </Button>
+          )}
         </div>
       </form>
 
-      {/* confirmação de agendamento iminente (A-039: Dialog com foco, Tab preso e Esc) */}
+      {/* confirmação antes de agendar: data iminente e/ou "com aprovação" (A-039: Dialog com foco, Tab preso e Esc).
+          O foco começa em "Voltar" (o caminho seguro). */}
       <Dialog
-        open={confirmingImminent}
-        onClose={() => setConfirmingImminent(false)}
-        title="Publicar agora?"
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        title={needsClientApproval ? "Agendar sem aprovação?" : "Publicar agora?"}
         description={
-          minutesUntil !== null && minutesUntil < 0
-            ? "A data escolhida já passou: o post entra na fila assim que for criado e vai para as redes do cliente."
-            : `Faltam cerca de ${minutesText} ${minutesText === 1 ? "minuto" : "minutos"} para a data escolhida. O post vai para as redes do cliente em seguida.`
+          needsClientApproval
+            ? `${clientName} é do plano “com aprovação”: agendar por aqui coloca o post na fila sem passar pela aprovação do cliente.`
+            : timingText
         }
         busy={submitting !== null}
         error={dialogError}
         initialFocusRef={backRef}
         footer={
           <>
-            <Button ref={backRef} variant="secondary" onClick={() => setConfirmingImminent(false)} disabled={submitting !== null}>
+            <Button ref={backRef} variant="secondary" onClick={() => setConfirming(false)} disabled={submitting !== null}>
               Voltar
             </Button>
             <Button
@@ -598,9 +706,10 @@ function NewPostForm() {
           </>
         }
       >
-        {!mediaUrl && (
-          <Callout tone="danger" title="Este post não tem mídia">
-            A publicação vai falhar. Melhor salvar como rascunho e adicionar a arte depois.
+        {/* a arte já é exigida para agendar (U-06); aqui só o aviso de data junto do "com aprovação" */}
+        {needsClientApproval && isImminent && (
+          <Callout tone="warning" className="mb-2">
+            {timingText}
           </Callout>
         )}
       </Dialog>

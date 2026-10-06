@@ -130,6 +130,14 @@ function isPendingKind(v: string): v is PendingKind {
   return (PENDING_KINDS as readonly string[]).includes(v);
 }
 
+/**
+ * "Converter em post" é a ação natural (botão visível no lugar de "Resolver", U-16) do Post avulso
+ * aberto e ainda sem post. Com post vinculado não há o que converter (a API recusa com 409).
+ */
+function convertIsPrimary(row: PendingRow): boolean {
+  return !row.resolved && !row.post && row.kind === "avulso";
+}
+
 function isFormField(v: string): v is FormField {
   return v === "clientId" || v === "kind" || v === "title" || v === "details" || v === "responsibleUserId";
 }
@@ -479,6 +487,7 @@ export default function PendingManager({
                             menuOpen={menuFor === row.id}
                             menuId={menuId}
                             onResolve={() => setResolved(row, !row.resolved)}
+                            onConvert={() => setDialog({ type: "convert", row })}
                             onMenu={(el) => toggleMenu(row.id, el)}
                           />
                         </td>
@@ -519,6 +528,7 @@ export default function PendingManager({
                       menuOpen={menuFor === row.id}
                       menuId={menuId}
                       onResolve={() => setResolved(row, !row.resolved)}
+                      onConvert={() => setDialog({ type: "convert", row })}
                       onMenu={(el) => toggleMenu(row.id, el)}
                     />
                   </li>
@@ -547,10 +557,25 @@ export default function PendingManager({
             <MenuButton icon={<Icon.edit />} onClick={() => openFromMenu({ type: "edit", row: menuRow })}>
               Editar
             </MenuButton>
-            {!menuRow.resolved && !menuRow.post && (
-              <MenuButton icon={<Icon.calendar />} onClick={() => openFromMenu({ type: "convert", row: menuRow })}>
-                Converter em post
+            {convertIsPrimary(menuRow) ? (
+              // a linha mostra "Converter em post"; o "Resolver" fica aqui (U-16)
+              <MenuButton
+                icon={<Icon.check />}
+                onClick={() => {
+                  setMenuFor(null);
+                  menuAnchorRef.current?.focus();
+                  void setResolved(menuRow, true);
+                }}
+              >
+                Resolver
               </MenuButton>
+            ) : (
+              !menuRow.resolved &&
+              !menuRow.post && (
+                <MenuButton icon={<Icon.calendar />} onClick={() => openFromMenu({ type: "convert", row: menuRow })}>
+                  Converter em post
+                </MenuButton>
+              )
             )}
             <MenuButton icon={<Icon.trash />} danger onClick={() => openFromMenu({ type: "delete", row: menuRow })}>
               Excluir
@@ -866,24 +891,39 @@ function RowActions({
   menuOpen,
   menuId,
   onResolve,
+  onConvert,
   onMenu,
 }: {
   row: PendingRow;
   menuOpen: boolean;
   menuId: string;
   onResolve: () => void;
+  onConvert: () => void;
   onMenu: (el: HTMLElement) => void;
 }) {
   return (
     <div className="flex items-center gap-1 lg:justify-end">
-      <Button
-        size="sm"
-        data-row-action={row.id}
-        aria-label={`${row.resolved ? "Reabrir" : "Resolver"}: ${row.title}`}
-        onClick={onResolve}
-      >
-        {row.resolved ? "Reabrir" : "Resolver"}
-      </Button>
+      {convertIsPrimary(row) ? (
+        <Button
+          size="sm"
+          data-row-action={row.id}
+          aria-haspopup="dialog"
+          aria-label={`Converter em post: ${row.title}`}
+          leadingIcon={<Icon.calendar />}
+          onClick={onConvert}
+        >
+          Converter em post
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          data-row-action={row.id}
+          aria-label={`${row.resolved ? "Reabrir" : "Resolver"}: ${row.title}`}
+          onClick={onResolve}
+        >
+          {row.resolved ? "Reabrir" : "Resolver"}
+        </Button>
+      )}
       <Button
         iconOnly
         variant="ghost"

@@ -38,6 +38,12 @@ export type ScheduleRow = {
   clientNote: string | null;
   changesAskedAt: string | null;
   sentAt: string | null;
+  /** dias civis (SP) desde o envio, só com o cliente ("enviado_cliente"); senão null (U-09) */
+  waitingDays: number | null;
+  /** prazo do cliente "25/09" (lib/production `approvalDeadline`), só com o cliente */
+  clientDeadline: string | null;
+  /** prazo do cliente vencido sem resposta: tom de aviso e "Reenviar" como ação principal */
+  overdue: boolean;
   approvedAt: string | null;
   link: string | null;
 };
@@ -110,6 +116,37 @@ function ArtBadge({ row }: { row: ScheduleRow }) {
   );
 }
 
+/** "Aguardando desde hoje" · "Aguardando há 1 dia" · "Aguardando há N dias". */
+function waitingLabel(days: number): string {
+  if (days <= 0) return "Aguardando desde hoje";
+  return days === 1 ? "Aguardando há 1 dia" : `Aguardando há ${days} dias`;
+}
+
+/**
+ * Idade do envio ao lado do status (U-09): neutra dentro do prazo; com o prazo do cliente
+ * vencido, tom de aviso + ícone (a cor nunca é o único sinal: o texto do prazo diz "vencido").
+ */
+function WaitingBadge({ row }: { row: ScheduleRow }) {
+  if (row.waitingDays === null) return null;
+  const label = waitingLabel(row.waitingDays);
+  if (row.overdue) {
+    return (
+      <ToneBadge
+        tone="warning"
+        icon={<Icon.alert />}
+        title={row.clientDeadline ? `O prazo do cliente venceu em ${row.clientDeadline}` : undefined}
+      >
+        {label}
+      </ToneBadge>
+    );
+  }
+  return (
+    <ToneBadge tone="neutral" icon={<Icon.clock />}>
+      {label}
+    </ToneBadge>
+  );
+}
+
 /** Etapa com texto visível (lido pelo leitor de tela); a barra é só reforço visual. */
 function Steps({ status }: { status: string }) {
   const current = STEP_OF[status] ?? 0;
@@ -146,7 +183,8 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
   const noArt = row.posts > 0 && row.withMedia === 0;
   const approveLabel = notSent && !withApproval ? "Aprovar cronograma" : "Aprovar sem o cliente";
   const disabled = busy !== "";
-  const tone = metaOf(SCHEDULE_STATUS, row.status).tone;
+  // prazo do cliente vencido sem resposta: a borda acompanha o aviso (U-09)
+  const tone: Tone = row.overdue ? "warning" : metaOf(SCHEDULE_STATUS, row.status).tone;
 
   function openDialog(kind: DialogKind) {
     setDialogError(null);
@@ -330,6 +368,19 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
     return out;
   }
 
+  /** Contexto do reenvio: há quanto tempo o cliente não responde (U-09). */
+  function resendDescription(): string | undefined {
+    if (row.waitingDays === null || !row.sentAt) return undefined;
+    const days =
+      row.waitingDays <= 0 ? "desde hoje" : row.waitingDays === 1 ? "há 1 dia" : `há ${row.waitingDays} dias`;
+    const deadline = row.clientDeadline
+      ? row.overdue
+        ? ` O prazo do cliente venceu em ${row.clientDeadline}.`
+        : ` O prazo do cliente é ${row.clientDeadline}.`
+      : "";
+    return `Enviado em ${row.sentAt}, sem resposta ${days}.${deadline}`;
+  }
+
   function resendConsequences(): string[] {
     const out =
       row.recipients === 0
@@ -465,8 +516,14 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
       </Button>,
     ];
   } else if (row.status === "enviado_cliente") {
-    primary = link ? copyButton("primary") : resendButton("primary");
-    secondary = [link ? resendButton("secondary") : null, openLink, approveButton("ghost")];
+    if (row.overdue || !link) {
+      // prazo vencido sem resposta (U-09): o próximo passo é lembrar o cliente
+      primary = resendButton("primary");
+      secondary = [copyButton("ghost"), openLink, approveButton("ghost")];
+    } else {
+      primary = copyButton("primary");
+      secondary = [resendButton("secondary"), openLink, approveButton("ghost")];
+    }
   } else if (row.status === "em_revisao") {
     const adjustLink = `${buttonClasses({ variant: "primary", size: "sm", fullWidth: true })} sm:w-auto`;
     if (row.pendingAdjustments > 0) {
@@ -513,6 +570,7 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
       : dialog === "resend"
         ? {
             title: `Reenviar o link para ${row.client}?`,
+            description: resendDescription(),
             consequences: resendConsequences(),
             confirmLabel: "Reenviar link",
             busyLabel: "Enviando…",
@@ -550,6 +608,7 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
               {row.client} <span className="font-normal text-fg-muted">· {row.month}</span>
             </h3>
             <StatusBadge kind="schedule" status={row.status} />
+            <WaitingBadge row={row} />
             {!row.agencyPublishes && (
               <span title="A agência produz o conteúdo, mas não agenda nem publica.">
                 <StatusBadge kind="agencyPublishes" status="nao" />
@@ -561,6 +620,12 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
             <ArtBadge row={row} />
             <StatusBadge kind="plan" status={row.plan} />
             {row.sentAt && <span>Enviado em {row.sentAt}</span>}
+            {row.clientDeadline &&
+              (row.overdue ? (
+                <span className="font-medium text-warning-fg">Prazo do cliente: {row.clientDeadline} (vencido)</span>
+              ) : (
+                <span>Prazo do cliente: {row.clientDeadline}</span>
+              ))}
           </div>
           <Steps status={row.status} />
         </div>

@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
-import { PageHeader, StatusBadge, PlatformChip, EmptyState, ToneBadge } from "@/components/ui";
+import { PageHeader, StatusBadge, PlatformChip, EmptyState, ToneBadge, FormatBadge } from "@/components/ui";
 import { buttonClasses } from "@/components/Button";
 import { Callout } from "@/components/Callout";
 import { Icon } from "@/components/Icons";
 import { formatDateTime } from "@/lib/format-date";
+import { dateWindow, spDateKey } from "@/lib/date-range";
 import { getCachedSummary, getTodayPosts, type TodayPost } from "@/lib/daily-summary";
 import { getQueueHealth, STUCK_MINUTES } from "@/lib/queue-health";
 import { QUEUEABLE_CLIENT } from "@/lib/publish-guard";
@@ -29,6 +30,14 @@ const fmtDiaHora = (d: Date) => {
 
 /** Link solto (fora de frase) com alvo ≥ 40 px (DESIGN, A11y "Alvos"). */
 const LOOSE_LINK = "inline-flex min-h-11 items-center text-sm font-medium text-link hover:text-link-hover hover:underline sm:min-h-10";
+
+/**
+ * Link do post numa linha de lista (U-04): o `::after` cobre a linha inteira (`relative` no
+ * item), então a linha toda abre o post — alvo ≥ 44 px no celular. Botões da linha ficam acima
+ * com `relative z-10`.
+ */
+const ROW_LINK =
+  "rounded-chip text-fg hover:text-link hover:underline after:absolute after:inset-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
 
 async function getStats() {
   const [clients, postsScheduled, postsPublished, postsFailed, expiringTokens] =
@@ -138,11 +147,14 @@ const ALERT_KIND: Record<string, { label: string; tone: Tone }> = {
 const UNKNOWN_ALERT = { label: "Aviso", tone: "neutral" as Tone };
 
 export default async function DashboardPage() {
-  const [stats, posts, summary, todayPosts, queue, requeueable, alerts] = await Promise.all([
+  // "Próximos posts" (U-05): de hoje (00:00 em SP) em diante, em ordem crescente — o começo da lista /posts
+  const today = dateWindow("day", spDateKey())!;
+  const [stats, posts, summary, todayPosts, queue, requeueable, alerts, todayFormats] = await Promise.all([
     getStats(),
     prisma.post.findMany({
+      where: { scheduledAt: { gte: today.gte } },
       take: 8,
-      orderBy: { scheduledAt: "desc" },
+      orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
       include: { client: { select: { name: true } } },
     }),
     getCachedSummary(),
@@ -150,7 +162,10 @@ export default async function DashboardPage() {
     getQueueHealth(),
     getRequeueable(),
     getRecentAlerts(),
+    // formato dos posts de hoje (o getTodayPosts não traz): selo Feed/Story ao lado do tema (U-03)
+    prisma.post.findMany({ where: { scheduledAt: { gte: today.gte, lt: today.lt } }, select: { id: true, format: true } }),
   ]);
+  const formatOf = new Map(todayFormats.map((p) => [p.id, p.format]));
 
   const todayPending = todayPosts.filter(
     (p) => p.status === "scheduled" || p.status === "draft"
@@ -198,7 +213,8 @@ export default async function DashboardPage() {
         <StatCard
           label="Publicados"
           value={stats.postsPublished}
-          href="/posts?status=published"
+          // "Próximos" (o padrão da lista) esconderia os publicados de dias passados
+          href="/posts?status=published&range=all"
           tone="success"
           icon={<Icon.check className="size-5" />}
         />
@@ -282,19 +298,24 @@ export default async function DashboardPage() {
               return (
                 <li
                   key={p.id}
-                  className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 px-4 py-3 sm:grid-cols-[3.5rem_minmax(0,1fr)_auto] sm:items-center sm:px-5"
+                  className="relative grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 px-4 py-3 transition-colors duration-(--sf-dur-fast) hover:bg-hover sm:grid-cols-[3.5rem_minmax(0,1fr)_auto] sm:items-center sm:px-5"
                 >
                   <span className="pt-0.5 text-sm font-medium tabular-nums text-fg-muted sm:pt-0">
                     {fmtHora(p.scheduledAt)}
                   </span>
                   <div className="min-w-0">
-                    <p
-                      className="line-clamp-2 text-sm font-medium text-fg wrap-break-word sm:line-clamp-1"
-                      title={`${p.clientName} · ${p.theme ?? "sem tema"}`}
-                    >
-                      {p.clientName}
-                      <span className="font-normal text-fg-muted"> · {p.theme ?? "sem tema"}</span>
-                    </p>
+                    <div className="flex items-start gap-2 sm:items-center">
+                      <FormatBadge format={formatOf.get(p.id) ?? "feed"} />
+                      <p
+                        className="line-clamp-2 min-w-0 text-sm font-medium wrap-break-word sm:line-clamp-1"
+                        title={`${p.clientName} · ${p.theme ?? "sem tema"}`}
+                      >
+                        <Link href={`/posts/${p.id}`} className={ROW_LINK}>
+                          {p.clientName}
+                          <span className="font-normal text-fg-muted"> · {p.theme?.trim() || "sem tema"}</span>
+                        </Link>
+                      </p>
+                    </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
                       <span className="flex gap-1">
                         {p.targets.map((t) => (
@@ -315,7 +336,12 @@ export default async function DashboardPage() {
                     </div>
                   </div>
                   <div className="col-start-2 flex flex-wrap items-center gap-x-3 gap-y-2 sm:col-start-auto sm:justify-end">
-                    {retryable.has(p.id) && <RetryPostButton postId={p.id} />}
+                    {retryable.has(p.id) && (
+                      // acima do link que cobre a linha
+                      <span className="relative z-10">
+                        <RetryPostButton postId={p.id} />
+                      </span>
+                    )}
                     <StatusBadge kind="post" status={p.status} />
                   </div>
                 </li>
@@ -325,10 +351,11 @@ export default async function DashboardPage() {
         )}
       </section>
 
-      <section aria-labelledby="recentes-titulo" className="card overflow-hidden">
+      <section aria-labelledby="proximos-titulo" className="card overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-x-4 border-b border-line px-4 py-1 sm:px-5">
-          <h2 id="recentes-titulo" className="py-2 text-base font-semibold text-fg">
-            Posts recentes
+          <h2 id="proximos-titulo" className="py-2 text-base font-semibold text-fg">
+            Próximos posts{" "}
+            <span className="text-sm font-normal text-fg-muted">· de hoje em diante</span>
           </h2>
           <Link href="/posts" className={LOOSE_LINK}>
             Ver todos
@@ -339,7 +366,8 @@ export default async function DashboardPage() {
           <EmptyState
             size="inline"
             headingLevel={3}
-            title="Nenhum post ainda"
+            icon={<Icon.calendar />}
+            title="Nenhum post de hoje em diante"
             description="Crie um post aqui ou gere o cronograma do mês na página do cliente."
             action={newPostLink}
           />
@@ -362,22 +390,32 @@ export default async function DashboardPage() {
               </thead>
               <tbody>
                 {posts.map((post) => (
-                  <tr key={post.id} className="border-t border-line">
-                    <td className="px-5 py-3 font-medium text-fg">{post.client.name}</td>
-                    <td className="max-w-xs truncate px-5 py-3 text-fg-muted" title={post.theme ?? undefined}>
-                      {post.theme ?? "—"}
+                  <tr key={post.id} className="border-t border-line transition-colors duration-(--sf-dur-fast) hover:bg-hover">
+                    <td className="px-5 py-2 font-medium text-fg">{post.client.name}</td>
+                    <td className="max-w-xs px-5 py-2">
+                      <div className="flex items-center gap-2">
+                        <FormatBadge format={post.format} />
+                        {/* tema abre o post (U-04), como na lista de Posts */}
+                        <Link
+                          href={`/posts/${post.id}`}
+                          title={post.theme ?? undefined}
+                          className="inline-flex min-h-10 min-w-0 items-center text-fg-muted hover:text-fg hover:underline"
+                        >
+                          <span className="truncate">{post.theme?.trim() || "Sem tema"}</span>
+                        </Link>
+                      </div>
                     </td>
-                    <td className="px-5 py-3">
+                    <td className="px-5 py-2">
                       <div className="flex gap-1">
                         {post.targets.map((t) => (
                           <PlatformChip key={t} platform={t} decorative={false} />
                         ))}
                       </div>
                     </td>
-                    <td className="whitespace-nowrap px-5 py-3 tabular-nums text-fg-muted">
+                    <td className="whitespace-nowrap px-5 py-2 tabular-nums text-fg-muted">
                       {formatDateTime(post.scheduledAt)}
                     </td>
-                    <td className="px-5 py-3">
+                    <td className="px-5 py-2">
                       <StatusBadge kind="post" status={post.status} />
                     </td>
                   </tr>
@@ -388,14 +426,23 @@ export default async function DashboardPage() {
             {/* < lg: lista */}
             <ul className="divide-y divide-line lg:hidden">
               {posts.map((post) => (
-                <li key={post.id} className="grid gap-1.5 px-4 py-3 sm:px-5">
+                <li
+                  key={post.id}
+                  className="relative grid gap-1.5 px-4 py-3 transition-colors duration-(--sf-dur-fast) hover:bg-hover sm:px-5"
+                >
                   <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                     <span className="min-w-0 truncate text-sm font-medium text-fg">{post.client.name}</span>
                     <StatusBadge kind="post" status={post.status} />
                   </div>
-                  <p className="line-clamp-2 text-sm text-fg-muted wrap-break-word" title={post.theme ?? undefined}>
-                    {post.theme ?? "Sem tema"}
-                  </p>
+                  <div className="flex items-start gap-2">
+                    <FormatBadge format={post.format} />
+                    <p className="line-clamp-2 min-w-0 text-sm wrap-break-word" title={post.theme ?? undefined}>
+                      {/* a linha inteira abre o post (U-04) */}
+                      <Link href={`/posts/${post.id}`} className={ROW_LINK}>
+                        {post.theme?.trim() || "Sem tema"}
+                      </Link>
+                    </p>
+                  </div>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-muted">
                     <span className="tabular-nums">{formatDateTime(post.scheduledAt)}</span>
                     <span className="flex gap-1">

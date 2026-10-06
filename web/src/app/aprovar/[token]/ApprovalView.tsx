@@ -1047,16 +1047,26 @@ export default function ApprovalView({
 
   // A-003: a barra é fixa e opaca; o conteúdo reserva a altura REAL dela (a linha de
   // status quebra em 2 linhas no celular), para o último card nunca ficar por trás.
+  // U-12 (WCAG 2.4.11): a mesma altura vira scroll-padding-bottom do documento enquanto
+  // a barra existe — ao navegar com Tab, o navegador rola o item com foco para cima da
+  // barra em vez de deixá-lo coberto. Sai junto com a barra (aprovado/ajustes enviados).
   const hasBar = !readOnly && !approved && !changesSent;
   useEffect(() => {
     const bar = barRef.current;
     const page = pageRef.current;
     if (!hasBar || !bar || !page) return;
+    const root = document.documentElement;
     const ro = new ResizeObserver(() => {
-      page.style.setProperty("--bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+      const h = Math.ceil(bar.getBoundingClientRect().height);
+      page.style.setProperty("--bar-h", `${h}px`);
+      // + 8 px: o anel de foco (2 px + afastamento) também fica fora da barra
+      root.style.setProperty("scroll-padding-bottom", `${h + 8}px`);
     });
     ro.observe(bar);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty("scroll-padding-bottom");
+    };
   }, [hasBar]);
 
   async function approve() {

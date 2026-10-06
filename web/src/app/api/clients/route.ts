@@ -38,6 +38,8 @@ const createSchema = z.object({
   segment: z.enum(SEGMENTS, { error: "Segmento inválido: use CORR, CARE ou COLETIVO." }).nullable().optional(),
   // redatora responsável (users.id)
   responsibleUserId: uuidString.nullable().optional(),
+  // designer responsável (users.id) — fila de artes em /design
+  designerUserId: uuidString.nullable().optional(),
 });
 
 export async function GET() {
@@ -64,7 +66,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { extraEmails, responsibleUserId, ...rest } = parsed.data;
+  const { extraEmails, responsibleUserId, designerUserId, ...rest } = parsed.data;
 
   let extras: string[] = [];
   if (extraEmails) {
@@ -78,6 +80,9 @@ export async function POST(req: NextRequest) {
   if (responsibleUserId && !(await prisma.user.findUnique({ where: { id: responsibleUserId }, select: { id: true } }))) {
     return Response.json({ error: "Usuário responsável não encontrado.", field: "responsibleUserId" }, { status: 400 });
   }
+  if (designerUserId && !(await prisma.user.findUnique({ where: { id: designerUserId }, select: { id: true } }))) {
+    return Response.json({ error: "Designer não encontrado.", field: "designerUserId" }, { status: 400 });
+  }
 
   try {
     const client = await prisma.client.create({
@@ -85,6 +90,7 @@ export async function POST(req: NextRequest) {
         ...rest,
         extraEmails: extras,
         ...(responsibleUserId !== undefined ? { responsibleUserId } : {}),
+        ...(designerUserId !== undefined ? { designerUserId } : {}),
         // nasce com status diferente do padrão: a mudança é registrada agora
         ...(rest.status !== "ativo" ? { statusChangedAt: new Date() } : {}),
       },

@@ -32,6 +32,8 @@ export type ProductionFilterValues = {
   mes: string;
   /** id da redatora responsável */
   redatora: string;
+  /** id da designer do cliente */
+  designer: string;
   segmento: string;
   aprovacao: "" | "com" | "sem";
   status: ProductionStatusFilter;
@@ -46,6 +48,7 @@ function hrefFor(v: ProductionFilterValues): string {
   const params = new URLSearchParams();
   params.set("mes", v.mes);
   if (v.redatora) params.set("redatora", v.redatora);
+  if (v.designer) params.set("designer", v.designer);
   if (v.segmento) params.set("segmento", v.segmento);
   if (v.aprovacao) params.set("aprovacao", v.aprovacao);
   if (v.status !== DEFAULT_STATUS) params.set("status", v.status);
@@ -54,13 +57,14 @@ function hrefFor(v: ProductionFilterValues): string {
 }
 
 function cleared(v: ProductionFilterValues): ProductionFilterValues {
-  return { mes: v.mes, redatora: "", segmento: "", aprovacao: "", status: DEFAULT_STATUS, publica: "" };
+  return { mes: v.mes, redatora: "", designer: "", segmento: "", aprovacao: "", status: DEFAULT_STATUS, publica: "" };
 }
 
 /** Quantos filtros estão fora do padrão. */
 function activeCount(v: ProductionFilterValues): number {
-  return [v.redatora, v.segmento, v.aprovacao, v.status !== DEFAULT_STATUS ? v.status : "", v.publica].filter(Boolean)
-    .length;
+  return [v.redatora, v.designer, v.segmento, v.aprovacao, v.status !== DEFAULT_STATUS ? v.status : "", v.publica].filter(
+    Boolean,
+  ).length;
 }
 
 function shiftMonth(key: string, delta: number): string {
@@ -111,12 +115,14 @@ export function MonthNav({ values }: { values: ProductionFilterValues }) {
 function FilterFields({
   values,
   writers,
+  designers,
   onChange,
   size,
   fieldClassName = "",
 }: {
   values: ProductionFilterValues;
   writers: WriterOption[];
+  designers: WriterOption[];
   onChange: (next: ProductionFilterValues) => void;
   size: "sm" | "md";
   fieldClassName?: string;
@@ -129,6 +135,16 @@ function FilterFields({
           {writers.map((w) => (
             <option key={w.id} value={w.id}>
               {w.name}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <Field label="Designer" className={fieldClassName}>
+        <Select size={size} value={values.designer} onChange={(e) => onChange({ ...values, designer: e.target.value })}>
+          <option value="">Todas</option>
+          {designers.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
             </option>
           ))}
         </Select>
@@ -190,9 +206,12 @@ function FilterFields({
 export default function ProductionFilters({
   values,
   writers,
+  designers = [],
 }: {
   values: ProductionFilterValues;
   writers: WriterOption[];
+  /** designers dos clientes (filtro "Designer") */
+  designers?: WriterOption[];
 }) {
   const { go } = useNav();
   // valor otimista: o select já mostra a escolha enquanto a página nova carrega;
@@ -216,7 +235,14 @@ export default function ProductionFilters({
   return (
     <>
       <div className="mb-5 hidden flex-wrap items-end gap-3 md:flex">
-        <FilterFields values={local} writers={writers} onChange={apply} size="sm" fieldClassName="w-44" />
+        <FilterFields
+          values={local}
+          writers={writers}
+          designers={designers}
+          onChange={apply}
+          size="sm"
+          fieldClassName="w-40"
+        />
         {count > 0 && (
           <Button variant="ghost" size="sm" onClick={() => apply(cleared(local))}>
             Limpar filtros
@@ -264,7 +290,7 @@ export default function ProductionFilters({
           }
         >
           <div className="grid gap-4">
-            <FilterFields values={draft} writers={writers} onChange={setDraft} size="md" />
+            <FilterFields values={draft} writers={writers} designers={designers} onChange={setDraft} size="md" />
           </div>
         </Dialog>
       </div>

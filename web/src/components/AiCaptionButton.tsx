@@ -31,6 +31,16 @@ export function AiCaptionButton({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const errorId = useId();
+  const reasonId = useId();
+  // desabilitado: diz o motivo real (U-07) no title e para o leitor de tela
+  const reason = !disabled
+    ? null
+    : !clientId
+      ? "Escolha o cliente para gerar a legenda com IA."
+      : targets.length === 0
+        ? "Selecione ao menos uma rede para gerar a legenda com IA."
+        : "A geração com IA não está disponível agora.";
+  const describedBy = [error ? errorId : null, reason ? reasonId : null].filter(Boolean).join(" ") || undefined;
 
   async function generate() {
     if (targets.length === 0) {
@@ -66,12 +76,17 @@ export function AiCaptionButton({
         loading={loading}
         loadingText="Gerando…"
         disabled={disabled}
-        aria-describedby={error ? errorId : undefined}
+        aria-describedby={describedBy}
         onClick={generate}
-        title={disabled ? "Selecione um cliente primeiro" : "Gerar legenda com IA"}
+        title={reason ?? "Gerar legenda com IA"}
       >
         Gerar com IA
       </Button>
+      {reason && (
+        <span id={reasonId} className="sr-only">
+          {reason}
+        </span>
+      )}
       {error && (
         <span id={errorId} role="alert" className="text-xs font-medium text-danger-fg">
           {error}

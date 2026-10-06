@@ -8,6 +8,7 @@ import { Field, Input, Select } from "@/components/Field";
 import { Icon } from "@/components/Icons";
 import { shiftRef, rangeLabel, spDateKey, type RangeKind } from "@/lib/date-range";
 import { formatMonthLabel } from "@/lib/format-date";
+import type { ListRange } from "./list-query";
 
 type Client = { id: string; name: string };
 
@@ -19,15 +20,21 @@ const STATUS_FILTERS = [
   { label: "Falharam", value: "failed" },
 ];
 
-const RANGE_FILTERS: { label: string; value: RangeKind }[] = [
+/* "Próximos" é o padrão (sem `range` na URL): de hoje em diante, atrasados/falhas no topo (U-19). */
+const RANGE_FILTERS: { label: string; value: ListRange }[] = [
+  { label: "Próximos", value: "upcoming" },
   { label: "Todas", value: "all" },
   { label: "Dia", value: "day" },
   { label: "Semana", value: "week" },
   { label: "Mês", value: "month" },
 ];
 
+/** Períodos com data de referência (setas, "Hoje" e `ref` na URL). */
+type DatedRange = Exclude<RangeKind, "all">;
+const isDated = (r: ListRange): r is DatedRange => r !== "all" && r !== "upcoming";
+
 /** Nome acessível das setas de período (A-014). */
-const STEP_LABELS: Record<Exclude<RangeKind, "all">, { prev: string; next: string }> = {
+const STEP_LABELS: Record<DatedRange, { prev: string; next: string }> = {
   day: { prev: "Dia anterior", next: "Próximo dia" },
   week: { prev: "Semana anterior", next: "Próxima semana" },
   month: { prev: "Mês anterior", next: "Próximo mês" },
@@ -56,7 +63,7 @@ export default function PostsFilters({
   clients: Client[];
   currentStatus?: string;
   currentClientId?: string;
-  currentRange: RangeKind;
+  currentRange: ListRange;
   currentRef: string;
   currentQuery: string;
 }) {
@@ -76,8 +83,9 @@ export default function PostsFilters({
     const merged: Record<string, string | undefined> = {
       status: currentStatus || undefined,
       clientId: currentClientId || undefined,
-      range: currentRange !== "all" ? currentRange : undefined,
-      ref: currentRange !== "all" ? currentRef : undefined,
+      // "Próximos" é o padrão: fica fora da URL
+      range: currentRange !== "upcoming" ? currentRange : undefined,
+      ref: isDated(currentRange) ? currentRef : undefined,
       q: query || undefined,
       ...overrides,
     };
@@ -99,7 +107,8 @@ export default function PostsFilters({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
-  const step = currentRange !== "all" ? STEP_LABELS[currentRange] : null;
+  const dated = isDated(currentRange) ? currentRange : null;
+  const step = dated ? STEP_LABELS[dated] : null;
 
   return (
     <div className="mb-6 grid gap-3">
@@ -165,8 +174,8 @@ export default function PostsFilters({
               <Link
                 key={r.value}
                 href={build({
-                  range: r.value !== "all" ? r.value : undefined,
-                  ref: r.value !== "all" ? (currentRange === "all" ? spDateKey() : currentRef) : undefined,
+                  range: r.value !== "upcoming" ? r.value : undefined,
+                  ref: isDated(r.value) ? (isDated(currentRange) ? currentRef : spDateKey()) : undefined,
                   page: undefined,
                 })}
                 aria-current={active ? "true" : undefined}
@@ -178,10 +187,10 @@ export default function PostsFilters({
           })}
         </div>
 
-        {step && (
+        {step && dated && (
           <div className="flex flex-wrap items-center gap-2">
             <Link
-              href={build({ ref: shiftRef(currentRange, currentRef, -1), page: undefined })}
+              href={build({ ref: shiftRef(dated, currentRef, -1), page: undefined })}
               aria-label={step.prev}
               title={step.prev}
               className={buttonClasses({ variant: "secondary", size: "sm", iconOnly: true })}
@@ -189,7 +198,7 @@ export default function PostsFilters({
               <Icon.chevronLeft className="size-4" />
             </Link>
             <Link
-              href={build({ ref: shiftRef(currentRange, currentRef, 1), page: undefined })}
+              href={build({ ref: shiftRef(dated, currentRef, 1), page: undefined })}
               aria-label={step.next}
               title={step.next}
               className={buttonClasses({ variant: "secondary", size: "sm", iconOnly: true })}
@@ -204,7 +213,7 @@ export default function PostsFilters({
             </Link>
             <span aria-live="polite" className="ml-1 text-sm font-medium text-fg">
               {/* inicial maiúscula só no mês (A-019, sem CSS): dia e semana começam com número */}
-              {currentRange === "month" ? formatMonthLabel(currentRef) : rangeLabel(currentRange, currentRef)}
+              {dated === "month" ? formatMonthLabel(currentRef) : rangeLabel(dated, currentRef)}
             </span>
           </div>
         )}
