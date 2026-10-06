@@ -453,7 +453,8 @@ export default function ProductionGrid({ board }: { board: BoardModel }) {
       className="relative overflow-auto rounded-card border border-line bg-surface"
       style={{ maxHeight: "calc(100dvh - 14rem)" }}
     >
-      <table className="w-max border-separate border-spacing-0 text-sm">
+      {/* ocupa o bloco inteiro; os dias (sem largura fixa, só mínima) dividem o espaço que sobra */}
+      <table className="w-full min-w-max border-separate border-spacing-0 text-sm">
         <caption className="sr-only">
           Quadro de produção de {board.monthLabel}: uma linha por cliente e uma coluna por dia. Cada post é um link com
           o estágio, o formato e os avisos.
@@ -472,7 +473,7 @@ export default function ProductionGrid({ board }: { board: BoardModel }) {
                 scope="col"
                 aria-current={col.today ? "date" : undefined}
                 data-scroll-anchor={col.scrollAnchor ? "" : undefined}
-                className={`sticky top-0 z-10 h-12 w-11 min-w-11 border-b border-r border-line px-0 text-center align-middle font-normal md:w-6.75 md:min-w-6.75 ${
+                className={`sticky top-0 z-10 h-12 min-w-11 border-b border-r border-line px-0 text-center align-middle font-normal md:min-w-6.75 ${
                   col.today
                     ? "bg-surface bg-linear-to-b from-today to-today"
                     : col.weekend

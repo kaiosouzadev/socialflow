@@ -100,6 +100,7 @@ type CopyState = "idle" | "copied" | "selected";
  */
 export function DrivePath({ path, compactFrom }: { path: string; compactFrom?: "xl" }) {
   const codeId = useId();
+  const fileId = `${codeId}-arquivo`;
   const [state, setState] = useState<CopyState>("idle");
 
   useEffect(() => {
@@ -114,11 +115,14 @@ export function DrivePath({ path, compactFrom }: { path: string; compactFrom?: "
       await navigator.clipboard.writeText(path);
       setState("copied");
     } catch {
-      const el = document.getElementById(codeId);
+      // pasta e arquivo ficam em <code> separados: seleciona do início da pasta ao fim do arquivo
+      const start = document.getElementById(codeId);
+      const end = document.getElementById(fileId);
       const selection = window.getSelection();
-      if (el && selection) {
+      if (start && end && selection) {
         const range = document.createRange();
-        range.selectNodeContents(el);
+        range.setStart(start, 0);
+        range.setEnd(end, end.childNodes.length);
         selection.removeAllRanges();
         selection.addRange(range);
       }
@@ -130,23 +134,60 @@ export function DrivePath({ path, compactFrom }: { path: string; compactFrom?: "
   const feedback = state === "copied" ? "Caminho copiado." : state === "selected" ? "Caminho selecionado: copie com Ctrl+C." : "";
   const textLabel = state === "copied" ? "Copiado" : state === "selected" ? "Selecionado" : "Copiar caminho";
   const compact = compactFrom === "xl";
-  // pasta + arquivo: o nome do arquivo (em destaque) nunca quebra; a pasta quebra onde precisar
+  // pasta + arquivo: o nome do arquivo (em destaque) nunca quebra; a pasta quebra nas barras
+  // ("Bergamo/2026/" + "10 - Outubro/"), não no meio de "10 - Outubro". Trecho muito longo
+  // (nome de cliente comprido) pode quebrar por dentro para não estourar o celular.
   const cut = path.lastIndexOf("/", path.endsWith("/") ? path.length - 2 : path.length - 1);
   const folder = path.slice(0, cut + 1);
   const file = path.slice(cut + 1);
+  const segments = folder.match(/[^/]*\//g) ?? [];
 
   return (
-    <div className={`grid min-w-0 justify-items-start gap-1 ${compact ? "xl:flex xl:items-center" : ""}`}>
+    <div className="grid min-w-0 justify-items-start gap-1">
       <p className="flex min-w-0 max-w-full items-start gap-1.5">
         <span aria-hidden="true" className="mt-0.5 inline-flex size-4 shrink-0 text-fg-muted [&>svg]:size-full">
           <Icon.folder />
         </span>
-        <span className="sr-only">Arquivo no Drive: </span>
-        {/* spans em linha (sem flex): a seleção do fallback copia o caminho sem quebra de linha */}
-        <code id={codeId} title={path} className="min-w-0 font-mono text-xs leading-5 wrap-anywhere">
-          <span className="text-fg-muted">{folder}</span>
-          <span className="font-semibold whitespace-nowrap text-fg">{file}</span>
-        </code>
+        {/* caminho e botão (≥ xl) no mesmo fluxo de texto: o botão acompanha o fim do caminho, mesmo quando ele quebra */}
+        {/* text-xs/leading-5 aqui também: a linha do caminho não herda os 24 px do texto base */}
+        <span className="min-w-0 text-xs leading-5">
+          <span className="sr-only">Arquivo no Drive: </span>
+          {/* spans em linha (sem flex): a seleção do fallback copia o caminho sem quebra de linha */}
+          <code id={codeId} title={path} className="font-mono wrap-anywhere">
+            {segments.map((seg, i) => (
+              <span key={i}>
+                <span className={`text-fg-muted ${seg.length <= 24 ? "whitespace-nowrap" : ""}`}>{seg}</span>
+                <wbr />
+              </span>
+            ))}
+          </code>
+          {/* arquivo + botão juntos: o ícone nunca desce sozinho para a linha de baixo */}
+          <span className="whitespace-nowrap">
+            <code id={fileId} title={path} className="font-mono font-semibold text-fg">
+              {file}
+            </code>
+            {compact && (
+              <span className="ml-1 hidden items-center align-middle xl:inline-flex">
+                <Button
+                  iconOnly
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Copiar caminho: ${file}`}
+                  title="Copiar caminho"
+                  onClick={copy}
+                  className="-my-1.5"
+                >
+                  {done ? <Icon.check /> : <Icon.copy />}
+                </Button>
+              </span>
+            )}
+          </span>
+          {compact && done && (
+            <span aria-hidden="true" className="ml-1 hidden font-medium text-success-fg xl:inline">
+              {state === "copied" ? "Copiado" : "Selecionado"}
+            </span>
+          )}
+        </span>
       </p>
       <Button
         size="md"
@@ -158,25 +199,6 @@ export function DrivePath({ path, compactFrom }: { path: string; compactFrom?: "
       >
         {textLabel}
       </Button>
-      {compact && (
-        <span className="hidden shrink-0 items-center gap-1 xl:inline-flex">
-          <Button
-            iconOnly
-            variant="ghost"
-            size="sm"
-            aria-label={`Copiar caminho: ${file}`}
-            title="Copiar caminho"
-            onClick={copy}
-          >
-            {done ? <Icon.check /> : <Icon.copy />}
-          </Button>
-          {done && (
-            <span aria-hidden="true" className="text-xs font-medium text-success-fg">
-              {state === "copied" ? "Copiado" : "Selecionado"}
-            </span>
-          )}
-        </span>
-      )}
       <span role="status" className="sr-only">
         {feedback}
       </span>
@@ -223,7 +245,7 @@ function DesignItem({
   return (
     <li
       data-item={row.id}
-      className="grid gap-3 rounded-card border border-line bg-surface p-4 shadow-card xl:grid-cols-[minmax(0,1.3fr)_10rem_minmax(0,1fr)_14rem] xl:items-center xl:gap-x-4 xl:rounded-none xl:border-0 xl:border-t xl:py-3 xl:shadow-none xl:first:border-t-0"
+      className="grid gap-3 rounded-card border border-line bg-surface p-4 shadow-card xl:grid-cols-[minmax(0,1.2fr)_12.5rem_minmax(0,1.2fr)_15rem] xl:items-center xl:gap-x-5 xl:rounded-none xl:border-0 xl:border-t xl:py-3 xl:shadow-none xl:first:border-t-0"
     >
       {/* formato + tema; cliente · designer */}
       <div className="min-w-0">
@@ -255,11 +277,14 @@ function DesignItem({
           , {w.date} · {w.time}
         </p>
         {row.late && (
-          <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-danger-fg">
-            <span aria-hidden="true" className="inline-flex size-3.5 shrink-0 text-danger-solid [&>svg]:size-full">
+          <p className="mt-0.5 flex items-start gap-1 text-xs font-medium text-danger-fg">
+            <span aria-hidden="true" className="mt-px inline-flex size-3.5 shrink-0 text-danger-solid [&>svg]:size-full">
               <Icon.alert />
             </span>
-            Atrasada · <span className="whitespace-nowrap">{lateText(row.scheduledAt, nowMs)}</span>
+            {/* um só bloco de texto: se faltar espaço, quebra só depois de "Atrasada ·" */}
+            <span>
+              Atrasada&nbsp;· <span className="whitespace-nowrap">{lateText(row.scheduledAt, nowMs)}</span>
+            </span>
           </p>
         )}
       </div>
