@@ -1,13 +1,20 @@
-import { NextRequest } from "next/server";
+// namespace (e não `import { after }`): os testes antigos trocam "next/server" por um módulo
+// falso sem `after`, e um import nomeado quebraria o carregamento da rota neles
+import * as server from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { prepareClientDriveFolders, spMonthKey } from "@/lib/drive-sync";
+import { fillMissingCaptions, needsContent } from "@/lib/calendar-captions";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
+// as legendas que faltarem são geradas DEPOIS da resposta (after), dentro deste limite
+export const maxDuration = 300;
+/** Não começa lote de IA novo depois disso (folga para o lote em andamento terminar). */
+const FILL_BUDGET_MS = 180_000;
 
 const captionsSchema = z
   .object({
@@ -44,8 +51,13 @@ const pad = (n: number) => String(n).padStart(2, "0");
  */
 const SAVE_FAILED = "Não foi possível salvar o cronograma agora. Nada foi gravado; tente de novo em instantes.";
 
-/** Salva os posts revisados como rascunhos (draft), num cronograma. */
-export async function POST(req: NextRequest) {
+/**
+ * Salva os posts revisados como rascunhos (draft), num cronograma. Legendas e slides que a
+ * revisão já gerou vêm em `captions`/`slides`; os posts que chegarem sem legenda (com título)
+ * ganham legenda no servidor depois da resposta — `after()` + fillMissingCaptions, que só
+ * grava onde a legenda continua vazia.
+ */
+export async function POST(req: server.NextRequest) {
   const denied = await requireAuth();
   if (denied) return denied;
 
@@ -86,7 +98,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let result: { scheduleId: string; created: number; duplicates: number };
+  let result: { scheduleId: string; created: number; duplicates: number; pendingIds: string[] };
   try {
     result = await prisma.$transaction(async (tx) => {
       const schedule =
@@ -107,8 +119,9 @@ export async function POST(req: NextRequest) {
         (p) => !seen.has(`${new Date(p.scheduledAt).getTime()}:${p.format}`)
       );
 
+      let pendingIds: string[] = [];
       if (fresh.length > 0) {
-        await tx.post.createMany({
+        const created = await tx.post.createManyAndReturn({
           data: fresh.map((p, i) => {
             const captions: Record<string, string> = {};
             if (p.captions) {
@@ -134,10 +147,18 @@ export async function POST(req: NextRequest) {
               status: "draft",
             };
           }),
+          select: { id: true, theme: true, format: true, captions: true, slides: true },
         });
+        // sem legenda (ou carrossel/reels sem slides) e com título: a IA completa depois
+        pendingIds = created.filter(needsContent).map((p) => p.id);
       }
 
-      return { scheduleId: schedule.id, created: fresh.length, duplicates: posts.length - fresh.length };
+      return {
+        scheduleId: schedule.id,
+        created: fresh.length,
+        duplicates: posts.length - fresh.length,
+        pendingIds,
+      };
     });
   } catch (e) {
     // detalhe do banco só no log do servidor
@@ -147,8 +168,27 @@ export async function POST(req: NextRequest) {
 
   // Drive (best-effort, depois de gravar): pasta do cliente e Cliente/AAAA/MM - Mês
   // de cada mês tocado. Nunca derruba o commit: falha vira `driveWarning`.
+  const { pendingIds, ...saved } = result;
+  if (pendingIds.length > 0) {
+    server.after(async () => {
+      try {
+        const fill = await fillMissingCaptions(pendingIds, { deadlineAt: Date.now() + FILL_BUDGET_MS });
+        if (fill.failed > 0) {
+          console.error(
+            `[ai/calendar/commit] legendas em segundo plano: ${fill.failed} de ${pendingIds.length} post(s) ficaram sem legenda`,
+            clientId,
+            month
+          );
+        }
+      } catch (e) {
+        // só log: o cronograma já foi salvo; o lote semanal ainda completa o que faltar
+        console.error("[ai/calendar/commit] falha ao gerar legendas em segundo plano", clientId, month, e);
+      }
+    });
+  }
+
   const months = posts.map((p) => spMonthKey(new Date(p.scheduledAt)));
   const driveInfo = await prepareClientDriveFolders(client, months);
 
-  return Response.json({ ...result, month, ...driveInfo }, { status: 201 });
+  return Response.json({ ...saved, captionsPending: pendingIds.length, month, ...driveInfo }, { status: 201 });
 }

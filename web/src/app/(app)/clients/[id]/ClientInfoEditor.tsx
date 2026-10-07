@@ -1223,10 +1223,14 @@ export default function ClientInfoEditor({
             shape="square"
             color={clientColor(client.id, client.brandColor)} // cor-de-dado: anel com a cor do cliente
           />
+          {/* rótulo da seção em cima, nome do cliente em destaque: "Cadastro" não pode parecer o nome da empresa */}
           <div className="min-w-0">
-            <h2 id="cadastro-titulo" className="font-display text-lg font-semibold tracking-title text-fg">
-              {editing ? "Editar cadastro" : "Cadastro"}
+            <h2 id="cadastro-titulo" className="text-xs font-semibold uppercase tracking-overline text-fg-muted">
+              {editing ? "Editar cadastro" : "Cadastro do cliente"}
             </h2>
+            <p className="truncate font-display text-lg font-semibold tracking-title text-fg" title={client.name}>
+              {client.name}
+            </p>
             <p className="truncate text-sm text-fg-muted" title={client.email}>
               {client.email}
             </p>

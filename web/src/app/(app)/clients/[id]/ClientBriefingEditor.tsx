@@ -74,7 +74,12 @@ const BRIEFING_GROUPS: { title: string; fields: BriefingField[] }[] = [
     fields: [
       { key: "themes", label: "Principais temas a abordar", area: true },
       { key: "references", label: "Páginas de referência", area: true },
-      { key: "hashtags", label: "Hashtags", area: true },
+      {
+        key: "hashtags",
+        label: "Hashtags",
+        area: true,
+        help: "Entra automaticamente no fim de todas as legendas geradas pela IA.",
+      },
       { key: "restrictions", label: "Restrições (datas, religião, etc.)" },
       { key: "mandatoryArtText", label: "Texto obrigatório nas artes", area: true },
       { key: "designNotes", label: "Notas de design", area: true },

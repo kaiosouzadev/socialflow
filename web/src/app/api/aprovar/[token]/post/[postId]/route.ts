@@ -1,9 +1,6 @@
 import type { NextRequest } from "next/server";
-import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
-import { MAX_AI_EDITS } from "@/lib/approval";
 import { raiseAlert, teamEmails, notifyEmailHtml, escapeHtml } from "@/lib/notify";
 import { z } from "zod";
 
@@ -14,27 +11,16 @@ const OPEN = ["enviado_cliente", "em_revisao"];
 // comentário de ajuste precisa dizer O QUE mudar — mínimo de 30 caracteres
 export const MIN_ADJUST_CHARS = 30;
 
+const CAPTION_IN_WEEKLY = "A legenda é revisada no link semanal.";
+
 const schema = z.object({
+  // "edit" e "regenerate" (legenda) continuam aceitos só para responder o 409 em pt-BR abaixo
   action: z.enum(["edit", "regenerate", "note", "adjust"]),
-  captions: z
-    .object({
-      instagram: z.string().optional(),
-      facebook: z.string().optional(),
-      linkedin: z.string().optional(),
-    })
-    .optional(),
-  notes: z.string().max(500).optional(),
   // comentário do cliente pedindo ajuste neste post ("" limpa) — action "note"
   clientNote: z.string().max(1000).optional(),
   // pedido de ajuste formal (mín. 30 chars, bloqueia aprovação) — action "adjust"
   comment: z.string().max(2000).optional(),
 });
-
-// padrão do sistema: FB+IG compartilham a MESMA legenda; LinkedIn tem a própria
-const SHARED_GUIDE =
-  '"shared": legenda única para Facebook e Instagram (envolvente, 3-6 hashtags, emojis moderados)';
-const LINKEDIN_GUIDE =
-  '"linkedin": legenda para LinkedIn (profissional, foco em valor, sem excesso de emojis)';
 
 export async function POST(
   req: NextRequest,
@@ -48,9 +34,21 @@ export async function POST(
   const parsed = schema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
 
+  // F10 (decisão do usuário, 07/10): o link mensal não mostra nem edita legenda — ela é
+  // revisada no link semanal (rota própria: /api/aprovar-semana/[token]/post/[postId]).
+  // "edit" e "regenerate" devolviam legenda (e "regenerate" chamava a IA): agora recusam
+  // antes de qualquer leitura no banco e de qualquer chamada à IA.
+  if (parsed.data.action === "edit" || parsed.data.action === "regenerate") {
+    return Response.json({ error: CAPTION_IN_WEEKLY }, { status: 409 });
+  }
+
   const schedule = await prisma.schedule.findUnique({
     where: { approvalToken: token },
-    select: { id: true, status: true, client: { select: { name: true, toneOfVoice: true } } },
+    select: {
+      id: true,
+      status: true,
+      client: { select: { name: true } },
+    },
   });
   if (!schedule) return Response.json({ error: "Link inválido" }, { status: 404 });
   if (!OPEN.includes(schedule.status)) {
@@ -85,128 +83,51 @@ export async function POST(
   }
 
   // ---- pedido de ajuste (fase cronograma): comentário do cliente no post ----
-  if (parsed.data.action === "adjust") {
-    const comment = (parsed.data.comment ?? "").trim();
-    if (comment.length < MIN_ADJUST_CHARS) {
-      return Response.json(
-        { error: `Descreva o ajuste com pelo menos ${MIN_ADJUST_CHARS} caracteres.` },
-        { status: 400 }
-      );
-    }
-
-    const [adjustment] = await prisma.$transaction([
-      prisma.postAdjustment.create({
-        data: { postId, comment },
-        select: { id: true, comment: true, status: true, createdAt: true },
-      }),
-      prisma.schedule.update({
-        where: { id: schedule.id },
-        data: { status: "em_revisao", changesAskedAt: new Date() },
-      }),
-    ]);
-
-    // avisa a equipe na hora — ajuste do cliente não pode passar batido
-    const to = await teamEmails();
-    await raiseAlert({
-      kind: "ajuste_solicitado",
-      audience: "equipe",
-      message: `${schedule.client.name} pediu ajuste em "${post.theme ?? "post"}": ${comment.slice(0, 140)}`,
-      dedupeKey: `ajuste_solicitado:${adjustment.id}`,
-      clientId: post.clientId,
-      scheduleId: schedule.id,
-      postId,
-      email: {
-        to,
-        subject: `Ajuste solicitado — ${schedule.client.name}`,
-        html: notifyEmailHtml(
-          "Cliente pediu ajuste no cronograma",
-          [
-            `<strong>${escapeHtml(schedule.client.name)}</strong> comentou no post <strong>${escapeHtml(post.theme ?? "")}</strong>:`,
-            `“${escapeHtml(comment)}”`,
-            "Resolva o ajuste em Aprovações para liberar a aprovação do cronograma.",
-          ],
-          `${process.env.SYSTEM_BASE_URL ?? ""}/aprovacoes`,
-          "Abrir aprovações"
-        ),
-      },
-    });
-
-    return Response.json({ ok: true, adjustment });
+  // (única ação que sobra: "edit"/"regenerate" recusam no início e "note" já retornou)
+  const comment = (parsed.data.comment ?? "").trim();
+  if (comment.length < MIN_ADJUST_CHARS) {
+    return Response.json(
+      { error: `Descreva o ajuste com pelo menos ${MIN_ADJUST_CHARS} caracteres.` },
+      { status: 400 }
+    );
   }
 
-  if (parsed.data.action === "edit") {
-    const cur = (post.captions as Record<string, string> | null) ?? {};
-    const merged = { ...cur, ...(parsed.data.captions ?? {}) };
-    await prisma.$transaction([
-      prisma.post.update({ where: { id: postId }, data: { captions: merged as Prisma.InputJsonValue } }),
-      ...(markReview ? [markReview] : []),
-    ]);
-    return Response.json({ ok: true, captions: merged, aiEditsUsed: post.aiEditsUsed });
-  }
+  const [adjustment] = await prisma.$transaction([
+    prisma.postAdjustment.create({
+      data: { postId, comment },
+      select: { id: true, comment: true, status: true, createdAt: true },
+    }),
+    prisma.schedule.update({
+      where: { id: schedule.id },
+      data: { status: "em_revisao", changesAskedAt: new Date() },
+    }),
+  ]);
 
-  // regenerate (IA) — limite por post
-  if (post.aiEditsUsed >= MAX_AI_EDITS) {
-    return Response.json({ error: `Limite de ${MAX_AI_EDITS} edições por IA atingido neste post` }, { status: 429 });
-  }
-  const regenLimited = enforceRateLimit(`approve-regen:${clientIp(req)}`, 20, 60_000);
-  if (regenLimited) return regenLimited;
-
-  const targets = post.targets;
-  const hasMeta = targets.includes("instagram") || targets.includes("facebook");
-  const hasLinkedin = targets.includes("linkedin");
-  const guide = [hasMeta ? `- ${SHARED_GUIDE}` : "", hasLinkedin ? `- ${LINKEDIN_GUIDE}` : ""]
-    .filter(Boolean)
-    .join("\n");
-  const jsonKeys = [hasMeta ? '"shared":"<legenda>"' : "", hasLinkedin ? '"linkedin":"<legenda>"' : ""]
-    .filter(Boolean)
-    .join(",");
-  const system =
-    "Você é redator de social media (pt-BR). Reescreva a legenda mantendo o tema, " +
-    "variando a abordagem. Responda SOMENTE JSON.";
-  const prompt = [
-    `Cliente: ${schedule.client.name}.`,
-    schedule.client.toneOfVoice ? `Tom: ${schedule.client.toneOfVoice}.` : "",
-    post.theme ? `Tema: ${post.theme}.` : "",
-    parsed.data.notes ? `Pedido do cliente: ${parsed.data.notes}.` : "",
-    "Reescreva:",
-    guide,
-    `JSON: {${jsonKeys}}`,
-  ].filter(Boolean).join("\n");
-
-  let captions: Record<string, string>;
-  try {
-    const raw = await generateText({
-      model: CAPTION_MODEL,
-      system,
-      prompt,
-      temperature: 0.95,
-      json: true,
-      maxOutputTokens: 8192,
-    });
-    const data = parseModelJson<Record<string, unknown>>(raw);
-    captions = {};
-    const shared = typeof data.shared === "string" && data.shared.trim() ? data.shared.trim() : "";
-    const li = typeof data.linkedin === "string" && data.linkedin.trim() ? data.linkedin.trim() : "";
-    // FB+IG sempre com a mesma legenda; LinkedIn com a própria (fallback = shared)
-    if (hasMeta && shared) {
-      if (targets.includes("instagram")) captions.instagram = shared;
-      if (targets.includes("facebook")) captions.facebook = shared;
-    }
-    if (hasLinkedin && (li || shared)) captions.linkedin = li || shared;
-    if (Object.keys(captions).length === 0) throw new Error("sem conteúdo");
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "erro IA";
-    return Response.json({ error: `IA: ${msg}` }, { status: 502 });
-  }
-
-  const cur = (post.captions as Record<string, string> | null) ?? {};
-  const merged = { ...cur, ...captions };
-  const updated = await prisma.post.update({
-    where: { id: postId },
-    data: { captions: merged as Prisma.InputJsonValue, aiEditsUsed: { increment: 1 } },
-    select: { aiEditsUsed: true },
+  // avisa a equipe na hora — ajuste do cliente não pode passar batido
+  const to = await teamEmails();
+  await raiseAlert({
+    kind: "ajuste_solicitado",
+    audience: "equipe",
+    message: `${schedule.client.name} pediu ajuste em "${post.theme ?? "post"}": ${comment.slice(0, 140)}`,
+    dedupeKey: `ajuste_solicitado:${adjustment.id}`,
+    clientId: post.clientId,
+    scheduleId: schedule.id,
+    postId,
+    email: {
+      to,
+      subject: `Ajuste solicitado — ${schedule.client.name}`,
+      html: notifyEmailHtml(
+        "Cliente pediu ajuste no cronograma",
+        [
+          `<strong>${escapeHtml(schedule.client.name)}</strong> comentou no post <strong>${escapeHtml(post.theme ?? "")}</strong>:`,
+          `“${escapeHtml(comment)}”`,
+          "Resolva o ajuste em Aprovações para liberar a aprovação do cronograma.",
+        ],
+        `${process.env.SYSTEM_BASE_URL ?? ""}/aprovacoes`,
+        "Abrir aprovações"
+      ),
+    },
   });
-  if (markReview) await markReview;
 
-  return Response.json({ ok: true, captions: merged, aiEditsUsed: updated.aiEditsUsed });
+  return Response.json({ ok: true, adjustment });
 }

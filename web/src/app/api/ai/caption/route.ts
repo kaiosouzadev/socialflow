@@ -5,6 +5,8 @@ import { uuidString } from "@/lib/validators";
 import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { toUserMessage } from "@/lib/user-facing-error";
+import { briefingForPrompt } from "@/lib/client-briefing-prompt";
+import { clientHashtagBlock, hashtagPromptRule, withClientHashtags } from "@/lib/client-hashtags";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +28,11 @@ const SHARED_GUIDE =
   '"shared": legenda ÚNICA usada em Facebook e Instagram (envolvente, call-to-action claro, 3-6 hashtags relevantes no final, emojis com moderação)';
 const LINKEDIN_GUIDE =
   '"linkedin": legenda para LinkedIn (tom profissional, foco em valor/insight, sem excesso de emojis, hashtags discretas)';
+// cliente com hashtags fixas no briefing: a IA não põe hashtags (o código anexa as do cliente)
+const SHARED_GUIDE_FIXED_TAGS =
+  '"shared": legenda ÚNICA usada em Facebook e Instagram (envolvente, call-to-action claro, SEM hashtags, emojis com moderação)';
+const LINKEDIN_GUIDE_FIXED_TAGS =
+  '"linkedin": legenda para LinkedIn (tom profissional, foco em valor/insight, sem excesso de emojis, SEM hashtags)';
 
 export async function POST(req: NextRequest) {
   const denied = await requireAuth();
@@ -46,15 +53,20 @@ export async function POST(req: NextRequest) {
 
   const client = await prisma.client.findUnique({
     where: { id: clientId },
-    select: { name: true, toneOfVoice: true },
+    select: { name: true, toneOfVoice: true, briefing: true },
   });
   if (!client) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
+
+  // briefing inteiro no prompt; hashtags fixas do cliente sempre no fim (código, não IA)
+  const briefing = briefingForPrompt(client.briefing);
+  const hashtagBlock = clientHashtagBlock(client.briefing);
+  const hashtagRule = hashtagPromptRule(hashtagBlock);
 
   const hasMeta = targets.includes("instagram") || targets.includes("facebook");
   const hasLinkedin = targets.includes("linkedin");
   const guide = [
-    hasMeta ? `- ${SHARED_GUIDE}` : "",
-    hasLinkedin ? `- ${LINKEDIN_GUIDE}` : "",
+    hasMeta ? `- ${hashtagBlock ? SHARED_GUIDE_FIXED_TAGS : SHARED_GUIDE}` : "",
+    hasLinkedin ? `- ${hashtagBlock ? LINKEDIN_GUIDE_FIXED_TAGS : LINKEDIN_GUIDE}` : "",
     wantSlides
       ? `- "slides": array de 5 a 8 textos curtos, um por tela do ${format}, contando a história do post (primeiro = capa com gancho, último = call-to-action)`
       : "",
@@ -79,10 +91,12 @@ export async function POST(req: NextRequest) {
     client.toneOfVoice
       ? `Tom de voz do cliente: ${client.toneOfVoice}.`
       : "Tom de voz: não informado, use um tom profissional e próximo.",
+    briefing ?? "",
     theme ? `Tema do post: ${theme}.` : "",
     notes ? `Observações: ${notes}.` : "",
     "Escreva as legendas pedidas:",
     guide,
+    hashtagRule ?? "",
     `Responda em JSON com exatamente estas chaves: {${jsonKeys}}.`,
   ]
     .filter(Boolean)
@@ -98,8 +112,14 @@ export async function POST(req: NextRequest) {
       maxOutputTokens: 8192,
     });
     const data = parseModelJson<Record<string, unknown>>(raw);
-    const shared = typeof data.shared === "string" && data.shared.trim() ? data.shared.trim() : "";
-    const li = typeof data.linkedin === "string" && data.linkedin.trim() ? data.linkedin.trim() : "";
+    const shared =
+      typeof data.shared === "string" && data.shared.trim()
+        ? withClientHashtags(data.shared.trim(), hashtagBlock)
+        : "";
+    const li =
+      typeof data.linkedin === "string" && data.linkedin.trim()
+        ? withClientHashtags(data.linkedin.trim(), hashtagBlock)
+        : "";
 
     // armazenamento continua por rede — FB+IG recebem a mesma legenda
     const captions: Record<string, string> = {};

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
-import { generateText, parseModelJson, CALENDAR_MODEL } from "@/lib/gemini";
+import { generateText, CALENDAR_MODEL } from "@/lib/gemini";
+import { buildCaptionBatchPrompt, parseCaptionBatch } from "@/lib/caption-batch";
 import { newApprovalToken } from "@/lib/approval";
 import {
   nextWeekStartKey,
@@ -22,17 +23,19 @@ import { clientRecipients } from "@/lib/client-emails";
  *    ao cliente na quarta/quinta, com prazo de resposta por dia do post.
  */
 
-type GenIdea = { shared?: string; linkedin?: string; slides?: string[] };
-
 const hasMedia = (p: { mediaUrl: string | null; mediaItems: unknown }) =>
   !!p.mediaUrl || (Array.isArray(p.mediaItems) && (p.mediaItems as unknown[]).length > 0);
 
-/** Gera legendas (+ slides p/ carrossel/reels) em UMA chamada para os posts sem conteúdo. */
+/**
+ * Gera legendas (+ slides p/ carrossel/reels) em UMA chamada para os posts sem conteúdo.
+ * Prompt e leitura em lib/caption-batch: briefing do cliente no prompt e hashtags fixas
+ * do cliente no fim de cada legenda.
+ */
 export async function generateWeekContent(clientId: string, postIds: string[]): Promise<number> {
   if (postIds.length === 0) return 0;
   const client = await prisma.client.findUnique({
     where: { id: clientId },
-    select: { name: true, toneOfVoice: true },
+    select: { name: true, toneOfVoice: true, briefing: true },
   });
   if (!client) return 0;
 
@@ -55,32 +58,7 @@ export async function generateWeekContent(clientId: string, postIds: string[]): 
   });
   if (needing.length === 0) return 0;
 
-  const system =
-    "Você é redator de social media de uma agência brasileira. Produz conteúdo final " +
-    "pronto para publicação, em pt-BR, no tom de voz do cliente. Facebook e Instagram " +
-    "usam SEMPRE a mesma legenda. Responda SOMENTE com JSON válido.";
-
-  const itemsDesc = needing
-    .map((p, i) => {
-      const wantSlides = p.format === "carrossel" || p.format === "reels";
-      return `${i + 1}. id="${p.id}" formato=${p.format} título="${p.theme ?? ""}"${
-        p.explanation ? ` briefing="${p.explanation}"` : ""
-      }${wantSlides ? " (gerar slides)" : ""}`;
-    })
-    .join("\n");
-
-  const prompt = [
-    `Cliente: ${client.name}.`,
-    client.toneOfVoice ? `Tom de voz: ${client.toneOfVoice}.` : "Tom de voz: profissional e próximo.",
-    "Para CADA post abaixo, gere:",
-    '- "shared": legenda única FB+IG (envolvente, call-to-action, 3-6 hashtags, emojis moderados);',
-    '- "linkedin": versão profissional (somente se fizer sentido; opcional);',
-    '- "slides": SOMENTE para carrossel/reels — array de 5 a 8 textos curtos, um por tela, contando a história do post (primeiro = capa com gancho, último = call-to-action). Sem slides para formato feed/story.',
-    "Posts:",
-    itemsDesc,
-    'Responda em JSON: {"posts":[{"id":"<id>","shared":"...","linkedin":"...","slides":["..."]}]} — um item por post, na mesma ordem.',
-  ].join("\n");
-
+  const { system, prompt } = buildCaptionBatchPrompt(client, needing);
   const raw = await generateText({
     model: CALENDAR_MODEL,
     system,
@@ -90,31 +68,20 @@ export async function generateWeekContent(clientId: string, postIds: string[]): 
     maxOutputTokens: 32768,
     timeoutMs: 55_000,
   });
-  const data = parseModelJson<{ posts?: (GenIdea & { id?: string })[] }>(raw);
-  const ideas = Array.isArray(data.posts) ? data.posts : [];
+  const entries = parseCaptionBatch(raw, needing, client.briefing);
 
   let updated = 0;
   for (let i = 0; i < needing.length; i++) {
     const post = needing[i];
-    const idea = ideas.find((x) => x.id === post.id) ?? ideas[i];
-    if (!idea) continue;
-    const shared = typeof idea.shared === "string" ? idea.shared.trim() : "";
-    const li = typeof idea.linkedin === "string" ? idea.linkedin.trim() : "";
-    if (!shared) continue;
+    const entry = entries[i];
+    if (!entry) continue;
 
     const captions: Record<string, string> = {};
-    if (post.targets.includes("instagram")) captions.instagram = shared;
-    if (post.targets.includes("facebook")) captions.facebook = shared;
-    if (post.targets.includes("linkedin")) captions.linkedin = li || shared;
+    if (post.targets.includes("instagram")) captions.instagram = entry.shared;
+    if (post.targets.includes("facebook")) captions.facebook = entry.shared;
+    if (post.targets.includes("linkedin")) captions.linkedin = entry.linkedin || entry.shared;
 
-    const wantSlides = post.format === "carrossel" || post.format === "reels";
-    const slides =
-      wantSlides && Array.isArray(idea.slides)
-        ? idea.slides
-            .filter((s): s is string => typeof s === "string" && !!s.trim())
-            .slice(0, 20)
-            .map((text) => ({ text: text.trim().slice(0, 2000) }))
-        : null;
+    const slides = entry.slides?.map((text) => ({ text })) ?? null;
 
     await prisma.post.update({
       where: { id: post.id },

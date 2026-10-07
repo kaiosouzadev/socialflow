@@ -148,7 +148,8 @@ export default function GenerateCalendarButton({ clientId }: { clientId: string 
   const intro = (
     <>
       A IA cria <strong className="font-semibold text-fg">12 postagens</strong> (título + explicação do tema) no tom
-      de voz do cliente. O cliente aprova os temas; legendas e artes vêm depois.
+      de voz do cliente. O cliente aprova os temas no link mensal; as legendas são geradas em segundo plano
+      enquanto você revisa, e o cliente as vê no link semanal.
     </>
   );
 

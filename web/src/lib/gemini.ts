@@ -19,6 +19,8 @@ type GenerateOptions = {
   maxOutputTokens?: number;
   /** timeout POR TENTATIVA em ms (padrão 25s; são até 2 tentativas) */
   timeoutMs?: number;
+  /** opcional: cancela a chamada (ex.: o navegador desistiu do pedido); sem ele, nada muda */
+  signal?: AbortSignal;
 };
 
 /**
@@ -52,6 +54,7 @@ export function parseModelJson<T = unknown>(raw: string): T {
  * ATENÇÃO ao orçamento: o pior caso é `attempts × timeoutMs + 1.5s` — quem
  * chama precisa garantir que isso cabe no maxDuration da rota (ou passar
  * attempts=1 para desligar o retry).
+ * `init.signal` (opcional) cancela de fora: aborta a tentativa em curso e não tenta de novo.
  */
 export async function geminiFetch(
   url: string,
@@ -59,11 +62,15 @@ export async function geminiFetch(
   timeoutMs = 25_000,
   attempts = 2
 ): Promise<Response> {
+  const external = init.signal ?? null;
   let lastErr: unknown;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+    if (external?.aborted) break;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const onAbort = () => ctrl.abort();
+    external?.addEventListener("abort", onAbort, { once: true });
     try {
       const res = await fetch(url, { ...init, signal: ctrl.signal });
       if ((res.status === 429 || res.status >= 500) && attempt < attempts - 1) {
@@ -73,10 +80,16 @@ export async function geminiFetch(
       return res;
     } catch (e) {
       lastErr = e;
+      // cancelado por quem chamou: não tenta de novo
+      if (external?.aborted) break;
       // AbortError ou falha de rede: tenta mais uma vez (se ainda houver tentativa)
     } finally {
       clearTimeout(timer);
+      external?.removeEventListener("abort", onAbort);
     }
+  }
+  if (external?.aborted && !(lastErr instanceof Error)) {
+    lastErr = Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
   }
   throw lastErr instanceof Error ? lastErr : new Error("Falha de conexão com a IA");
 }
@@ -93,6 +106,7 @@ export async function generateText({
   json = false,
   maxOutputTokens,
   timeoutMs,
+  signal,
 }: GenerateOptions): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY não configurada");
@@ -114,6 +128,7 @@ export async function generateText({
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify(body),
+      ...(signal ? { signal } : {}),
     },
     timeoutMs
   );

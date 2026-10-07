@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
 import { generateArt } from "@/lib/art-gen";
 import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
+import { clientHashtagBlock, withClientHashtags } from "@/lib/client-hashtags";
 import { r2Configured, uploadToR2 } from "@/lib/r2";
 import {
   driveConfigured,
@@ -98,15 +99,20 @@ export async function genTemplateCaptions(title: string): Promise<TemplateCaptio
   }
 }
 
-/** captions do post ({instagram, facebook, linkedin}) a partir das padronizadas. */
-function postCaptions(tpl: TemplateCaptions): Record<string, string> {
+/**
+ * captions do post ({instagram, facebook, linkedin}) a partir das padronizadas, com as
+ * hashtags fixas do cliente (briefing) no fim — trocam as hashtags genéricas do template.
+ */
+function postCaptions(tpl: TemplateCaptions, hashtagBlock: string | null): Record<string, string> {
+  const tag = (s: string | undefined) => (s ? withClientHashtags(s, hashtagBlock) : s);
   const captions: Record<string, string> = {};
   if (tpl.shared) {
-    captions.instagram = tpl.shared;
-    captions.facebook = tpl.shared;
-    captions.linkedin = tpl.linkedin ?? tpl.shared;
+    const shared = withClientHashtags(tpl.shared, hashtagBlock);
+    captions.instagram = shared;
+    captions.facebook = shared;
+    captions.linkedin = tag(tpl.linkedin) ?? shared;
   } else if (tpl.linkedin) {
-    captions.linkedin = tpl.linkedin;
+    captions.linkedin = withClientHashtags(tpl.linkedin, hashtagBlock);
   }
   return captions;
 }
@@ -209,6 +215,9 @@ export async function scheduleBasicMonth(
     ["instagram", "facebook", "linkedin"].includes(p)
   );
   const targets = platforms.length > 0 ? platforms : ["instagram", "facebook"];
+  // legenda do template é genérica (vale para vários clientes); as hashtags fixas
+  // do cliente entram aqui, ao virar post dele
+  const hashtagBlock = clientHashtagBlock(client.briefing);
 
   const [y, m] = monthKey.split("-").map(Number);
   const monthRef = new Date(`${y}-${pad(m)}-01T00:00:00${SP_OFFSET}`);
@@ -249,7 +258,7 @@ export async function scheduleBasicMonth(
         });
       }
     }
-    const captions = postCaptions(tplCaptions);
+    const captions = postCaptions(tplCaptions, hashtagBlock);
 
     await prisma.post.create({
       data: {

@@ -186,7 +186,7 @@ export default async function ClientDetailPage({ params }: Props) {
           agencyPublishes={client.agencyPublishes}
         />
 
-        <div id="cadastro" className="scroll-mt-20">
+        <div id="cadastro" className="min-w-0 scroll-mt-20">
           <ClientInfoEditor
             client={{
               id: client.id,

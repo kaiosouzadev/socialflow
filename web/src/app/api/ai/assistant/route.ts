@@ -5,6 +5,8 @@ import { uuidString } from "@/lib/validators";
 import { geminiFetch, parseModelJson, GEMINI_BASE, CAPTION_MODEL } from "@/lib/gemini";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { toUserMessage } from "@/lib/user-facing-error";
+import { briefingForPrompt } from "@/lib/client-briefing-prompt";
+import { clientHashtagBlock, withClientHashtags } from "@/lib/client-hashtags";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -72,17 +74,19 @@ export async function POST(req: NextRequest) {
   });
   if (!client) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
 
-  const briefing =
-    client.briefing && typeof client.briefing === "object"
-      ? JSON.stringify(client.briefing).slice(0, 2000)
-      : "";
+  // briefing inteiro (texto); as hashtags fixas do cliente vão no fim de toda legenda pelo código
+  const briefing = briefingForPrompt(client.briefing);
+  const hashtagBlock = clientHashtagBlock(client.briefing);
 
   const system = [
     "Você é o assistente de IA da agência Grupo Coletivo, agência brasileira de social media: estrategista e redator.",
     "Ajuda a equipe interna a melhorar posts e cronogramas. Sempre em português do Brasil.",
     `Cliente: ${client.name}.`,
     client.toneOfVoice ? `Tom de voz do cliente: ${client.toneOfVoice}.` : "",
-    briefing ? `Briefing do cliente (JSON): ${briefing}` : "",
+    briefing ?? "",
+    hashtagBlock
+      ? `Hashtags fixas do cliente (o sistema as coloca automaticamente no fim de toda legenda):\n${hashtagBlock}`
+      : "",
     post
       ? [
           "Post em edição:",
@@ -102,7 +106,9 @@ export async function POST(req: NextRequest) {
     '{"reply":"<sua resposta curta e útil>","title":"<novo título, só quando propôs mudar o título>","caption":"<legenda pronta, só quando propôs uma nova legenda>","artPrompt":"<descrição de arte para gerador de imagem, só quando propôs uma arte>"}',
     "- reply: sempre presente; direto, sem enrolação; pode usar listas curtas.",
     "- title: inclua apenas quando o pedido envolve mudar/criar o TÍTULO da postagem — curto, forte, pronto para usar.",
-    "- caption: inclua apenas quando o pedido envolve reescrever/criar legenda. Legenda ÚNICA para Facebook+Instagram, pronta para publicar, com hashtags quando fizer sentido.",
+    hashtagBlock
+      ? "- caption: inclua apenas quando o pedido envolve reescrever/criar legenda. Legenda ÚNICA para Facebook+Instagram, pronta para publicar, SEM hashtags (as hashtags fixas do cliente são adicionadas automaticamente no fim)."
+      : "- caption: inclua apenas quando o pedido envolve reescrever/criar legenda. Legenda ÚNICA para Facebook+Instagram, pronta para publicar, com hashtags quando fizer sentido.",
     "- artPrompt: inclua apenas quando sugerir uma arte/imagem; escreva em inglês, descritivo, para um gerador de imagem.",
     "- Não invente dados do cliente (telefones, preços, promoções).",
   ]
@@ -148,7 +154,10 @@ export async function POST(req: NextRequest) {
     return Response.json({
       reply,
       title: typeof out.title === "string" && out.title.trim() ? out.title.trim().slice(0, 200) : undefined,
-      caption: typeof out.caption === "string" && out.caption.trim() ? out.caption.trim() : undefined,
+      caption:
+        typeof out.caption === "string" && out.caption.trim()
+          ? withClientHashtags(out.caption.trim(), hashtagBlock)
+          : undefined,
       artPrompt:
         typeof out.artPrompt === "string" && out.artPrompt.trim() ? out.artPrompt.trim() : undefined,
     });

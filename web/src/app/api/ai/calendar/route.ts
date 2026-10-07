@@ -8,7 +8,8 @@ import { toUserMessage } from "@/lib/user-facing-error";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
-// 12 posts com legendas é a chamada de texto mais longa do app
+// 12 ideias (tema + explicação) numa só chamada; as legendas saem em lotes à parte
+// (POST /api/ai/calendar/captions e o after() do commit)
 export const maxDuration = 120;
 
 const FALLBACK = "Não foi possível gerar o cronograma agora. Tente de novo em instantes.";
@@ -109,8 +110,9 @@ export async function POST(req: NextRequest) {
     timeZone: "America/Sao_Paulo",
   }).format(new Date(Date.UTC(year, mon - 1, 15)));
 
-  // FASE CRONOGRAMA: o cliente aprova só TÍTULO + breve explicação do tema.
-  // Legenda/slides são gerados depois, quando o cronograma for aprovado.
+  // FASE CRONOGRAMA: o cliente aprova só TÍTULO + breve explicação do tema (link mensal).
+  // Esta chamada não gera legenda: legendas/slides saem em segundo plano durante a revisão
+  // (lib/calendar-captions) e o cliente só as vê no link semanal.
   const system =
     "Você é um estrategista de conteúdo de social media de uma agência brasileira. " +
     "Cria cronogramas editoriais mensais variados e coerentes com o tom de voz do cliente. " +

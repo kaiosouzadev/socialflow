@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AssistantPanel } from "@/components/AssistantPanel";
 import { BrandBadge, BRAND } from "@/components/BrandIcons";
-import { Button } from "@/components/Button";
+import { Button, Spinner } from "@/components/Button";
 import { Callout } from "@/components/Callout";
 import { DateTimePicker } from "@/components/DatePickers";
 import { ConfirmDialog, Dialog } from "@/components/Dialog";
@@ -12,6 +12,7 @@ import { Icon } from "@/components/Icons";
 import { MediaField } from "@/components/MediaField";
 import { SlidesEditor } from "@/components/SlidesEditor";
 import { FormatBadge, ToneBadge } from "@/components/ui";
+import { createCaptionDispatcher, type CaptionDispatcher } from "@/lib/caption-dispatcher";
 import { buildMonthFileNames, canonicalMonthFolderName, parseMonthKey, type MonthFileName } from "@/lib/drive-layout";
 import { FORMAT_OPTIONS } from "@/lib/formats";
 import { formatMonthLabel, spLocalInputFromISO, spLocalInputToISO } from "@/lib/format-date";
@@ -46,13 +47,47 @@ type ReviewPost = {
 type SavedPost = { id: string; format: string; at: number };
 
 /** O commit gravou, mas o Drive falhou: a equipe precisa ver o aviso antes de sair. */
-type Saved = { created: number; duplicates: number; driveWarning: string };
+type Saved = { created: number; duplicates: number; driveWarning: string; captionsPending: number };
+
+/**
+ * Legenda gerada em segundo plano (POST /api/ai/calendar/captions): "pending" = na fila ou
+ * em andamento; "failed" = o lote falhou (botão "Tentar de novo"). Sem entrada = pronta ou
+ * fora da geração (sem título, sem rede, editada à mão…).
+ */
+type CaptionStatus = "pending" | "failed";
+
+/** Campos que a pessoa editou à mão: a geração em segundo plano nunca os sobrescreve. */
+type ManualEdits = { shared?: boolean; linkedin?: boolean; slides?: boolean };
+
+/** Post enviado num lote: versão e texto de entrada no envio (para descartar resposta velha). */
+type SentPost = { uid: string; version: number; key: string };
+
+/** Posts por chamada e chamadas simultâneas (lib/calendar-captions: CAPTION_BATCH_SIZE/CONCURRENCY). */
+const CAPTION_BATCH = 4;
+const CAPTION_PARALLEL = 3;
+const CAPTION_ERROR = "Não foi possível gerar as legendas agora. Tente de novo em instantes.";
+const CAPTION_CONNECTION_ERROR = "Falha de conexão ao gerar as legendas. Verifique a internet e tente de novo.";
+/** Título/explicação/formato editado há menos disso: espera a pessoa parar de digitar antes de gerar. */
+const CAPTION_IDLE_MS = 1200;
+/** Salvar espera no máximo isso pelos lotes que já estão na IA; o resto o servidor completa (after). */
+const SAVE_WAIT_MS = 6000;
 
 const STORY_DELAY_MS = 15 * 60_000;
 const SAVE_ERROR = "Não foi possível salvar o cronograma. Tente de novo em instantes.";
 const CONNECTION_ERROR = "Falha de conexão ao salvar. Verifique a internet e tente de novo.";
 
 let uidSeq = 0;
+
+const wantsSlides = (format: string) => format === "carrossel" || format === "reels";
+const hasCaption = (p: ReviewPost) => ["instagram", "facebook", "linkedin"].some((k) => !!p.captions[k]?.trim());
+const hasSlides = (p: ReviewPost) => p.slides.some((s) => s.trim());
+
+/** Entra na geração em segundo plano: tem título e rede, e falta legenda (ou slides de carrossel/reels). */
+const needsCaption = (p: ReviewPost) =>
+  !!p.theme.trim() && p.targets.length > 0 && (!hasCaption(p) || (wantsSlides(p.format) && !hasSlides(p)));
+
+/** O que a legenda gerada usou: se mudar enquanto o lote está na IA, a resposta é refeita. */
+const captionInputKey = (p: ReviewPost) => JSON.stringify([p.theme.trim(), p.explanation.trim(), p.format]);
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
@@ -169,6 +204,21 @@ export default function CalendarReviewModal({
       };
     })
   );
+  // legendas geradas em segundo plano enquanto a equipe revisa (pedido do usuário em 07/10)
+  const [captionStatus, setCaptionStatus] = useState<Record<string, CaptionStatus>>(() =>
+    Object.fromEntries(posts.filter(needsCaption).map((p) => [p.uid, "pending" as const]))
+  );
+  const [captionError, setCaptionError] = useState("");
+  // fontes da verdade do despacho, atualizadas na hora (o estado só muda no próximo render)
+  const postsRef = useRef(posts);
+  const statusRef = useRef(captionStatus);
+  const dispatcherRef = useRef<CaptionDispatcher | null>(null);
+  const substituteTasksRef = useRef(new Set<Promise<void>>());
+  const [finishingCaptions, setFinishingCaptions] = useState(false);
+  // versão por post: Substituir/nova ideia/exclusão invalidam a resposta de um lote já enviado
+  const versionRef = useRef<Record<string, number>>({});
+  const manualRef = useRef<Record<string, ManualEdits>>({});
+  const captionSummaryRef = useRef<HTMLParagraphElement>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [regenerating, setRegenerating] = useState<Record<string, boolean>>({});
   // LinkedIn editado manualmente (deixa de espelhar a legenda FB+IG)
@@ -217,6 +267,164 @@ export default function CalendarReviewModal({
   const monthLabel = formatMonthLabel(month);
   const paths = useMemo(() => artPaths(posts, savedPosts), [posts, savedPosts]);
 
+  /** Estado mostrado: "pending"/"failed" só enquanto o post ainda precisa de legenda. */
+  function captionStateOf(p: ReviewPost): CaptionStatus | undefined {
+    const status = captionStatus[p.uid];
+    return status && needsCaption(p) ? status : undefined;
+  }
+
+  function setCaptionStatusOf(uids: string[], status: CaptionStatus | null) {
+    const next = { ...statusRef.current };
+    for (const uid of uids) {
+      if (status) next[uid] = status;
+      else delete next[uid];
+    }
+    statusRef.current = next;
+    setCaptionStatus(next);
+  }
+
+  /** Muda os posts já no ref (o despacho e o salvar leem dele) e no estado (a tela). */
+  function changePosts(fn: (prev: ReviewPost[]) => ReviewPost[]) {
+    postsRef.current = fn(postsRef.current);
+    setPosts(postsRef.current);
+    dispatcherRef.current?.pump();
+  }
+
+  /** Nova versão do post: a resposta de um lote enviado antes disso é descartada. */
+  function bumpCaptionVersion(uid: string) {
+    versionRef.current[uid] = (versionRef.current[uid] ?? 0) + 1;
+  }
+
+  /** Cancela a geração em segundo plano (salvou ou descartou a revisão). */
+  function stopCaptions() {
+    dispatcherRef.current?.stop();
+  }
+
+  /** Um lote na rota de legendas; aplica a resposta antes de resolver (lib/caption-dispatcher). */
+  async function sendCaptionBatch(batch: ReviewPost[], signal: AbortSignal) {
+    const sent: SentPost[] = batch.map((p) => ({
+      uid: p.uid,
+      version: versionRef.current[p.uid] ?? 0,
+      key: captionInputKey(p),
+    }));
+    try {
+      const res = await fetch("/api/ai/calendar/captions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId,
+          posts: batch.map((p) => ({
+            id: p.uid,
+            theme: p.theme.trim().slice(0, 200),
+            explanation: p.explanation.trim().slice(0, 600) || undefined,
+            format: p.format,
+            targets: p.targets,
+          })),
+        }),
+        signal,
+      });
+      const data = await res.json().catch(() => null);
+      // cancelado (salvou/fechou): não aplica nada
+      if (signal.aborted) return;
+      if (!res.ok) {
+        failCaptions(sent, toUserMessage(data, CAPTION_ERROR));
+        return;
+      }
+      const results: unknown[] = Array.isArray(data?.posts) ? data.posts : [];
+      const missing = sent.filter((s) => {
+        const result = results.find((r) => !!r && typeof r === "object" && (r as { id?: unknown }).id === s.uid);
+        return applyCaption(s, result) === "missing";
+      });
+      if (missing.length > 0) failCaptions(missing, CAPTION_ERROR);
+    } catch {
+      // cancelado (fechou/salvou) não é falha: o post continua "pending"
+      if (!signal.aborted) failCaptions(sent, CAPTION_CONNECTION_ERROR);
+    }
+  }
+
+  /** Lote falhou: marca os posts (ainda na mesma versão) para o "Tentar de novo". */
+  function failCaptions(sent: SentPost[], message: string) {
+    const uids = sent
+      .filter((s) => (versionRef.current[s.uid] ?? 0) === s.version && postsRef.current.some((p) => p.uid === s.uid))
+      .map((s) => s.uid);
+    if (uids.length === 0) return;
+    setCaptionStatusOf(uids, "failed");
+    setCaptionError(message);
+  }
+
+  /**
+   * Preenche a legenda (e os slides) de um post com a resposta do lote, sem sobrescrever o que
+   * a pessoa editou à mão. Resposta velha (Substituir/exclusão depois do envio) é descartada;
+   * se o título, a explicação ou o formato mudaram, o post continua "pending" e vai de novo.
+   */
+  function applyCaption(sent: SentPost, result: unknown): "applied" | "stale" | "missing" {
+    if ((versionRef.current[sent.uid] ?? 0) !== sent.version) return "stale";
+    const current = postsRef.current.find((p) => p.uid === sent.uid);
+    if (!current || captionInputKey(current) !== sent.key) return "stale";
+    const r = (result ?? {}) as { captions?: unknown; slides?: unknown };
+    const caps = r.captions && typeof r.captions === "object" ? (r.captions as Record<string, unknown>) : {};
+    const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+    const shared = str(caps.instagram) || str(caps.facebook);
+    const li = str(caps.linkedin);
+    if (!shared && !li) return "missing";
+    const slides = Array.isArray(r.slides)
+      ? r.slides.filter((x): x is string => typeof x === "string" && !!x.trim())
+      : [];
+
+    const manual = manualRef.current[sent.uid] ?? {};
+    const keepShared = (p: ReviewPost) =>
+      !!manual.shared && !!(p.captions.instagram ?? p.captions.facebook ?? "").trim();
+    // LinkedIn espelha a legenda FB+IG: se ela foi escrita à mão, o espelho também fica
+    const keepLinkedin = (p: ReviewPost) => keepShared(p) || (!!manual.linkedin && !!p.captions.linkedin?.trim());
+    changePosts((prev) =>
+      prev.map((p) => {
+        if (p.uid !== sent.uid) return p;
+        const captions = { ...p.captions };
+        if (!keepShared(p) && shared) {
+          captions.instagram = shared;
+          captions.facebook = shared;
+        }
+        if (!keepLinkedin(p) && (li || shared)) captions.linkedin = li || shared;
+        const fillSlides = wantsSlides(p.format) && slides.length > 0 && !hasSlides(p);
+        return { ...p, captions, slides: fillSlides ? slides : p.slides };
+      })
+    );
+    if (!keepLinkedin(current)) setLiDirty((d) => ({ ...d, [sent.uid]: !!li && li !== shared }));
+    setCaptionStatusOf([sent.uid], null);
+    return "applied";
+  }
+
+  function retryCaptions() {
+    const uids = posts.filter((p) => captionStateOf(p) === "failed").map((p) => p.uid);
+    if (uids.length === 0) return;
+    setCaptionStatusOf(uids, "pending");
+    setCaptionError("");
+    dispatcherRef.current?.pump();
+    // o aviso some: o foco vai para o resumo, que anuncia o andamento
+    captionSummaryRef.current?.focus();
+  }
+
+  // abrir a revisão começa a gerar as legendas; fechar (desmontar) cancela os lotes em andamento.
+  // O 1º despacho vai no próximo tique: a montagem dupla do StrictMode (dev) o cancela antes do fetch.
+  useEffect(() => {
+    const dispatcher = createCaptionDispatcher<ReviewPost>({
+      getPosts: () => postsRef.current,
+      getStatus: () => statusRef.current,
+      needs: needsCaption,
+      send: (batch, signal) => sendCaptionBatch(batch, signal),
+      batchSize: CAPTION_BATCH,
+      parallel: CAPTION_PARALLEL,
+      idleMs: CAPTION_IDLE_MS,
+    });
+    dispatcherRef.current = dispatcher;
+    const timer = setTimeout(() => dispatcher.pump(), 0);
+    return () => {
+      clearTimeout(timer);
+      dispatcher.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- um despacho por abertura; `send` só lê refs
+  }, []);
+
   /** Pedido de fechar (Esc, X, fundo, Cancelar): nunca descarta posts gerados sem confirmar. */
   function requestClose() {
     if (busy) return;
@@ -233,12 +441,15 @@ export default function CalendarReviewModal({
 
   function update(uid: string, patch: Partial<ReviewPost>) {
     setEdited(true);
-    setPosts((prev) => prev.map((p) => (p.uid === uid ? { ...p, ...patch } : p)));
+    // mudou o que a IA usa: a geração deste post espera a pessoa parar de digitar
+    if ("theme" in patch || "explanation" in patch || "format" in patch) dispatcherRef.current?.touch(uid);
+    changePosts((prev) => prev.map((p) => (p.uid === uid ? { ...p, ...patch } : p)));
   }
   // legenda única FB+IG (LinkedIn espelha até ser editado)
   function updateShared(uid: string, text: string) {
     setEdited(true);
-    setPosts((prev) =>
+    manualRef.current[uid] = { ...manualRef.current[uid], shared: true };
+    changePosts((prev) =>
       prev.map((p) =>
         p.uid === uid
           ? {
@@ -256,14 +467,19 @@ export default function CalendarReviewModal({
   }
   function updateLinkedin(uid: string, text: string) {
     setEdited(true);
+    manualRef.current[uid] = { ...manualRef.current[uid], linkedin: true };
     setLiDirty((d) => ({ ...d, [uid]: true }));
-    setPosts((prev) =>
+    changePosts((prev) =>
       prev.map((p) => (p.uid === uid ? { ...p, captions: { ...p.captions, linkedin: text } } : p))
     );
   }
+  function updateSlides(uid: string, slides: string[]) {
+    manualRef.current[uid] = { ...manualRef.current[uid], slides: true };
+    update(uid, { slides });
+  }
   function toggleTarget(uid: string, platform: string) {
     setEdited(true);
-    setPosts((prev) =>
+    changePosts((prev) =>
       prev.map((p) => {
         if (p.uid !== uid) return p;
         const has = p.targets.includes(platform);
@@ -279,14 +495,24 @@ export default function CalendarReviewModal({
    * individual): legendas, hashtags e conteúdo refeitos para o novo título.
    * Sem título, sorteia um tema novo (comportamento antigo).
    */
-  async function substitute(uid: string) {
+  function substitute(uid: string) {
+    const task = runSubstitute(uid);
+    substituteTasksRef.current.add(task);
+    void task.finally(() => substituteTasksRef.current.delete(task));
+  }
+
+  async function runSubstitute(uid: string) {
     const post = posts.find((p) => p.uid === uid);
     if (!post || post.targets.length === 0) {
       setError("Selecione ao menos uma rede antes de substituir.");
       return;
     }
+    // o Substituir manda: a geração em segundo plano deste post para e a resposta antiga é descartada
+    bumpCaptionVersion(uid);
+    setCaptionStatusOf([uid], null);
     setRegenerating((r) => ({ ...r, [uid]: true }));
     setError("");
+    let captionsReady = false;
 
     try {
       if (post.theme.trim()) {
@@ -309,6 +535,8 @@ export default function CalendarReviewModal({
         }
         const g: Record<string, string> = data?.captions ?? {};
         const shared = g.instagram ?? g.facebook ?? "";
+        captionsReady = !!(shared || g.linkedin);
+        manualRef.current[uid] = {};
         setLiDirty((d) => ({ ...d, [uid]: !!g.linkedin && g.linkedin !== shared }));
         update(uid, {
           captions: { instagram: shared, facebook: shared, linkedin: g.linkedin ?? shared },
@@ -329,24 +557,37 @@ export default function CalendarReviewModal({
         setError(toUserMessage(data, "Não foi possível gerar uma nova ideia agora. Tente de novo em instantes."));
         return;
       }
+      const theme = typeof data?.theme === "string" ? data.theme : post.theme;
+      manualRef.current[uid] = {};
+      setLiDirty((d) => ({ ...d, [uid]: false }));
       update(uid, {
-        theme: typeof data?.theme === "string" ? data.theme : post.theme,
+        theme,
         format: typeof data?.format === "string" ? data.format : post.format,
         explanation: typeof data?.explanation === "string" ? data.explanation : "",
         captions: {},
         slides: [],
         mediaUrl: "",
       });
+      // a nova ideia ganha legenda em segundo plano, como as demais (sem esperar digitação)
+      if (theme.trim()) {
+        captionsReady = true;
+        dispatcherRef.current?.untouch(uid);
+        setCaptionStatusOf([uid], "pending");
+        dispatcherRef.current?.pump();
+      }
     } catch {
       setError("Falha de conexão com a IA. Verifique a internet e tente de novo.");
     } finally {
       setRegenerating((r) => ({ ...r, [uid]: false }));
+      // falhou e o post ficou sem legenda: entra no "Tentar de novo"
+      if (!captionsReady && post.theme.trim() && !hasCaption(post)) setCaptionStatusOf([uid], "failed");
     }
   }
 
   function removePost(uid: string) {
     setEdited(true);
-    setPosts((prev) => prev.filter((p) => p.uid !== uid));
+    bumpCaptionVersion(uid);
+    changePosts((prev) => prev.filter((p) => p.uid !== uid));
     if (assistantUid === uid) setAssistantUid(null);
   }
 
@@ -374,7 +615,9 @@ export default function CalendarReviewModal({
       withStory: true,
     };
     setEdited(true);
-    setPosts((prev) => [...prev, fresh]);
+    changePosts((prev) => [...prev, fresh]);
+    // entra na geração em segundo plano quando ganhar título (depois de a pessoa parar de digitar)
+    setCaptionStatusOf([fresh.uid], "pending");
     setExpanded((e) => ({ ...e, [fresh.uid]: true }));
   }
 
@@ -389,13 +632,24 @@ export default function CalendarReviewModal({
     }
     setBusy(true);
     setError("");
+    // salvando: nenhum lote novo; os que já estão na IA têm até SAVE_WAIT_MS para entrar no
+    // commit; o que não chegar é cancelado (também na IA) ANTES do commit e o servidor completa
+    const dispatcher = dispatcherRef.current;
+    const substitutes = [...substituteTasksRef.current];
+    const waiting = (dispatcher?.inFlight() ?? 0) > 0 || substitutes.length > 0;
+    if (waiting) setFinishingCaptions(true);
+    await dispatcher?.settle(SAVE_WAIT_MS, substitutes);
+    if (waiting) setFinishingCaptions(false);
+    // estado no instante do envio, com as legendas que acabaram de chegar
+    const current = postsRef.current;
+    let committed = false;
     try {
       const payload = {
         clientId,
         month,
         // "Story junto" vira um segundo post (story, 15 min depois) — cada um
         // com seu formato, casando com a convenção de mídia (N.* e Nstory.*)
-        posts: posts.flatMap((p) => {
+        posts: current.flatMap((p) => {
           const captions: Record<string, string> = {};
           for (const t of p.targets) {
             const c = p.captions[t];
@@ -435,6 +689,9 @@ export default function CalendarReviewModal({
         setError(toUserMessage(data, SAVE_ERROR));
         return;
       }
+      // salvo: o servidor completa as legendas que faltaram (after); a revisão para de gerar
+      committed = true;
+      stopCaptions();
       // Drive falhou (S16): o cronograma está salvo, mas a pasta do mês não foi preparada
       const warning = typeof data?.driveWarning === "string" ? data.driveWarning.trim() : "";
       if (warning) {
@@ -442,6 +699,7 @@ export default function CalendarReviewModal({
           created: typeof data?.created === "number" ? data.created : 0,
           duplicates: typeof data?.duplicates === "number" ? data.duplicates : 0,
           driveWarning: warning,
+          captionsPending: typeof data?.captionsPending === "number" ? data.captionsPending : 0,
         });
         return;
       }
@@ -450,10 +708,15 @@ export default function CalendarReviewModal({
       setError(CONNECTION_ERROR);
     } finally {
       setBusy(false);
+      // não salvou: a geração em segundo plano continua de onde parou
+      if (!committed) dispatcher?.resume();
     }
   }
 
   const assistantPost = assistantUid ? posts.find((p) => p.uid === assistantUid) : undefined;
+  const captionsReady = posts.filter(hasCaption).length;
+  const captionsPending = posts.filter((p) => captionStateOf(p) === "pending").length;
+  const captionsFailed = posts.filter((p) => captionStateOf(p) === "failed").length;
 
   if (saved) {
     return (
@@ -480,6 +743,16 @@ export default function CalendarReviewModal({
             {saved.duplicates > 0 &&
               ` ${saved.duplicates} já ${plural(saved.duplicates, "estava salvo e não foi duplicado", "estavam salvos e não foram duplicados")}.`}
           </Callout>
+          {saved.captionsPending > 0 && (
+            <Callout tone="info">
+              {saved.captionsPending}{" "}
+              {plural(
+                saved.captionsPending,
+                "post ainda está ganhando legenda da IA; ela aparece no post em instantes.",
+                "posts ainda estão ganhando legenda da IA; elas aparecem nos posts em instantes."
+              )}
+            </Callout>
+          )}
           <Callout tone="warning" title="Pastas do Google Drive não preparadas" live="polite">
             {saved.driveWarning}
           </Callout>
@@ -515,7 +788,7 @@ export default function CalendarReviewModal({
             variant="primary"
             leadingIcon={<Icon.check />}
             loading={busy}
-            loadingText="Salvando…"
+            loadingText={finishingCaptions ? "Concluindo legendas…" : "Salvando…"}
             disabled={posts.length === 0}
             onClick={approve}
           >
@@ -526,10 +799,54 @@ export default function CalendarReviewModal({
     >
       <div className="grid gap-3 pb-3">
         <Callout tone="info">
-          O cliente aprova <strong>título + explicação</strong> de cada postagem. Ajuste o que precisar e salve:
-          legendas e slides completos são gerados depois que o cronograma for aprovado. As artes no Drive seguem a
-          ordem das datas de todos os posts do mês.
+          O cliente aprova <strong>título + explicação</strong> de cada postagem. As legendas (e os slides de
+          carrossel e reels) são geradas pela IA em segundo plano enquanto você revisa: o que você editar à mão não é
+          substituído, e o que faltar ao salvar é concluído depois. As artes no Drive seguem a ordem das datas de todos
+          os posts do mês.
         </Callout>
+
+        {posts.length > 0 && (
+          <p
+            ref={captionSummaryRef}
+            tabIndex={-1}
+            role="status"
+            className="flex items-start gap-2 rounded-control text-sm text-fg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+          >
+            {captionsPending > 0 ? (
+              <span className="mt-0.5 inline-flex shrink-0">
+                <Spinner />
+              </span>
+            ) : captionsReady === posts.length ? (
+              <span aria-hidden="true" className="mt-0.5 inline-flex size-4 shrink-0 text-success-solid [&>svg]:size-full">
+                <Icon.check />
+              </span>
+            ) : null}
+            <span className="min-w-0">
+              <strong className="font-semibold text-fg">
+                Legendas: {captionsReady} de {posts.length} {plural(posts.length, "pronta", "prontas")}
+              </strong>
+              {/* a espera ao salvar (até ~6 s) também é anunciada na região de status */}
+              {finishingCaptions
+                ? " · concluindo legendas antes de salvar…"
+                : captionsPending > 0 && " · gerando as demais em segundo plano…"}
+            </span>
+          </p>
+        )}
+
+        {captionsFailed > 0 && (
+          <Callout
+            tone="warning"
+            live="polite"
+            title={`Não foi possível gerar a legenda de ${captionsFailed} ${plural(captionsFailed, "post", "posts")}`}
+            action={
+              <Button leadingIcon={<Icon.refresh />} disabled={busy} onClick={retryCaptions}>
+                Tentar de novo
+              </Button>
+            }
+          >
+            {captionError || CAPTION_ERROR}
+          </Callout>
+        )}
 
         {posts.length === 0 && (
           <p className="py-8 text-center text-sm text-fg-muted">
@@ -547,6 +864,7 @@ export default function CalendarReviewModal({
             const storyPath = paths.get(`${p.uid}:story`);
             const captionsId = `${listId}-${p.uid}-legendas`;
             const storyHelpId = `${listId}-${p.uid}-story`;
+            const status = captionStateOf(p);
             return (
               <li key={p.uid} className="grid gap-3 rounded-card border border-line bg-surface p-3 sm:p-4">
                 <div className="flex flex-wrap items-center gap-2">
@@ -556,6 +874,18 @@ export default function CalendarReviewModal({
                   </span>
                   <FormatBadge format={p.format} />
                   <ToneBadge tone={hasArt ? "success" : "warning"}>{hasArt ? "Com arte" : "Sem arte"}</ToneBadge>
+                  {status === "pending" ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-muted">
+                      <Spinner />
+                      Gerando legenda…
+                    </span>
+                  ) : status === "failed" ? (
+                    <ToneBadge tone="warning">Legenda não gerada</ToneBadge>
+                  ) : hasCaption(p) ? (
+                    <ToneBadge tone="success">Com legenda</ToneBadge>
+                  ) : (
+                    <ToneBadge tone="neutral">Sem legenda</ToneBadge>
+                  )}
                   <div className="ml-auto flex flex-wrap gap-1">
                     <Button
                       variant="ghost"
@@ -712,9 +1042,9 @@ export default function CalendarReviewModal({
                 </div>
 
                 {open && (
-                  <div id={captionsId} className="grid gap-3">
+                  <div id={captionsId} className="grid gap-3" aria-busy={status === "pending" || undefined}>
                     {(p.format === "carrossel" || p.format === "reels") && (
-                      <SlidesEditor format={p.format} slides={p.slides} onChange={(slides) => update(p.uid, { slides })} />
+                      <SlidesEditor format={p.format} slides={p.slides} onChange={(slides) => updateSlides(p.uid, slides)} />
                     )}
                     {p.targets.length === 0 && (
                       <p className="text-sm text-warning-fg">Selecione uma rede para editar a legenda.</p>
@@ -736,7 +1066,9 @@ export default function CalendarReviewModal({
                           onChange={(e) => updateShared(p.uid, e.target.value)}
                           rows={7}
                           className="leading-relaxed"
-                          placeholder="Legenda para Facebook e Instagram"
+                          placeholder={
+                            status === "pending" ? "Gerando legenda com a IA…" : "Legenda para Facebook e Instagram"
+                          }
                         />
                       </Field>
                     )}
@@ -757,7 +1089,11 @@ export default function CalendarReviewModal({
                           onChange={(e) => updateLinkedin(p.uid, e.target.value)}
                           rows={5}
                           className="leading-relaxed"
-                          placeholder="Legenda para LinkedIn (por padrão igual à de FB+IG)"
+                          placeholder={
+                            status === "pending"
+                              ? "Gerando legenda com a IA…"
+                              : "Legenda para LinkedIn (por padrão igual à de FB+IG)"
+                          }
                         />
                       </Field>
                     )}
@@ -813,6 +1149,7 @@ export default function CalendarReviewModal({
         onCancel={() => setConfirmingDiscard(false)}
         onConfirm={() => {
           setConfirmingDiscard(false);
+          stopCaptions();
           onClose();
         }}
       />

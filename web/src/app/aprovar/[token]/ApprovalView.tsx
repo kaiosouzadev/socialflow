@@ -12,6 +12,7 @@ import { SegmentedControl } from "@/components/Toggle";
 import { FormatBadge } from "@/components/ui";
 import { formatLabel, formatMeta, type PostFormat } from "@/lib/formats";
 import type { InstagramProfilePreview } from "@/lib/ig-profile";
+import type { MonthlyAdjustment, MonthlyApprovalPost } from "@/lib/monthly-approval";
 import InstagramFeedPreview, { type PlannedFeedTile } from "./InstagramFeedPreview";
 
 const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -46,31 +47,11 @@ const FORMAT_CLASS: Record<PostFormat, { stripe: string; wash: string; icon: str
 };
 const fmtClass = (f: string) => FORMAT_CLASS[formatMeta(f).id];
 
-type Adjustment = {
-  id: string;
-  comment: string;
-  status: string; // pendente | resolvido
-  reply: string | null;
-};
+type Adjustment = MonthlyAdjustment;
 
-type Post = {
-  id: string;
-  theme: string;
-  explanation: string;
-  format: string;
-  mediaUrl: string | null;
-  mediaItems: { url: string; type?: string }[] | null;
-  /** legado (o importador grava só este) — vale quando a rede não tem `captions` (N-18) */
-  caption: string | null;
-  captions: Record<string, string>;
-  targets: string[];
-  fullWhen: string;
-  day: number;
-  time: string;
-  clientNote: string | null;
-  slides: string[];
-  adjustments: Adjustment[];
-};
+/** Fase cronograma: o cliente vê tema, explicação, data/hora, formato, redes e arte —
+ *  sem legenda e sem slides (a legenda é revisada no link semanal; lib/monthly-approval). */
+type Post = MonthlyApprovalPost;
 
 /** Feed + Story do mesmo tema no mesmo dia viram UM card. Antes apareciam
  *  como dois cards idênticos e o cliente lia isso como duplicação. */
@@ -89,21 +70,6 @@ function isVid(u: string) {
 const pendingOf = (p: Post) => p.adjustments.filter((a) => a.status === "pendente").length;
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const pad2 = (n: number) => String(n).padStart(2, "0");
-
-/** Legenda que o cliente vê em cada rede: `captions[rede] ?? caption`, a mesma
- *  regra do publicador (N-18). */
-function captionFor(post: Post, net: string): string {
-  return post.captions[net] ?? post.caption ?? "";
-}
-
-function firstText(...values: (string | null | undefined)[]): string {
-  return values.find((v): v is string => typeof v === "string" && v.trim().length > 0) ?? "";
-}
-
-/** "Legenda efetiva" do post (captions por rede ou o `caption` legado). */
-function captionText(post: Post): string {
-  return firstText(post.captions.instagram, post.captions.facebook, post.captions.linkedin, post.caption);
-}
 
 /* ------------------ "já vi este post" (por navegador) ------------------ */
 
@@ -185,13 +151,6 @@ function mediaOf(post: Post) {
       : [];
 }
 
-/** Prévia do conteúdo no card: primeira linha da legenda ou, na fase
- *  cronograma (sem legenda ainda), a explicação do tema. */
-function captionPreview(post: Post): string {
-  const firstLine = captionText(post).split("\n").find((l) => l.trim().length > 0) ?? "";
-  return firstLine.trim() || post.explanation.trim();
-}
-
 function groupPosts(posts: Post[]): Group[] {
   const map = new Map<string, Post[]>();
   for (const p of posts) {
@@ -271,7 +230,8 @@ function FormatPlaceholder({ format, compact = false }: { format: string; compac
 
 /* --------------------------- modal de detalhe --------------------------- */
 
-type Choice = "adjust" | "note" | "caption";
+/** Sem "editar a legenda": no link mensal o cliente não vê legenda (revisa no link semanal). */
+type Choice = "adjust" | "note";
 
 /** Escolha do modal do post (DESIGN h.1): título + efeito sobre a aprovação, ≥ 14 px. */
 function ChoiceButton({
@@ -319,7 +279,6 @@ function PostModal({
   token,
   group,
   onClose,
-  onSaved,
   onNoted,
   onAdjustmentAdded,
   readOnly = false,
@@ -327,7 +286,6 @@ function PostModal({
   token: string;
   group: Group;
   onClose: () => void;
-  onSaved: (postId: string, captions: Record<string, string>) => void;
   onNoted: (postId: string, note: string | null) => void;
   onAdjustmentAdded: (postId: string, adjustment: Adjustment) => void;
   readOnly?: boolean;
@@ -339,28 +297,12 @@ function PostModal({
   const post = group.posts.find((p) => p.id === postId) ?? group.primary;
 
   const media = mediaOf(post);
-  const hasMeta = post.targets.includes("instagram") || post.targets.includes("facebook");
-  const hasLinkedin = post.targets.includes("linkedin");
-  const metaNet = post.targets.includes("instagram") ? "instagram" : post.targets.includes("facebook") ? "facebook" : null;
-  const savedShared = metaNet ? captionFor(post, metaNet) : "";
-  const savedLinkedin = captionFor(post, "linkedin");
-  const hasCaption = captionText(post).length > 0;
-  const canEditCaption = hasCaption && (hasMeta || hasLinkedin);
-
-  const initialCaps = () => {
-    const c: Record<string, string> = { ...post.captions };
-    for (const t of post.targets) c[t] = captionFor(post, t);
-    return c;
-  };
 
   const [active, setActive] = useState(0);
   const [choice, setChoice] = useState<Choice | null>(null);
-  const [caps, setCaps] = useState<Record<string, string>>(initialCaps);
-  // LinkedIn espelha a legenda FB+IG até ser editado
-  const [liDirty, setLiDirty] = useState(() => hasLinkedin && hasMeta && savedLinkedin !== savedShared);
   const [note, setNote] = useState(post.clientNote ?? "");
   const [adjustComment, setAdjustComment] = useState("");
-  const [busy, setBusy] = useState<"" | "save" | "note" | "adjust">("");
+  const [busy, setBusy] = useState<"" | "note" | "adjust">("");
   const [done, setDone] = useState("");
   const [error, setError] = useState("");
 
@@ -368,8 +310,6 @@ function PostModal({
   const [prevPostId, setPrevPostId] = useState(postId);
   if (postId !== prevPostId) {
     setPrevPostId(postId);
-    setCaps(initialCaps());
-    setLiDirty(hasLinkedin && hasMeta && savedLinkedin !== savedShared);
     setNote(post.clientNote ?? "");
     setAdjustComment("");
     setChoice(null);
@@ -378,62 +318,16 @@ function PostModal({
     setError("");
   }
 
-  const shared = metaNet ? (caps[metaNet] ?? "") : "";
-
-  function setShared(text: string) {
-    setCaps((p) => ({
-      ...p,
-      ...(post.targets.includes("instagram") ? { instagram: text } : {}),
-      ...(post.targets.includes("facebook") ? { facebook: text } : {}),
-      ...(hasLinkedin && !liDirty ? { linkedin: text } : {}),
-    }));
-  }
-  function setLinkedin(text: string) {
-    setLiDirty(true);
-    setCaps((p) => ({ ...p, linkedin: text }));
-  }
-
   function toggle(c: Choice) {
     setDone("");
     setError("");
     setChoice((cur) => (cur === c ? null : c));
   }
   function cancelChoice() {
-    if (choice === "caption") {
-      setCaps(initialCaps());
-      setLiDirty(hasLinkedin && hasMeta && savedLinkedin !== savedShared);
-    }
     if (choice === "note") setNote(post.clientNote ?? "");
     if (choice === "adjust") setAdjustComment("");
     setChoice(null);
     setError("");
-  }
-
-  async function save() {
-    setBusy("save");
-    setDone("");
-    setError("");
-    try {
-      const captions: Record<string, string> = {};
-      for (const t of post.targets) captions[t] = caps[t] ?? "";
-      const r = await fetch(`/api/aprovar/${token}/post/${post.id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "edit", captions }),
-      });
-      if (r.ok) {
-        onSaved(post.id, captions);
-        setChoice(null);
-        setDone("Legenda salva. A equipe já vê a nova versão.");
-      } else {
-        const d = await r.json().catch(() => null);
-        setError(typeof d?.error === "string" ? d.error : "Não foi possível salvar a legenda. Tente novamente.");
-      }
-    } catch {
-      setError("Falha de conexão ao salvar. Tente novamente.");
-    } finally {
-      setBusy("");
-    }
   }
 
   async function saveNote() {
@@ -497,11 +391,6 @@ function PostModal({
     post.format === "story" || post.format === "reels"
       ? "aspect-9/16 max-w-[calc(60dvh*9/16)]"
       : "aspect-4/5 max-w-[calc(60dvh*4/5)]";
-  const metaLabel =
-    post.targets.includes("facebook") && post.targets.includes("instagram")
-      ? "Facebook + Instagram (legenda única)"
-      : BRAND[metaNet ?? ""]?.label ?? "";
-  const showLinkedinCaption = hasLinkedin && (!hasMeta || savedLinkedin !== savedShared);
 
   return (
     <Dialog
@@ -585,64 +474,7 @@ function PostModal({
           <Networks targets={post.targets} size={20} />
         </div>
 
-        {/* roteiro das telas (carrossel/reels ainda sem arte final) */}
-        {post.slides.length > 0 && (
-          <div className="overflow-hidden rounded-card border border-line">
-            <p className="border-b border-line px-4 py-2 text-sm font-semibold text-fg-muted">
-              {post.format === "reels" ? "Telas do reels" : "Páginas do carrossel"}
-            </p>
-            <ol className="divide-y divide-line">
-              {post.slides.map((s, i) => (
-                <li key={i} className="flex gap-3 px-4 py-2.5 text-sm">
-                  <span className="shrink-0 font-semibold text-link">{i + 1}</span>
-                  <p className="whitespace-pre-wrap leading-relaxed text-fg">{s}</p>
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
-
-        {/* legenda: só leitura aqui; editar é uma das escolhas abaixo (A-041) */}
-        {hasCaption && (
-          <div className="grid gap-3">
-            <h3 className="text-base font-semibold text-fg">Legenda</h3>
-            {hasMeta && (
-              <div className="grid gap-1.5">
-                <p className="flex items-center gap-2 text-sm text-fg-muted">
-                  <span aria-hidden="true" className="flex items-center gap-1">
-                    {post.targets.includes("facebook") && <BrandBadge platform="facebook" size={18} />}
-                    {post.targets.includes("instagram") && <BrandBadge platform="instagram" size={18} />}
-                  </span>
-                  {metaLabel}
-                </p>
-                <p className="whitespace-pre-wrap rounded-card bg-sunken p-4 text-sm leading-relaxed text-fg">
-                  {savedShared || "Sem legenda para estas redes."}
-                </p>
-              </div>
-            )}
-            {showLinkedinCaption && (
-              <div className="grid gap-1.5">
-                <p className="flex items-center gap-2 text-sm text-fg-muted">
-                  <span aria-hidden="true" className="inline-flex">
-                    <BrandBadge platform="linkedin" size={18} />
-                  </span>
-                  LinkedIn
-                </p>
-                <p className="whitespace-pre-wrap rounded-card bg-sunken p-4 text-sm leading-relaxed text-fg">
-                  {savedLinkedin || "Sem legenda para o LinkedIn."}
-                </p>
-              </div>
-            )}
-            {hasLinkedin && hasMeta && !showLinkedinCaption && (
-              <p className="text-sm text-fg-muted">O LinkedIn usa a mesma legenda.</p>
-            )}
-            {!hasMeta && !hasLinkedin && (
-              <p className="whitespace-pre-wrap rounded-card bg-sunken p-4 text-sm leading-relaxed text-fg">
-                {captionText(post)}
-              </p>
-            )}
-          </div>
-        )}
+        {/* sem legenda e sem roteiro das telas aqui: o cliente revisa o texto completo no link semanal */}
 
         {/* pedidos de ajuste formais (bloqueiam a aprovação até a equipe concluir) */}
         {post.adjustments.length > 0 && (
@@ -676,8 +508,8 @@ function PostModal({
               </div>
             )}
             <Callout tone="success" title="Cronograma já aprovado">
-              Por este link não é mais possível pedir ajustes, deixar observações nem editar a legenda. Se precisar
-              mudar algo, fale com a agência.
+              Por este link não é mais possível pedir ajustes nem deixar observações. Se precisar mudar algo, fale
+              com a agência.
             </Callout>
           </>
         ) : (
@@ -796,66 +628,6 @@ function PostModal({
                   </ChoiceActions>
                 </div>
               )}
-
-              {/* editar a legenda é intencional quando ela já existe (mantido; só a apresentação mudou) */}
-              {canEditCaption && (
-                <>
-                  <ChoiceButton
-                    icon={<Icon.fileText />}
-                    title="Editar a legenda"
-                    effect="Você mesmo altera o texto. A nova versão vai para a equipe e não impede a aprovação."
-                    expanded={choice === "caption"}
-                    controls={panelId("caption")}
-                    onToggle={() => toggle("caption")}
-                  />
-                  {choice === "caption" && (
-                    <div id={panelId("caption")} className="grid gap-3 rounded-card border border-line bg-surface p-4">
-                      {hasMeta && (
-                        <Field label={`Legenda · ${metaLabel}`}>
-                          <Textarea
-                            value={shared}
-                            onChange={(e) => setShared(e.target.value)}
-                            rows={7}
-                            className="leading-relaxed"
-                          />
-                        </Field>
-                      )}
-                      {hasLinkedin && (
-                        <Field
-                          label="Legenda · LinkedIn"
-                          help={
-                            !liDirty && hasMeta ? (
-                              <span className="text-sm">Igual à do Facebook + Instagram até você mudar.</span>
-                            ) : undefined
-                          }
-                        >
-                          <Textarea
-                            value={caps.linkedin ?? shared}
-                            onChange={(e) => setLinkedin(e.target.value)}
-                            rows={5}
-                            className="leading-relaxed"
-                          />
-                        </Field>
-                      )}
-                      <ChoiceActions>
-                        <Button variant="secondary" size="lg" onClick={cancelChoice} disabled={busy !== ""}>
-                          Cancelar
-                        </Button>
-                        <Button
-                          variant="primary"
-                          size="lg"
-                          onClick={save}
-                          loading={busy === "save"}
-                          loadingText="Salvando…"
-                          disabled={busy !== ""}
-                        >
-                          Salvar legenda
-                        </Button>
-                      </ChoiceActions>
-                    </div>
-                  )}
-                </>
-              )}
             </div>
           </section>
         )}
@@ -880,7 +652,8 @@ function GroupCard({
   const primary = group.primary;
   const media = mediaOf(primary);
   const extras = group.posts.filter((p) => p.id !== primary.id);
-  const preview = captionPreview(primary);
+  // fase cronograma: a prévia do card é a explicação do tema (nunca a legenda)
+  const preview = primary.explanation.trim();
   const noted = group.posts.some((p) => p.clientNote);
   const pending = group.posts.reduce((n, p) => n + pendingOf(p), 0);
 
@@ -913,7 +686,7 @@ function GroupCard({
           ))}
         </div>
 
-        {/* tema e prévia (legenda ou explicação) */}
+        {/* tema e prévia (explicação) */}
         <p className={`line-clamp-2 font-semibold leading-snug text-fg ${compact ? "text-xs" : "text-sm"}`}>
           {group.theme || "Sem tema"}
         </p>
@@ -1022,9 +795,6 @@ export default function ApprovalView({
 
   const open = openKey ? groups.find((g) => g.key === openKey) ?? null : null;
 
-  function handleSaved(postId: string, captions: Record<string, string>) {
-    setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, captions } : p)));
-  }
   function handleNoted(postId: string, note: string | null) {
     setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, clientNote: note } : p)));
   }
@@ -1403,7 +1173,6 @@ export default function ApprovalView({
           token={token}
           group={open}
           onClose={() => setOpenKey(null)}
-          onSaved={handleSaved}
           onNoted={handleNoted}
           onAdjustmentAdded={handleAdjustmentAdded}
           readOnly={readOnly}
