@@ -1,7 +1,7 @@
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 
-export const CAPTION_MODEL = process.env.GEMINI_CAPTION_MODEL || "gemini-2.5-flash";
-export const CALENDAR_MODEL = process.env.GEMINI_CALENDAR_MODEL || "gemini-3.5-flash";
+// Modelos de TEXTO: não ficam mais aqui. Use `await getTextModel("caption" | "calendar")`
+// (lib/ai-models.ts): configuração de Administração → "Modelos de IA" → env → padrão.
 // gemini-3-pro-image (Nano Banana Pro): tipografia/texto muito mais confiável
 // que os modelos flash-image — essencial para artes com título/contato legíveis.
 export const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
@@ -21,7 +21,17 @@ type GenerateOptions = {
   timeoutMs?: number;
   /** opcional: cancela a chamada (ex.: o navegador desistiu do pedido); sem ele, nada muda */
   signal?: AbortSignal;
+  /** opcional: nome da geração no log do servidor (ex.: "legenda"); nunca dado de cliente */
+  label?: string;
 };
+
+/**
+ * Log de uma geração de texto (para comparar modelos): função, modelo, tempo e resultado.
+ * Sem prompt, sem resposta e sem dado de cliente.
+ */
+export function logTextGeneration(label: string, model: string, startedAt: number, ok: boolean): void {
+  console.info(`[ia-texto] ${label} modelo=${model} ${Date.now() - startedAt}ms ${ok ? "ok" : "erro"}`);
+}
 
 /**
  * Extrai JSON de uma resposta de modelo: aceita JSON puro ou cercado por
@@ -107,10 +117,25 @@ export async function generateText({
   maxOutputTokens,
   timeoutMs,
   signal,
+  label = "texto",
 }: GenerateOptions): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY não configurada");
+  const startedAt = Date.now();
+  let ok = false;
+  try {
+    const text = await requestText(key, { model, prompt, system, temperature, json, maxOutputTokens, timeoutMs, signal });
+    ok = true;
+    return text;
+  } finally {
+    logTextGeneration(label, model, startedAt, ok);
+  }
+}
 
+async function requestText(
+  key: string,
+  { model, prompt, system, temperature, json, maxOutputTokens, timeoutMs, signal }: Omit<GenerateOptions, "label">
+): Promise<string> {
   const body = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),

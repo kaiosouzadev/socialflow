@@ -23,6 +23,7 @@ const MAIN_ITEMS: NavItem[] = [
 const ADMIN_ITEMS: NavItem[] = [
   { href: "/meta", label: "Conexões Meta", icon: Icon.link },
   { href: "/users", label: "Usuários", icon: Icon.shield },
+  { href: "/modelos-ia", label: "Modelos de IA", icon: Icon.zap },
 ];
 
 function isActive(pathname: string, href: string) {

@@ -3,7 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
 import { requireAuth } from "@/lib/api-auth";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
-import { generateText, CALENDAR_MODEL } from "@/lib/gemini";
+import { generateText } from "@/lib/gemini";
+import { getTextModel } from "@/lib/ai-models";
 import { genTemplateCaptions } from "@/lib/basic-plan";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { z } from "zod";
@@ -93,7 +94,8 @@ export async function POST(req: NextRequest) {
 
   let titles: string[];
   try {
-    const raw = await generateText({ model: CALENDAR_MODEL, system, prompt, temperature: 0.95, json: true });
+    const { model } = await getTextModel("calendar");
+    const raw = await generateText({ model, label: "artes-base-titulos", system, prompt, temperature: 0.95, json: true });
     const data = JSON.parse(raw);
     titles = Array.isArray(data) ? data : data.titles;
     // texto que cai na regra "Gemini não retornou" do toUserMessage

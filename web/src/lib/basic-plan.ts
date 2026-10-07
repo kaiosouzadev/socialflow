@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
 import { generateArt } from "@/lib/art-gen";
-import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
+import { generateText, parseModelJson } from "@/lib/gemini";
+import { getTextModel } from "@/lib/ai-models";
 import { clientHashtagBlock, withClientHashtags } from "@/lib/client-hashtags";
 import { r2Configured, uploadToR2 } from "@/lib/r2";
 import {
@@ -80,7 +81,8 @@ export async function genTemplateCaptions(title: string): Promise<TemplateCaptio
 
   try {
     const raw = await generateText({
-      model: CAPTION_MODEL,
+      model: (await getTextModel("caption")).model,
+      label: "artes-base-legendas",
       system,
       prompt,
       temperature: 0.9,

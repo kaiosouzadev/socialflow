@@ -1,4 +1,5 @@
-import { GEMINI_BASE, IMAGE_MODEL, CAPTION_MODEL, geminiFetch, parseModelJson } from "@/lib/gemini";
+import { GEMINI_BASE, IMAGE_MODEL, geminiFetch, logTextGeneration, parseModelJson } from "@/lib/gemini";
+import { getTextModel } from "@/lib/ai-models";
 
 /**
  * Geração de arte para clientes de gestão básica: a IA (Gemini image) recebe a
@@ -148,7 +149,8 @@ async function callImageModel(
  * Passe de verificação: um modelo multimodal lê a arte gerada e aponta texto
  * corrompido/erros de grafia. Retorna null quando está tudo ok, ou a lista de
  * problemas para realimentar a regeração. Falha do verificador NÃO derruba a
- * geração (retorna null).
+ * geração (retorna null). O verificador é TEXTO: usa o modelo de texto do sistema
+ * (Administração → "Modelos de IA"); a geração da imagem continua no IMAGE_MODEL.
  */
 async function findTextProblems(
   key: string,
@@ -156,9 +158,12 @@ async function findTextProblems(
   expectedHeadline: string,
   expectedContacts: string[]
 ): Promise<string | null> {
+  const { model } = await getTextModel("caption");
+  const startedAt = Date.now();
+  let ok = false;
   try {
     const res = await geminiFetch(
-      `${GEMINI_BASE}/models/${CAPTION_MODEL}:generateContent`,
+      `${GEMINI_BASE}/models/${model}:generateContent`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
@@ -198,12 +203,15 @@ async function findTextProblems(
     const text: string =
       data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "";
     const verdict = parseModelJson<{ ok?: boolean; problemas?: string[] }>(text);
+    ok = true;
     if (verdict.ok === false && Array.isArray(verdict.problemas) && verdict.problemas.length) {
       return verdict.problemas.slice(0, 5).join("; ");
     }
     return null;
   } catch {
     return null;
+  } finally {
+    logTextGeneration("verificacao-arte", model, startedAt, ok);
   }
 }
 

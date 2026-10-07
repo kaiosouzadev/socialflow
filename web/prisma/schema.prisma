@@ -22,6 +22,8 @@ model User {
   // designer responsável (carteira) e artes que a usuária marcou como feitas
   designedClients         Client[]      @relation("ClientDesigner")
   artDonePosts            Post[]        @relation("PostArtDoneBy")
+  // configurações do sistema que a usuária salvou por último (ex.: modelo de IA de texto)
+  updatedSettings         AppSetting[]  @relation("AppSettingUpdatedBy")
 
   @@map("users")
 }
@@ -318,4 +320,18 @@ model DailySummary {
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("daily_summaries")
+}
+
+// Configurações do sistema (chave → valor JSON), editadas em Administração.
+// Hoje: "ai.textModel" = { provider: "google", model: "<id>" | null } — modelo de IA de
+// texto (null/sem linha = padrão do sistema). Ver web/src/lib/ai-models.ts.
+// Migração: system/migrations/2026-10-07-app-settings.sql
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedBy String?  @map("updated_by") @db.Uuid
+  updater   User?    @relation("AppSettingUpdatedBy", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@map("app_settings")
 }

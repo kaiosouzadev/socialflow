@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
-import { generateText, parseModelJson, CALENDAR_MODEL } from "@/lib/gemini";
+import { generateText, parseModelJson } from "@/lib/gemini";
+import { getTextModel } from "@/lib/ai-models";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { z } from "zod";
@@ -131,10 +132,12 @@ export async function POST(req: NextRequest) {
     `Responda em JSON no formato: {"posts":[{"theme":"...","format":"...","explanation":"..."}]} com ${n} itens.`,
   ].join("");
 
+  const { model } = await getTextModel("calendar");
   let ideas: Idea[];
   try {
     const raw = await generateText({
-      model: CALENDAR_MODEL,
+      model,
+      label: "calendario",
       system,
       prompt,
       temperature: 0.95,
@@ -175,7 +178,7 @@ export async function POST(req: NextRequest) {
       clientName: client.name,
       targets,
       activePlatforms,
-      model: CALENDAR_MODEL,
+      model,
       posts: previewPosts,
     },
     { status: 200 }

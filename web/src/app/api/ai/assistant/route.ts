@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
-import { geminiFetch, parseModelJson, GEMINI_BASE, CAPTION_MODEL } from "@/lib/gemini";
+import { geminiFetch, logTextGeneration, parseModelJson, GEMINI_BASE } from "@/lib/gemini";
+import { getTextModel } from "@/lib/ai-models";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { briefingForPrompt } from "@/lib/client-briefing-prompt";
@@ -120,9 +121,12 @@ export async function POST(req: NextRequest) {
     parts: [{ text: m.content }],
   }));
 
+  const { model } = await getTextModel("caption");
+  const startedAt = Date.now();
+  let ok = false;
   try {
     const res = await geminiFetch(
-      `${GEMINI_BASE}/models/${CAPTION_MODEL}:generateContent`,
+      `${GEMINI_BASE}/models/${model}:generateContent`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
@@ -150,6 +154,7 @@ export async function POST(req: NextRequest) {
     if (!text.trim()) throw new Error("Gemini não retornou texto (resposta vazia)");
 
     const out = parseModelJson<{ reply?: string; title?: string; caption?: string; artPrompt?: string }>(text);
+    ok = true;
     const reply = typeof out.reply === "string" && out.reply.trim() ? out.reply.trim() : text.trim();
     return Response.json({
       reply,
@@ -164,5 +169,7 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     console.error("[ai/assistant]", e);
     return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
+  } finally {
+    logTextGeneration("assistente", model, startedAt, ok);
   }
 }

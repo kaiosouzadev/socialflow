@@ -1,6 +1,7 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { generateText, CALENDAR_MODEL } from "@/lib/gemini";
+import { generateText } from "@/lib/gemini";
+import { getTextModel } from "@/lib/ai-models";
 import {
   buildCaptionBatchPrompt,
   parseCaptionBatch,
@@ -88,7 +89,8 @@ export async function generateCaptionBatch(
   }));
   const { system, prompt } = buildCaptionBatchPrompt(client, batchItems);
   const raw = await generateText({
-    model: CALENDAR_MODEL,
+    model: (await getTextModel("calendar")).model,
+    label: "legendas-lote",
     system,
     prompt,
     temperature: 0.9,

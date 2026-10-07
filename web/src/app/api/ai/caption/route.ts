@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
-import { generateText, parseModelJson, CAPTION_MODEL } from "@/lib/gemini";
+import { generateText, parseModelJson } from "@/lib/gemini";
+import { getTextModel } from "@/lib/ai-models";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { briefingForPrompt } from "@/lib/client-briefing-prompt";
@@ -102,9 +103,11 @@ export async function POST(req: NextRequest) {
     .filter(Boolean)
     .join("\n");
 
+  const { model } = await getTextModel("caption");
   try {
     const raw = await generateText({
-      model: CAPTION_MODEL,
+      model,
+      label: "legenda",
       system,
       prompt,
       temperature: 0.9,
@@ -141,7 +144,7 @@ export async function POST(req: NextRequest) {
             .map((s) => s.trim())
         : undefined;
 
-    return Response.json({ captions, slides, model: CAPTION_MODEL });
+    return Response.json({ captions, slides, model });
   } catch (e) {
     console.error("[ai/caption]", e);
     return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
