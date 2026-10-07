@@ -22,7 +22,7 @@ import {
 
 /*
  * Carteira de clientes (DESIGN g.4): filtros + edição em linha de redatora,
- * designer, segmento, status e "Agência publica?". Tabela a partir de xl; cartões abaixo.
+ * designer, segmento, status e "Agendar posts?". Tabela a partir de xl; cartões abaixo.
  */
 
 export type ClientRow = {
@@ -54,7 +54,7 @@ const SAVED_MESSAGE: Record<EditableField, (name: string) => string> = {
   designerUserId: (n) => `Designer de ${n} salvo.`,
   segment: (n) => `Segmento de ${n} salvo.`,
   status: (n) => `Status de ${n} salvo.`,
-  agencyPublishes: (n) => `“Agência publica” de ${n} salvo.`,
+  agencyPublishes: (n) => `“Agendar posts” de ${n} salvo.`,
 };
 
 function serverValue(c: ClientRow, field: EditableField): CellValue {
@@ -206,7 +206,7 @@ function ClientIdentity({ c, compact }: { c: ClientRow; compact: boolean }) {
             </span>
           </Link>
           {!c.agencyPublishes && (
-            <span title="A agência produz o conteúdo, mas não agenda nem publica.">
+            <span title="A agência produz o conteúdo, mas o sistema não agenda nem publica.">
               <StatusBadge kind="agencyPublishes" status="nao" />
             </span>
           )}
@@ -448,7 +448,7 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
           <Field label="Publicação">
             <Select size="sm" value={filters.publishes} onChange={(e) => setFilter({ publishes: e.target.value })}>
               <option value="todos">Todos</option>
-              <option value="sim">Agência publica</option>
+              <option value="sim">Agenda posts</option>
               <option value="nao">Só produção</option>
             </Select>
           </Field>
@@ -510,7 +510,7 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                     Aprovação
                   </th>
                   <th scope="col" className="w-28 px-2 py-3 font-semibold">
-                    Agência publica?
+                    Agendar posts?
                   </th>
                   <th scope="col" className="w-36 px-2 py-3 pr-4 font-semibold">
                     Status
@@ -604,7 +604,7 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                         <div className="flex items-center gap-1.5">
                           <Switch
                             size="sm"
-                            aria-label={`A agência publica os posts de ${c.name}`}
+                            aria-label={`Agendar os posts de ${c.name}`}
                             checked={shown(c, "agencyPublishes") as boolean}
                             stateLabels={{ on: "Sim", off: "Não" }}
                             loading={p.saving}
@@ -717,11 +717,11 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
                         <Feedback cell={st.cell} />
                       </div>
                     </Field>
-                    <Field label="Agência publica?" error={p.error}>
+                    <Field label="Agendar posts?" error={p.error}>
                       <div className="flex items-center gap-1.5">
                         <Switch
                           size="sm"
-                          aria-label={`A agência publica os posts de ${c.name}`}
+                          aria-label={`Agendar os posts de ${c.name}`}
                           checked={shown(c, "agencyPublishes") as boolean}
                           stateLabels={{ on: "Sim", off: "Não" }}
                           loading={p.saving}
@@ -763,12 +763,12 @@ export default function ClientsTable({ clients, users }: { clients: ClientRow[];
           consequences={[
             "O cliente sai das listas e do Quadro filtrados por Ativo.",
             statusDialog.queued === null
-              ? "Os posts agendados continuam na fila. Para não publicar, desligue “Agência publica”."
+              ? "Os posts agendados continuam na fila. Para não publicar, desligue “Agendar posts”."
               : `${statusDialog.queued} ${plural(
                   statusDialog.queued,
                   "post agendado ou com falha continua",
                   "posts agendados ou com falha continuam",
-                )} na fila. Para não publicar, desligue “Agência publica”.`,
+                )} na fila. Para não publicar, desligue “Agendar posts”.`,
           ]}
           confirmLabel={statusDialog.next === "encerrado" ? "Encerrar cliente" : "Pausar cliente"}
           busy={statusDialog.busy}

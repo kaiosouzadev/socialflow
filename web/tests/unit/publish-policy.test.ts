@@ -21,7 +21,7 @@ describe("publish-policy", () => {
 
   test("PUBLISH_BLOCKED: código estável e mensagem em pt-BR", () => {
     assert.equal(PUBLISH_BLOCKED.code, "CLIENT_NO_PUBLISH");
-    assert.match(PUBLISH_BLOCKED.message, /agência/);
+    assert.match(PUBLISH_BLOCKED.message, /não são agendados pelo sistema/);
     assert.match(PUBLISH_BLOCKED_LAST_ERROR, /não publicado/);
   });
 

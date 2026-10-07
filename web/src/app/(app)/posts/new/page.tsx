@@ -432,7 +432,7 @@ function NewPostForm() {
             hint={
               loaded
                 ? productionOnly
-                  ? "onde o post vai sair (a agência não publica)"
+                  ? "onde o post vai sair (o sistema não agenda nem publica)"
                   : "definidas pelas contas do cliente"
                 : undefined
             }

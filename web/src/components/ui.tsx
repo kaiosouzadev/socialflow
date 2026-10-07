@@ -86,10 +86,10 @@ export type StatusKind =
   | "agencyPublishes"
   | "stage";
 
-/** Selo "A agência agenda e publica?" (C3, local do S12): passe `client.agencyPublishes ? "sim" : "nao"`. */
+/** Selo "Agendar posts?" (C3, local do S12): passe `client.agencyPublishes ? "sim" : "nao"`. */
 export const AGENCY_PUBLISHES: Record<"sim" | "nao", StatusMeta> = {
   nao: { label: "Só produção", tone: "accent" },
-  sim: { label: "Agência publica", tone: "neutral" },
+  sim: { label: "Agenda posts", tone: "neutral" },
 };
 
 const STATUS_MAPS: Record<Exclude<StatusKind, "stage">, Record<string, StatusMeta>> = {

@@ -191,7 +191,7 @@ function FilterFields({
           onChange={(e) => onChange({ ...values, publica: e.target.value as ProductionFilterValues["publica"] })}
         >
           <option value="">Todos</option>
-          <option value="sim">Agência publica</option>
+          <option value="sim">Agenda posts</option>
           <option value="nao">Só produção</option>
         </Select>
       </Field>

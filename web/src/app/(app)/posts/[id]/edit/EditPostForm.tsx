@@ -225,7 +225,7 @@ export default function EditPostForm({
           <Field
             kind="group"
             label="Redes sociais"
-            help={productionOnly ? "Onde o post vai sair (a agência não publica)." : undefined}
+            help={productionOnly ? "Onde o post vai sair (o sistema não agenda nem publica)." : undefined}
             error={targetsError}
           >
             {availablePlatforms.length === 0 ? (

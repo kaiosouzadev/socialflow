@@ -229,7 +229,7 @@ export default async function PostDetailPage({ params, searchParams }: Props) {
       )}
 
       {!publishes && (
-        <Callout tone="info" title="Este cliente não tem postagem pela agência." className="mb-6">
+        <Callout tone="info" title="Os posts deste cliente não são agendados pelo sistema." className="mb-6">
           A equipe produz o conteúdo, mas o post fica como rascunho: não é agendado nem publicado por aqui.
         </Callout>
       )}
@@ -502,7 +502,7 @@ export default async function PostDetailPage({ params, searchParams }: Props) {
             </div>
             {post.publications.length === 0 ? (
               <p className="px-5 py-6 text-center text-sm text-fg-muted">
-                {publishes ? "Ainda não publicado." : "Sem publicações: a agência não publica para este cliente."}
+                {publishes ? "Ainda não publicado." : "Sem publicações: o sistema não agenda nem publica os posts deste cliente."}
               </p>
             ) : (
               <ul className="divide-y divide-line">

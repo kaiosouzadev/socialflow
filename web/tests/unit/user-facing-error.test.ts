@@ -213,7 +213,7 @@ describe("toUserMessage", () => {
   test("mensagens amigáveis em pt-BR das rotas continuam intactas (Error, string e { error })", () => {
     const messages = [
       "Cliente não encontrado",
-      "Este cliente não tem postagem pela agência: os posts ficam como rascunho e não entram na fila de publicação.",
+      "Os posts deste cliente não são agendados pelo sistema (só produção): ficam como rascunho e não entram na fila de publicação.",
       "Segmento inválido: use CORR, CARE ou COLETIVO.",
       "Status inválido: use ativo, pausado ou encerrado.",
       "Cronograma já aprovado. Use 'Reverter aprovação' antes de reenviar.",

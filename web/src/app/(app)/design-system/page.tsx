@@ -413,7 +413,7 @@ function TogglesSection() {
       <Group title="Switch" className="grid gap-1 sm:grid-cols-2">
         <Switch label="Receber resumo diário" checked={digest} onCheckedChange={setDigest} />
         <Switch
-          label="A agência agenda e publica?"
+          label="Agendar posts?"
           stateLabels={{ on: "Sim", off: "Não" }}
           checked={publishes}
           onCheckedChange={setPublishes}
@@ -488,8 +488,8 @@ function TogglesSection() {
       <Field
         kind="group"
         id="ds-publica"
-        label="A agência agenda e publica os posts deste cliente?"
-        help="Não = só produção: os posts nunca entram na fila."
+        label="Agendar os posts deste cliente?"
+        help="Sim: os posts são agendados e publicados automaticamente pelo sistema nas redes do cliente. Não: só produção — os posts nunca entram na fila de publicação."
         error={publica === "" ? "Escolha Sim ou Não." : null}
       >
         <SegmentedControl
@@ -666,7 +666,7 @@ function BadgesSection() {
         <ToneBadge tone="warning" icon={<Icon.alert />}>
           3 pendências abertas
         </ToneBadge>
-        <ToneBadge tone="accent" size="md" title="Cliente sem postagem pela agência">
+        <ToneBadge tone="accent" size="md" title="Posts deste cliente não são agendados pelo sistema">
           Só produção
         </ToneBadge>
       </Group>
@@ -928,7 +928,7 @@ function DialogsSection({ notify }: { notify: (t: ToastState) => void }) {
             <Textarea name="observacoes" rows={3} />
           </Field>
           <Switch
-            label="A agência agenda e publica os posts?"
+            label="Agendar os posts?"
             stateLabels={{ on: "Sim", off: "Não" }}
             checked={publishes}
             onCheckedChange={(v) => {

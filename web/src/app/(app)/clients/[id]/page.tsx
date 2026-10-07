@@ -109,7 +109,7 @@ export default async function ClientDetailPage({ params }: Props) {
           <>
             <StatusBadge kind="client" status={client.status} size="md" />
             {!client.agencyPublishes && (
-              <span title="A agência produz o conteúdo, mas não agenda nem publica.">
+              <span title="A agência produz o conteúdo, mas o sistema não agenda nem publica.">
                 <StatusBadge kind="agencyPublishes" status="nao" size="md" />
               </span>
             )}

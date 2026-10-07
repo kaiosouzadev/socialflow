@@ -610,7 +610,7 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
             <StatusBadge kind="schedule" status={row.status} />
             <WaitingBadge row={row} />
             {!row.agencyPublishes && (
-              <span title="A agência produz o conteúdo, mas não agenda nem publica.">
+              <span title="A agência produz o conteúdo, mas o sistema não agenda nem publica.">
                 <StatusBadge kind="agencyPublishes" status="nao" />
               </span>
             )}

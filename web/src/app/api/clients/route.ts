@@ -26,7 +26,7 @@ const createSchema = z.object({
   instagramUrl: z.string().max(200).optional(),
   city: z.string().max(120).optional(),
   // a agência agenda e publica? false = só produção (os posts ficam em draft)
-  agencyPublishes: z.boolean({ error: "Informe se a agência agenda e publica (sim ou não)." }).default(true),
+  agencyPublishes: z.boolean({ error: "Informe se os posts deste cliente devem ser agendados (sim ou não)." }).default(true),
   // e-mails adicionais — normalizados por normalizeExtraEmails (máx. 10)
   extraEmails: z
     .array(z.string({ error: "Cada e-mail adicional deve ser um texto." }), {

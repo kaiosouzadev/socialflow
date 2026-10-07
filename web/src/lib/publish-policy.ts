@@ -14,7 +14,7 @@ export type QueueStatus = (typeof QUEUE_STATUSES)[number];
 export const PUBLISH_BLOCKED = {
   code: "CLIENT_NO_PUBLISH",
   message:
-    "Este cliente não tem postagem pela agência: os posts ficam como rascunho e não entram na fila de publicação.",
+    "Os posts deste cliente não são agendados pelo sistema (só produção): ficam como rascunho e não entram na fila de publicação.",
 } as const;
 
 /** `lastError` gravado quando o publicador recusa um post de cliente só produção. */

@@ -290,7 +290,7 @@ export function StopPublishingDialog({
     <ConfirmDialog
       open
       tone="danger"
-      title={`Parar a publicação pela agência para ${clientName}?`}
+      title={`Parar de agendar os posts de ${clientName}?`}
       consequences={consequences}
       confirmLabel="Sim, só produção"
       busy={busy}
@@ -648,8 +648,8 @@ function ClientFormFields({
         <Field
           id={`${prefix}-agencyPublishes`}
           kind="group"
-          label="A agência agenda e publica os posts deste cliente?"
-          help="Não = só produção: os posts nunca entram na fila."
+          label="Agendar os posts deste cliente?"
+          help="Sim: os posts são agendados e publicados automaticamente pelo sistema nas redes do cliente. Não: só produção — os posts nunca entram na fila de publicação."
           error={errors.agencyPublishes}
         >
           <SegmentedControl
@@ -665,7 +665,7 @@ function ClientFormFields({
         </Field>
         {!values.agencyPublishes && (
           <Callout tone="info" title="Só produção">
-            O sistema cria cronogramas, aprovações e artes, mas nenhum post é agendado ou publicado pela agência.
+            O sistema cria cronogramas, aprovações e artes, mas nenhum post é agendado ou publicado pelo sistema.
           </Callout>
         )}
       </fieldset>
@@ -737,7 +737,7 @@ function ClientFormFields({
         {showStatusWarning && (
           <Callout tone="warning">
             {queuedPostsCount} {plural(queuedPostsCount, "post agendado ou com falha continua", "posts agendados ou com falha continuam")}{" "}
-            na fila. Para não publicar, marque “Não” em “A agência agenda e publica”.
+            na fila. Para não publicar, marque “Não” em “Agendar os posts deste cliente?”.
           </Callout>
         )}
       </fieldset>
@@ -1256,11 +1256,11 @@ export default function ClientInfoEditor({
           </InfoItem>
           <InfoItem label="Plano">{labelOf(PLAN, client.plan)}</InfoItem>
           <InfoItem label="Tipo de gestão">{labelOf(TIER, client.tier)}</InfoItem>
-          <InfoItem label="A agência publica?">
+          <InfoItem label="Agendar posts?">
             {client.agencyPublishes ? (
-              "Sim — agenda e publica"
+              "Sim — o sistema agenda e publica"
             ) : (
-              <span title="A agência produz o conteúdo, mas não agenda nem publica.">
+              <span title="A agência produz o conteúdo, mas o sistema não agenda nem publica.">
                 <StatusBadge kind="agencyPublishes" status="nao" />
               </span>
             )}

@@ -23,7 +23,7 @@ const RESULT = {
   },
   // cliente só produção: o servidor não recoloca na fila (S13)
   skipped: {
-    text: "Não voltou à fila: cliente sem postagem pela agência.",
+    text: "Não voltou à fila: os posts deste cliente não são agendados pelo sistema.",
     className: "text-warning-fg",
     icon: <Icon.alert className="mt-0.5 size-4 shrink-0 text-warning-solid" />,
   },

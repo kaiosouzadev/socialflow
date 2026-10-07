@@ -119,7 +119,7 @@ export default function QueueHealthCard({
   const stuckSkipped = Math.max(0, stuck - stuckRequeueable);
   const failedSkipped = Math.max(0, failed - failedRequeueable);
   const skippedLine = (n: number) =>
-    `${posts(n)} de cliente só produção ${n === 1 ? "fica" : "ficam"} de fora: a agência não publica para ${n === 1 ? "ele" : "eles"}.`;
+    `${posts(n)} de cliente só produção ${n === 1 ? "fica" : "ficam"} de fora: o sistema não agenda os posts ${n === 1 ? "dele" : "deles"}.`;
 
   const dialog =
     confirm === "stuck"

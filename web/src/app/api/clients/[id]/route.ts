@@ -56,7 +56,7 @@ const updateSchema = z.object({
   // exibir dados de contato na arte gerada?
   showContacts: z.boolean().optional(),
   // a agência agenda e publica? true → false devolve os posts da fila para draft
-  agencyPublishes: z.boolean({ error: "Informe se a agência agenda e publica (sim ou não)." }).optional(),
+  agencyPublishes: z.boolean({ error: "Informe se os posts deste cliente devem ser agendados (sim ou não)." }).optional(),
   // e-mails adicionais — substitui a lista inteira; normalizados por normalizeExtraEmails (máx. 10)
   extraEmails: z
     .array(z.string({ error: "Cada e-mail adicional deve ser um texto." }), {

@@ -1524,7 +1524,7 @@ function ResultStep({
       <p className="text-sm text-fg-muted">
         {client.agencyPublishes
           ? "Os posts ficam como rascunho até alguém agendá-los."
-          : "Este cliente é só produção: a agência não agenda nem publica estes posts."}
+          : "Este cliente é só produção: o sistema não agenda nem publica estes posts."}
       </p>
 
       <div className="grid gap-2 sm:flex sm:flex-wrap">
