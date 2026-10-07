@@ -1,7 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
-import { generateText } from "@/lib/gemini";
-import { getTextModel } from "@/lib/ai-models";
+import { generateAiText } from "@/lib/ai-text";
 import { buildCaptionBatchPrompt, parseCaptionBatch } from "@/lib/caption-batch";
 import { newApprovalToken } from "@/lib/approval";
 import {
@@ -60,8 +59,7 @@ export async function generateWeekContent(clientId: string, postIds: string[]): 
   if (needing.length === 0) return 0;
 
   const { system, prompt } = buildCaptionBatchPrompt(client, needing);
-  const raw = await generateText({
-    model: (await getTextModel("calendar")).model,
+  const raw = await generateAiText("calendar", {
     label: "revisao-semanal",
     system,
     prompt,

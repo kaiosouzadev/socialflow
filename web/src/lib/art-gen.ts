@@ -1,5 +1,5 @@
 import { GEMINI_BASE, IMAGE_MODEL, geminiFetch, logTextGeneration, parseModelJson } from "@/lib/gemini";
-import { getTextModel } from "@/lib/ai-models";
+import { getGeminiTextModel } from "@/lib/ai-models";
 
 /**
  * Geração de arte para clientes de gestão básica: a IA (Gemini image) recebe a
@@ -149,8 +149,9 @@ async function callImageModel(
  * Passe de verificação: um modelo multimodal lê a arte gerada e aponta texto
  * corrompido/erros de grafia. Retorna null quando está tudo ok, ou a lista de
  * problemas para realimentar a regeração. Falha do verificador NÃO derruba a
- * geração (retorna null). O verificador é TEXTO: usa o modelo de texto do sistema
- * (Administração → "Modelos de IA"); a geração da imagem continua no IMAGE_MODEL.
+ * geração (retorna null). O verificador lê IMAGEM, então fica SEMPRE no Gemini: usa o Gemini
+ * escolhido em Administração → "Modelos de IA" ou, com ChatGPT escolhido, o Gemini padrão do
+ * sistema (getGeminiTextModel); a geração da imagem continua no IMAGE_MODEL.
  */
 async function findTextProblems(
   key: string,
@@ -158,7 +159,7 @@ async function findTextProblems(
   expectedHeadline: string,
   expectedContacts: string[]
 ): Promise<string | null> {
-  const { model } = await getTextModel("caption");
+  const model = await getGeminiTextModel("caption");
   const startedAt = Date.now();
   let ok = false;
   try {

@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
-import { generateText, parseModelJson } from "@/lib/gemini";
+import { parseModelJson } from "@/lib/gemini";
+import { generateAiText } from "@/lib/ai-text";
 import { getTextModel } from "@/lib/ai-models";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { toUserMessage } from "@/lib/user-facing-error";
@@ -103,10 +104,10 @@ export async function POST(req: NextRequest) {
     .filter(Boolean)
     .join("\n");
 
-  const { model } = await getTextModel("caption");
+  const textModel = await getTextModel("caption");
+  const { model } = textModel;
   try {
-    const raw = await generateText({
-      model,
+    const raw = await generateAiText(textModel, {
       label: "legenda",
       system,
       prompt,

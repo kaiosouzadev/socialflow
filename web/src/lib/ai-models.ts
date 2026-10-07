@@ -1,13 +1,16 @@
 import { prisma } from "@/lib/prisma";
+import { getOpenAiKey } from "@/lib/openai-key";
 
 /**
  * Modelo de IA de TEXTO do sistema (legendas, cronograma, assistente, resumo do
- * Dashboard, revisão semanal, artes-base e a verificação de texto das artes).
- * A geração de IMAGENS não passa por aqui (continua em IMAGE_MODEL, lib/gemini.ts).
+ * Dashboard, revisão semanal e artes-base) — Gemini (Google) ou ChatGPT (OpenAI).
+ * A geração de IMAGENS não passa por aqui (continua em IMAGE_MODEL, lib/gemini.ts), e a
+ * verificação de texto das artes (recebe imagem) fica SEMPRE no Gemini (getGeminiTextModel).
+ * Para gerar texto use `generateAiText` (lib/ai-text.ts), que roteia pelo provedor.
  *
  * Ordem de resolução (getTextModel):
  *   1. configuração salva em Administração → "Modelos de IA" (app_settings['ai.textModel'],
- *      UM modelo para todo o texto);
+ *      UM modelo para todo o texto; com ChatGPT, só se houver chave da OpenAI — senão o passo 2/3);
  *   2. sem configuração (ou "Padrão do sistema"): env GEMINI_CAPTION_MODEL / GEMINI_CALENDAR_MODEL;
  *   3. padrão de código por função (legendas: gemini-2.5-flash · calendário: gemini-3.5-flash).
  * Sem nada salvo, o resultado é idêntico ao de antes desta tela.
@@ -15,13 +18,10 @@ import { prisma } from "@/lib/prisma";
  * A leitura do banco tem cache curto em memória (TEXT_MODEL_CACHE_MS) e é invalidada ao salvar.
  * Se a tabela não existir (produção antes da migração) ou o banco falhar, vale o passo 2/3
  * sem quebrar nada (um aviso no log por processo).
- *
- * `provider` já está modelado para o ChatGPT ("openai"), mas ainda é recusado
- * (OPENAI_UNAVAILABLE) até existir o adaptador.
  */
 
 import {
-  OPENAI_UNAVAILABLE,
+  OPENAI_KEY_MISSING,
   TEXT_MODEL_DEFAULTS,
   isValidModelId,
   type AiProvider,
@@ -31,7 +31,8 @@ import {
 // a parte pura (opções, validação do ID, nomes) vive em lib/ai-model-options.ts (serve à tela também)
 export {
   MODEL_ID_PATTERN,
-  OPENAI_UNAVAILABLE,
+  OPENAI_KEY_MISSING,
+  PROVIDER_LABELS,
   TEXT_MODEL_DEFAULTS,
   TEXT_MODEL_OPTIONS,
   isValidModelId,
@@ -40,8 +41,8 @@ export {
 } from "@/lib/ai-model-options";
 export type { AiProvider, TextModelKind } from "@/lib/ai-model-options";
 
-/** O que os geradores de texto usam (hoje só Google/Gemini). */
-export type TextModel = { provider: "google"; model: string };
+/** O que os geradores de texto usam: provedor + ID do modelo. */
+export type TextModel = { provider: AiProvider; model: string };
 /** Valor salvo em app_settings['ai.textModel']. `model: null` = padrão do sistema. */
 export type TextModelSetting = { provider: AiProvider; model: string | null };
 
@@ -69,11 +70,11 @@ export function parseTextModelSetting(value: unknown): TextModelSetting | null {
 }
 
 /**
- * Regra pura: configuração salva (Google com modelo) vence; senão o modelo do sistema.
- * "openai" ainda não tem adaptador → também cai no modelo do sistema.
+ * Regra pura: configuração salva (com modelo) vence; senão o modelo do sistema (Gemini).
+ * A falta de chave da OpenAI é checada em getTextModel (precisa do banco).
  */
 export function resolveTextModel(kind: TextModelKind, setting: TextModelSetting | null): TextModel {
-  if (setting && setting.provider === "google" && setting.model) return { provider: "google", model: setting.model };
+  if (setting && setting.model) return { provider: setting.provider, model: setting.model };
   return { provider: "google", model: systemTextModel(kind) };
 }
 
@@ -119,7 +120,6 @@ async function readSetting(): Promise<TextModelSetting | null> {
     if (!row) return null;
     const setting = parseTextModelSetting(row.value);
     if (!setting) warnOnce("valor inválido em app_settings['ai.textModel']; usando o padrão do sistema");
-    else if (setting.provider === "openai") warnOnce(`${OPENAI_UNAVAILABLE}; usando o padrão do sistema`);
     return setting;
   } catch (e) {
     const code = errorCode(e);
@@ -150,11 +150,27 @@ async function loadSetting(): Promise<TextModelSetting | null> {
 }
 
 /**
- * Modelo de texto a usar AGORA na função `kind`. Nunca lança: sem banco/tabela,
- * devolve o modelo do sistema (env → padrão).
+ * Modelo de texto a usar AGORA na função `kind` (provedor + ID). Nunca lança: sem banco/tabela,
+ * devolve o modelo do sistema (env → padrão). ChatGPT escolhido sem chave da OpenAI (nem salva
+ * nem no ambiente) → modelo do sistema, com um aviso no log (a geração não para).
  */
 export async function getTextModel(kind: TextModelKind): Promise<TextModel> {
-  return resolveTextModel(kind, await loadSetting());
+  const resolved = resolveTextModel(kind, await loadSetting());
+  if (resolved.provider === "openai" && !(await getOpenAiKey())) {
+    warnOnce("ChatGPT escolhido, mas sem chave da OpenAI; usando o padrão do sistema (Gemini)");
+    return { provider: "google", model: systemTextModel(kind) };
+  }
+  return resolved;
+}
+
+/**
+ * Modelo GEMINI para o que só roda no Gemini (a verificação de texto das artes, que recebe
+ * imagem): o Gemini escolhido na tela, ou — com ChatGPT escolhido — o modelo do sistema.
+ */
+export async function getGeminiTextModel(kind: TextModelKind): Promise<string> {
+  const setting = await loadSetting();
+  if (setting && setting.provider === "google" && setting.model) return setting.model;
+  return systemTextModel(kind);
 }
 
 // ------------------------------------------------------------ tela de Administração
@@ -222,6 +238,13 @@ export function describeModelTestError(e: unknown): string {
   if (name === "AbortError" || name === "TimeoutError" || /\b(aborted|timed out)\b/i.test(msg)) {
     return "Tempo esgotado: o modelo demorou demais para responder. Tente de novo.";
   }
+  if (msg === OPENAI_KEY_MISSING) return OPENAI_KEY_MISSING;
+  const openai = /^OpenAI (\d{3}) ([\w.-]+)/.exec(msg);
+  if (openai) return describeOpenAiStatus(Number(openai[1]), openai[2]);
+  if (/^OpenAI não retornou/i.test(msg)) {
+    return "O modelo respondeu sem texto. Tente de novo; se repetir, escolha outro modelo.";
+  }
+  if (/^Falha de conexão com a OpenAI/.test(msg)) return "Falha de conexão com a OpenAI. Tente de novo em instantes.";
   if (/GEMINI_API_KEY/.test(msg)) return "A IA não está configurada no servidor. Avise o administrador do sistema.";
   const status = /^Gemini (\d{3})\b/.exec(msg)?.[1];
   if (status === "404") return "Modelo não encontrado: confira o ID.";
@@ -236,5 +259,17 @@ export function describeModelTestError(e: unknown): string {
   if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket hang up/i.test(msg)) {
     return "Falha de conexão com a IA. Tente de novo em instantes.";
   }
+  return "Não foi possível testar o modelo agora. Tente de novo em instantes.";
+}
+
+/** Erro HTTP da OpenAI (status + code) → frase pt-BR curta para a tela de Administração. */
+function describeOpenAiStatus(status: number, code: string): string {
+  if (status === 401 || code === "invalid_api_key") return "Chave da OpenAI inválida: confira a chave salva.";
+  if (code === "insufficient_quota") return "Sem créditos/limite na OpenAI: confira o faturamento da conta.";
+  if (status === 404 || code === "model_not_found") return "Modelo não encontrado: confira o ID.";
+  if (status === 403) return "Sem permissão para usar este modelo com a chave da OpenAI.";
+  if (status === 429) return "Limite de uso da OpenAI atingido agora. Tente de novo em alguns minutos.";
+  if (status >= 500) return "A OpenAI está instável agora. Tente de novo em instantes.";
+  if (status === 400) return "A OpenAI recusou o pedido para este modelo: confira o ID.";
   return "Não foi possível testar o modelo agora. Tente de novo em instantes.";
 }

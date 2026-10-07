@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { generateText } from "@/lib/gemini";
-import { getTextModel } from "@/lib/ai-models";
+import { generateAiText } from "@/lib/ai-text";
 import { effectiveCaption } from "@/lib/production";
 
 const TZ = "America/Sao_Paulo";
@@ -88,8 +87,7 @@ export async function generateDailySummary(
   if (posts.length === 0) {
     content = "Nenhum post agendado para hoje. Bom momento para planejar a semana ou gerar um calendário com IA.";
   } else {
-    content = await generateText({
-      model: (await getTextModel("caption")).model,
+    content = await generateAiText("caption", {
       label: "resumo-dashboard",
       prompt: buildPrompt(day, posts),
       system: "Você é assistente de uma agência de social media. Responde direto, sem rodeios.",

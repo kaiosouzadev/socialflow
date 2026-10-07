@@ -1,7 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { generateText } from "@/lib/gemini";
-import { getTextModel } from "@/lib/ai-models";
+import { generateAiText } from "@/lib/ai-text";
 import {
   buildCaptionBatchPrompt,
   parseCaptionBatch,
@@ -88,8 +87,7 @@ export async function generateCaptionBatch(
     format: p.format,
   }));
   const { system, prompt } = buildCaptionBatchPrompt(client, batchItems);
-  const raw = await generateText({
-    model: (await getTextModel("calendar")).model,
+  const raw = await generateAiText("calendar", {
     label: "legendas-lote",
     system,
     prompt,

@@ -4,6 +4,7 @@ import { requireAuth } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { geminiFetch, logTextGeneration, parseModelJson, GEMINI_BASE } from "@/lib/gemini";
 import { getTextModel } from "@/lib/ai-models";
+import { generateOpenAiText } from "@/lib/ai-text";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { briefingForPrompt } from "@/lib/client-briefing-prompt";
@@ -54,8 +55,11 @@ export async function POST(req: NextRequest) {
   const limited = enforceRateLimit(`ai-assistant:${clientIp(req)}`, 30, 60_000);
   if (limited) return limited;
 
+  // provedor/modelo de Administração → "Modelos de IA": o Gemini precisa da GEMINI_API_KEY;
+  // o ChatGPT usa a chave da OpenAI (lib/ai-text)
+  const textModel = await getTextModel("caption");
   const key = process.env.GEMINI_API_KEY;
-  if (!key) {
+  if (textModel.provider === "google" && !key) {
     const cause = "GEMINI_API_KEY não configurada";
     console.error("[ai/assistant]", cause);
     return Response.json({ error: toUserMessage(cause, FALLBACK) }, { status: 500 });
@@ -121,37 +125,23 @@ export async function POST(req: NextRequest) {
     parts: [{ text: m.content }],
   }));
 
-  const { model } = await getTextModel("caption");
+  const { model } = textModel;
   const startedAt = Date.now();
   let ok = false;
   try {
-    const res = await geminiFetch(
-      `${GEMINI_BASE}/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({
-          contents,
-          systemInstruction: { parts: [{ text: system }] },
-          generationConfig: {
+    const text =
+      textModel.provider === "openai"
+        ? // ChatGPT: a mesma conversa e as mesmas regras, pelo adaptador da OpenAI (que registra o próprio log)
+          await generateOpenAiText(model, {
+            label: "assistente",
+            system,
+            messages,
             temperature: 0.9,
-            responseMimeType: "application/json",
+            json: true,
             maxOutputTokens: 8192,
-          },
-        }),
-      },
-      25_000
-    );
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`Gemini ${res.status}: ${detail.slice(0, 200)}`);
-    }
-    const data = await res.json();
-    const text: string =
-      data?.candidates?.[0]?.content?.parts
-        ?.map((p: { text?: string }) => p.text ?? "")
-        .join("") ?? "";
-    if (!text.trim()) throw new Error("Gemini não retornou texto (resposta vazia)");
+            timeoutMs: 25_000,
+          })
+        : await geminiAssistantText(key ?? "", model, contents, system);
 
     const out = parseModelJson<{ reply?: string; title?: string; caption?: string; artPrompt?: string }>(text);
     ok = true;
@@ -170,6 +160,44 @@ export async function POST(req: NextRequest) {
     console.error("[ai/assistant]", e);
     return Response.json({ error: toUserMessage(e, FALLBACK) }, { status: 502 });
   } finally {
-    logTextGeneration("assistente", model, startedAt, ok);
+    // a OpenAI já registrou a chamada; o Gemini registra aqui (como antes)
+    if (textModel.provider === "google") logTextGeneration("assistente", model, startedAt, ok);
   }
+}
+
+/** Assistente no Gemini: conversa com systemInstruction (o mesmo pedido de antes do ChatGPT). */
+async function geminiAssistantText(
+  key: string,
+  model: string,
+  contents: { role: string; parts: { text: string }[] }[],
+  system: string
+): Promise<string> {
+  const res = await geminiFetch(
+    `${GEMINI_BASE}/models/${model}:generateContent`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        contents,
+        systemInstruction: { parts: [{ text: system }] },
+        generationConfig: {
+          temperature: 0.9,
+          responseMimeType: "application/json",
+          maxOutputTokens: 8192,
+        },
+      }),
+    },
+    25_000
+  );
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Gemini ${res.status}: ${detail.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text: string =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((p: { text?: string }) => p.text ?? "")
+      .join("") ?? "";
+  if (!text.trim()) throw new Error("Gemini não retornou texto (resposta vazia)");
+  return text;
 }

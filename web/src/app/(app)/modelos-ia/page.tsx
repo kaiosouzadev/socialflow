@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { readTextModelInfo } from "@/lib/ai-models";
+import { readOpenAiKeyStatus } from "@/lib/openai-key";
 import AiModelSettings from "./AiModelSettings";
 
 export const dynamic = "force-dynamic";
@@ -15,11 +16,11 @@ export default async function AiModelsPage() {
     redirect("/");
   }
 
-  const info = await readTextModelInfo();
+  const [info, openaiKey] = await Promise.all([readTextModelInfo(), readOpenAiKeyStatus()]);
 
   return (
     <div className="page page--narrow">
-      <AiModelSettings initial={info} />
+      <AiModelSettings initial={info} initialKey={openaiKey} />
     </div>
   );
 }

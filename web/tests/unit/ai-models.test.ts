@@ -14,6 +14,9 @@
  *     (401/403), zod com 400 em pt-BR, ChatGPT recusado, salvar invalida o cache, o teste não
  *     salva e traduz os erros da IA sem detalhe técnico (N-14).
  *
+ * F14-OPENAI: com ChatGPT escolhido (e chave da OpenAI salva), TODOS os caminhos de texto vão para a
+ * OpenAI, menos a verificação de texto das artes (recebe imagem → continua no Gemini padrão).
+ *
  * Técnica dos demais testes de rota: hooks de módulo resolvem "@/" para os fontes e trocam
  * Prisma, sessão, avisos, Drive/R2 por versões falsas; lib/gemini roda de verdade sobre um
  * `fetch` falso que registra o modelo de cada chamada — nenhuma IA nem rede reais.
@@ -30,6 +33,8 @@ const CLIENT_ID = "8f120000-0000-4000-8000-000000000001";
 const ADMIN_ID = "8f120000-0000-4000-8000-0000000000a1";
 const CLIENT_NAME = "ZZ QA F12 Cliente";
 const GEMINI_HOST = "https://generativelanguage.googleapis.com/";
+const OPENAI_HOST = "https://api.openai.com/";
+const OPENAI_KEY = `sk-test-ZZQAf12${"z".repeat(24)}QRST`;
 
 // ------------------------------------------------------------ banco, sessão e IA falsos
 
@@ -47,8 +52,8 @@ const state = {
   aiText: "",
   /** status forçado da IA de texto (ex.: 404) */
   aiStatus: 200,
-  /** modelos chamados, na ordem: { model, image } */
-  calls: [] as { model: string; image: boolean }[],
+  /** modelos chamados, na ordem: { model, image, provider } */
+  calls: [] as { model: string; image: boolean; provider: "google" | "openai" }[],
 };
 
 const P2021 = Object.assign(new Error("The table `public.app_settings` does not exist in the current database."), {
@@ -125,15 +130,21 @@ const TINY_PNG = Buffer.from(
 );
 
 let IMAGE_MODEL_ID = "";
-globalThis.fetch = (async (input: string | URL | Request) => {
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   if (url.startsWith("https://example.com/")) {
     return new Response(TINY_PNG, { status: 200, headers: { "content-type": "image/png" } });
   }
+  if (url.startsWith(OPENAI_HOST)) {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+    assert.equal((init?.headers as Record<string, string>).Authorization, `Bearer ${OPENAI_KEY}`);
+    state.calls.push({ model: body.model ?? "?", image: false, provider: "openai" });
+    return Response.json({ output: [{ type: "message", content: [{ type: "output_text", text: state.aiText }] }] });
+  }
   assert.ok(url.startsWith(GEMINI_HOST), `rede real bloqueada no teste: ${url}`);
   const model = /\/models\/([^:]+):generateContent$/.exec(url)?.[1] ?? "?";
   const image = model === IMAGE_MODEL_ID;
-  state.calls.push({ model, image });
+  state.calls.push({ model, image, provider: "google" });
   if (image) {
     return Response.json({
       candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: TINY_PNG.toString("base64") } }] } }],
@@ -191,10 +202,13 @@ registerHooks({
 });
 
 process.env.GEMINI_API_KEY = "chave-ia-falsa";
+process.env.TOKEN_ENC_KEY = "f12a".repeat(16);
+delete process.env.OPENAI_API_KEY;
 delete process.env.GEMINI_CAPTION_MODEL;
 delete process.env.GEMINI_CALENDAR_MODEL;
 
 const aiModels = await import("../../src/lib/ai-models.ts");
+const openaiKey = await import("../../src/lib/openai-key.ts");
 const { IMAGE_MODEL } = await import("../../src/lib/gemini.ts");
 IMAGE_MODEL_ID = IMAGE_MODEL;
 const settingsRoute = await import("../../src/app/api/settings/ai-model/route.ts");
@@ -210,6 +224,7 @@ const { generateCaptionBatch } = await import("../../src/lib/calendar-captions.t
 const { genTemplateCaptions } = await import("../../src/lib/basic-plan.ts");
 const { generateArt } = await import("../../src/lib/art-gen.ts");
 
+const cryptoLib = await import("../../src/lib/crypto.ts");
 const { getTextModel, invalidateTextModelCache, TEXT_MODEL_KEY } = aiModels;
 
 const ADMIN = { user: { id: ADMIN_ID, email: "zzqa.f12.admin@example.com", role: "admin" } };
@@ -227,7 +242,20 @@ function reset() {
   fakePrisma.appSetting = appSettingDelegate;
   delete process.env.GEMINI_CAPTION_MODEL;
   delete process.env.GEMINI_CALENDAR_MODEL;
+  delete process.env.OPENAI_API_KEY;
   invalidateTextModelCache();
+  openaiKey.invalidateOpenAiKeyCache();
+}
+
+/** Chave da OpenAI salva (cifrada) direto no banco falso. */
+function saveOpenAiKeyDirect() {
+  const { encryptToken } = cryptoLib;
+  state.settings.set(openaiKey.OPENAI_KEY_SETTING, {
+    value: { enc: encryptToken(OPENAI_KEY), last4: OPENAI_KEY.slice(-4), updatedAt: new Date().toISOString() },
+    updatedAt: new Date(),
+    updatedBy: ADMIN_ID,
+  });
+  openaiKey.invalidateOpenAiKeyCache();
 }
 
 function saveDirect(value: unknown) {
@@ -280,7 +308,7 @@ describe("getTextModel: ordem configuração → env → padrão", () => {
     assert.equal((await getTextModel("calendar")).model, DEFAULTS.calendar);
   });
 
-  test("valor ilegível ou provider openai no banco → padrão do sistema (sem lançar)", async () => {
+  test("valor ilegível no banco → padrão do sistema (sem lançar)", async () => {
     for (const value of [
       { provider: "google", model: "gemini 3.8 flash" },
       { provider: "google", model: "../x" },
@@ -288,12 +316,28 @@ describe("getTextModel: ordem configuração → env → padrão", () => {
       "gemini-3.8-flash",
       null,
       [],
-      { provider: "openai", model: "gpt-4o-mini" },
+      { provider: "openai", model: "gpt..4o" },
     ]) {
       saveDirect(value);
       assert.equal((await getTextModel("caption")).model, DEFAULTS.caption, JSON.stringify(value));
       assert.equal((await getTextModel("calendar")).model, DEFAULTS.calendar, JSON.stringify(value));
     }
+  });
+
+  test("ChatGPT salvo: vale com chave da OpenAI; sem chave (nem salva nem no ambiente) → padrão, sem lançar", async () => {
+    saveDirect({ provider: "openai", model: "gpt-5-mini" });
+    assert.deepEqual(await getTextModel("caption"), { provider: "google", model: DEFAULTS.caption });
+    assert.deepEqual(await getTextModel("calendar"), { provider: "google", model: DEFAULTS.calendar });
+    saveOpenAiKeyDirect();
+    assert.deepEqual(await getTextModel("caption"), { provider: "openai", model: "gpt-5-mini" });
+    assert.deepEqual(await getTextModel("calendar"), { provider: "openai", model: "gpt-5-mini" });
+    // o verificador da arte (imagem) continua no Gemini padrão
+    assert.equal(await aiModels.getGeminiTextModel("caption"), DEFAULTS.caption);
+    // só a do ambiente também vale
+    state.settings.delete(openaiKey.OPENAI_KEY_SETTING);
+    openaiKey.invalidateOpenAiKeyCache();
+    process.env.OPENAI_API_KEY = OPENAI_KEY;
+    assert.deepEqual(await getTextModel("caption"), { provider: "openai", model: "gpt-5-mini" });
   });
 
   test("tabela ausente (P2021): padrão do sistema, sem erro, aviso uma vez só", async () => {
@@ -331,10 +375,10 @@ describe("getTextModel: ordem configuração → env → padrão", () => {
 
 describe("validação do ID e mensagens do teste", () => {
   test("IDs aceitos e recusados (sem espaços, sem barra, minúsculas)", () => {
-    for (const ok of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-2.5-flash-preview-05-20", "gemini-flash-latest", "gpt-4o-mini"]) {
+    for (const ok of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-2.5-flash-preview-05-20", "gemini-flash-latest", "gpt-4o-mini", "gpt-5-mini", "gpt-4.1-mini", "o4-mini", "gpt-4o-2024-08-06"]) {
       assert.ok(aiModels.isValidModelId(ok), ok);
     }
-    for (const bad of ["", "gemini 3.8", "Gemini-3.8", "models/gemini", "gemini:3", "a?b", "-gemini", "gemini-", "x".repeat(81)]) {
+    for (const bad of ["", "gemini 3.8", "Gemini-3.8", "models/gemini", "gemini:3", "a?b", "a#b", "gpt..5", "-gemini", "gemini-", "x".repeat(81)]) {
       assert.ok(!aiModels.isValidModelId(bad), bad);
     }
     assert.equal(aiModels.normalizeModelId("  models/Gemini-3.8-Flash "), "gemini-3.8-flash");
@@ -518,6 +562,22 @@ describe("todos os caminhos de texto usam o modelo resolvido; a imagem nunca mud
         assert.equal(IMAGE_MODEL, "gemini-3-pro-image");
       }
     });
+
+    test(`${p.name}: com ChatGPT (chave salva) = OpenAI${p.image ? " — menos o verificador da arte, que fica no Gemini" : ""}`, async () => {
+      saveDirect({ provider: "openai", model: "gpt-5-mini" });
+      saveOpenAiKeyDirect();
+      state.calls = [];
+      const modelAfter = await p.run();
+      const text = state.calls.filter((c) => !c.image);
+      if (p.image) {
+        // verificação de texto da arte (recebe imagem): sempre Gemini, com o modelo padrão
+        assert.deepEqual(text, [{ model: DEFAULTS.caption, image: false, provider: "google" }]);
+        assert.deepEqual(state.calls.filter((c) => c.image).map((c) => c.model), [IMAGE_MODEL]);
+      } else {
+        assert.deepEqual(text, p.kinds.map(() => ({ model: "gpt-5-mini", image: false, provider: "openai" })));
+      }
+      if (modelAfter !== undefined) assert.equal(modelAfter, "gpt-5-mini", "campo model da resposta");
+    });
   }
 
   test("log do servidor: função, modelo e tempo de cada geração, sem dado do cliente", async () => {
@@ -526,7 +586,7 @@ describe("todos os caminhos de texto usam o modelo resolvido; a imagem nunca mud
     await TEXT_PATHS[0].run();
     const line = logs.info.slice(before).find((l) => l.startsWith("[ia-texto]"));
     assert.ok(line, "sem log [ia-texto]");
-    assert.match(line!, /^\[ia-texto\] legenda modelo=gemini-3\.7-flash \d+ms ok$/);
+    assert.match(line!, /^\[ia-texto\] legenda provedor=google modelo=gemini-3\.7-flash \d+ms ok$/);
     assert.doesNotMatch(line!, /ZZ QA|Tema|Legenda/);
   });
 });
@@ -546,9 +606,14 @@ describe("varredura de src/: nenhum caminho de texto fora do getTextModel", () =
     assert.deepEqual(hits, []);
   });
 
-  test("todo arquivo que chama a IA está na lista coberta acima (e usa getTextModel ou IMAGE_MODEL)", () => {
+  test("todo arquivo que chama a IA está na lista coberta acima (e passa pelo roteador ou pelo modelo resolvido)", () => {
+    const ADAPTERS = ["lib/gemini.ts", "lib/openai.ts", "lib/ai-text.ts"];
     const callers = files
-      .filter((f) => f.rel !== "lib/gemini.ts" && /\b(generateText|geminiFetch)\(/.test(f.text))
+      .filter(
+        (f) =>
+          !ADAPTERS.includes(f.rel) &&
+          /\b(generateText|geminiFetch|generateAiText|generateOpenAiText|openaiGenerateText|requestOpenAiText)\(/.test(f.text)
+      )
       .map((f) => f.rel)
       .sort();
     assert.deepEqual(callers, [
@@ -565,9 +630,22 @@ describe("varredura de src/: nenhum caminho de texto fora do getTextModel", () =
       "lib/weekly.ts",
     ]);
     for (const rel of callers) {
-      if (rel === "app/api/settings/ai-model/test/route.ts") continue; // testa o modelo pedido, não gera conteúdo
       const text = files.find((f) => f.rel === rel)!.text;
-      assert.match(text, /getTextModel\(/, `${rel} não usa getTextModel`);
+      // ninguém fora dos adaptadores chama o Gemini de texto direto, só pelo roteador (generateAiText)
+      assert.doesNotMatch(text, /\bgenerateText\(/, `${rel} chama generateText direto`);
+      if (rel === "lib/art-gen.ts") {
+        // imagem (IMAGE_MODEL) + verificador de texto da arte: sempre Gemini
+        assert.match(text, /getGeminiTextModel\(/);
+        continue;
+      }
+      if (rel === "app/api/ai/assistant/route.ts") {
+        // conversa: Gemini no formato próprio (geminiFetch) ou OpenAI pelo adaptador, conforme getTextModel
+        assert.match(text, /getTextModel\(/);
+        assert.match(text, /generateOpenAiText\(/);
+        continue;
+      }
+      assert.match(text, /generateAiText\(/, `${rel} não usa generateAiText`);
+      assert.doesNotMatch(text, /geminiFetch\(/, `${rel} chama o Gemini direto`);
     }
   });
 });
@@ -630,13 +708,13 @@ describe("GET/PUT /api/settings/ai-model (só administradores)", () => {
     assert.equal((await getTextModel("calendar")).model, "gemini-2.5-flash-lite");
   });
 
-  test("400 em pt-BR: corpo inválido, ID com espaço e ChatGPT (ainda indisponível); nada gravado", async () => {
+  test("400 em pt-BR: corpo inválido, ID com espaço e ChatGPT sem chave da OpenAI; nada gravado", async () => {
     const cases: [unknown, number, RegExp, string][] = [
       [null, 400, /^Escolha um modelo da lista/, "model"],
       [{ model: 42 }, 400, /^Escolha um modelo da lista/, "model"],
       [{ model: "gemini 3.8 flash" }, 400, /^ID de modelo inválido/, "model"],
       [{ model: "gemini/../x" }, 400, /^ID de modelo inválido/, "model"],
-      [{ provider: "openai", model: "gpt-4o-mini" }, 400, /^ChatGPT ainda não está disponível/, "provider"],
+      [{ provider: "openai", model: "gpt-4o-mini" }, 400, /^Configure a chave da OpenAI antes de usar o ChatGPT\.$/, "openaiKey"],
     ];
     for (const [body, status, re, field] of cases) {
       const r = await json(await settingsRoute.PUT(req("http://localhost/api/settings/ai-model", "PUT", body)));
@@ -663,7 +741,7 @@ describe("POST /api/settings/ai-model/test (Testar modelo — não salva)", () =
   beforeEach(reset);
   const url = "http://localhost/api/settings/ai-model/test";
 
-  test("401/403 e 400 (ID inválido, ChatGPT) em pt-BR, sem chamar a IA", async () => {
+  test("401/403 e 400 (ID inválido, ChatGPT sem chave) em pt-BR, sem chamar a IA", async () => {
     state.session = null;
     assert.equal((await testRoute.POST(req(url, "POST", { model: "gemini-3.8-flash" }))).status, 401);
     state.session = STAFF;
@@ -674,7 +752,8 @@ describe("POST /api/settings/ai-model/test (Testar modelo — não salva)", () =
     assert.match(r.body.error as string, /^ID de modelo inválido/);
     r = await json(await testRoute.POST(req(url, "POST", { provider: "openai", model: "gpt-4o" })));
     assert.equal(r.status, 400);
-    assert.match(r.body.error as string, /^ChatGPT ainda não está disponível/);
+    assert.equal(r.body.error, "Configure a chave da OpenAI antes de usar o ChatGPT.");
+    assert.equal(r.body.field, "openaiKey");
     assert.equal(state.calls.length, 0);
   });
 
@@ -688,7 +767,7 @@ describe("POST /api/settings/ai-model/test (Testar modelo — não salva)", () =
     assert.equal(results[0].label, "Gemini 3.8 Flash (gemini-3.8-flash)");
     assert.equal(results[0].ok, true);
     assert.equal(typeof results[0].ms, "number");
-    assert.deepEqual(state.calls, [{ model: "gemini-3.8-flash", image: false }]);
+    assert.deepEqual(state.calls, [{ model: "gemini-3.8-flash", image: false, provider: "google" }]);
     assert.equal(state.upserts, 0);
     assert.equal(state.settings.size, 0);
   });
@@ -722,5 +801,14 @@ describe("POST /api/settings/ai-model/test (Testar modelo — não salva)", () =
     const r = await json(await testRoute.POST(req(url, "POST", { model: "gemini-3.8-flash" }, fixed)));
     assert.equal(r.status, 429);
     assert.match(r.body.error as string, /^Muitas requisições/);
+  });
+});
+
+describe("logs da rodada inteira", () => {
+  test("nenhum log contém a chave da OpenAI", () => {
+    const all = [...logs.info, ...logs.warn, ...logs.error];
+    assert.deepEqual(all.filter((l) => l.includes(OPENAI_KEY) || /sk-test|ZZQAf12/.test(l)), []);
+    // e o log [ia-texto] da OpenAI tem provedor e modelo
+    assert.ok(all.some((l) => /^\[ia-texto\] legenda provedor=openai modelo=gpt-5-mini \d+ms ok$/.test(l)));
   });
 });

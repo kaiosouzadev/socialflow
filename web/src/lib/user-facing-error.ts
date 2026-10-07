@@ -21,6 +21,14 @@ const RULES: readonly { test: RegExp; message: string }[] = [
   { test: /MEDIA_SIGNING_SECRET/, message: `O link seguro das mídias não está configurado no servidor. ${ADMIN}` },
   { test: /TOKEN_ENC_KEY/, message: `A proteção de credenciais não está configurada no servidor. ${ADMIN}` },
   { test: /INTERNAL_API_KEY/, message: `A integração interna não está configurada no servidor. ${ADMIN}` },
+  // OpenAI (ChatGPT): chave ausente (lib/ai-text) e "OpenAI <status> <code>: …" (lib/openai, já sem a chave)
+  { test: /chave da OpenAI antes de usar o ChatGPT|OPENAI_API_KEY/, message: `A chave da OpenAI (ChatGPT) não está configurada. ${ADMIN}` },
+  { test: /^OpenAI (401\b|\d{3} invalid_api_key\b)/, message: `A chave da OpenAI (ChatGPT) foi recusada. ${ADMIN}` },
+  { test: /^OpenAI 429 insufficient_quota\b/, message: `A conta da OpenAI (ChatGPT) está sem créditos ou no limite de gastos. ${ADMIN}` },
+  { test: /^OpenAI 429\b/, message: "A inteligência artificial atingiu o limite de uso agora. Tente de novo em alguns minutos." },
+  { test: /^OpenAI (404\b|\d{3} model_not_found\b)/, message: `O modelo de IA escolhido não foi encontrado. ${ADMIN}` },
+  { test: /^OpenAI \d{3}\b/, message: "A inteligência artificial não respondeu. Tente de novo em instantes." },
+  { test: /^OpenAI não retornou/, message: "A inteligência artificial não devolveu um resultado válido. Tente de novo." },
   // falhas em tempo de execução
   { test: /^Gemini (image )?429\b/i, message: "A inteligência artificial atingiu o limite de uso agora. Tente de novo em alguns minutos." },
   { test: /^Gemini (image )?\d{3}\b/i, message: "A inteligência artificial não respondeu. Tente de novo em instantes." },

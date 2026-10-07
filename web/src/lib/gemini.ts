@@ -1,7 +1,10 @@
+import { logTextGeneration } from "@/lib/ai-log";
+
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 
-// Modelos de TEXTO: não ficam mais aqui. Use `await getTextModel("caption" | "calendar")`
-// (lib/ai-models.ts): configuração de Administração → "Modelos de IA" → env → padrão.
+// Modelos de TEXTO: não ficam mais aqui. Gere texto com `generateAiText("caption" | "calendar", …)`
+// (lib/ai-text.ts): resolve o provedor/modelo de Administração → "Modelos de IA" (Gemini ou
+// ChatGPT) → env → padrão. Este arquivo continua sendo o adaptador do Gemini.
 // gemini-3-pro-image (Nano Banana Pro): tipografia/texto muito mais confiável
 // que os modelos flash-image — essencial para artes com título/contato legíveis.
 export const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
@@ -25,13 +28,8 @@ type GenerateOptions = {
   label?: string;
 };
 
-/**
- * Log de uma geração de texto (para comparar modelos): função, modelo, tempo e resultado.
- * Sem prompt, sem resposta e sem dado de cliente.
- */
-export function logTextGeneration(label: string, model: string, startedAt: number, ok: boolean): void {
-  console.info(`[ia-texto] ${label} modelo=${model} ${Date.now() - startedAt}ms ${ok ? "ok" : "erro"}`);
-}
+// log `[ia-texto]` (lib/ai-log): reexportado para quem já importava daqui (assistente, art-gen)
+export { logTextGeneration };
 
 /**
  * Extrai JSON de uma resposta de modelo: aceita JSON puro ou cercado por
