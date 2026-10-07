@@ -1,14 +1,21 @@
 /**
- * E-mails do cliente (puro). `Client.email` é o principal (@unique) e
+ * E-mails do cliente (puro). `Client.email` é o principal e
  * `Client.extraEmails` guarda até 10 adicionais — normalizados (trim +
  * minúsculas), sem duplicatas e sem repetir o principal. Os adicionais NÃO
  * são únicos entre clientes (franquias podem compartilhar contato).
+ * O principal é único só entre os clientes COM aprovação (índice parcial
+ * uq_clients_email_aprovacao, sem diferenciar maiúsculas); cliente sem
+ * aprovação pode repetir o de outro cliente (ex.: o e-mail da agência).
  * Todos recebem link mensal, link semanal e notificações ao cliente,
  * 1 e-mail por destinatário.
  */
 import { regexes } from "zod/v4/core";
 
 export const MAX_EXTRA_EMAILS = 10;
+
+/** 409 de POST/PATCH /api/clients: e-mail principal já usado por outro cliente COM aprovação. */
+export const APPROVAL_EMAIL_TAKEN =
+  "Já existe um cliente com aprovação usando este e-mail. Use outro e-mail ou marque este cliente como sem aprovação.";
 
 /** trim + minúsculas. */
 export function normalizeEmail(email: string): string {

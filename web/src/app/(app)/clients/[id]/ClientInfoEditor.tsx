@@ -14,7 +14,7 @@ import { MultiEmailInput } from "@/components/MultiEmailInput";
 import { SegmentedControl } from "@/components/Toggle";
 import { Toast, type ToastState } from "@/components/Toast";
 import { StatusBadge } from "@/components/ui";
-import { isValidEmail, normalizeEmail } from "@/lib/client-emails";
+import { APPROVAL_EMAIL_TAKEN, isValidEmail, normalizeEmail } from "@/lib/client-emails";
 import { clientColor } from "@/lib/client-color";
 import { CLIENT_STATUS, CLIENT_STATUSES, PLAN, PLANS, SEGMENTS, TIER, TIERS, labelOf } from "@/lib/status-meta";
 
@@ -154,8 +154,10 @@ async function readFailure(res: Response, fallback: string): Promise<ApiFailure>
   if (res.status === 401) return { fields: {}, itemErrors: {}, message: "Sua sessão expirou. Entre de novo para salvar." };
   if (res.status === 404) return { fields: {}, itemErrors: {}, message: "Cliente não encontrado. Ele pode ter sido excluído." };
   if (res.status === 409) {
-    const message = "Já existe um cliente com este e-mail principal.";
-    return { fields: { email: message }, itemErrors: {}, message };
+    // e-mail principal já usado por outro cliente COM aprovação (o servidor manda texto e campo)
+    const message = typeof error === "string" ? error : APPROVAL_EMAIL_TAKEN;
+    const key: FieldKey = typeof field === "string" && isFieldKey(field) ? field : "email";
+    return { fields: { [key]: message }, itemErrors: {}, message };
   }
   if (res.status === 400 && typeof error === "string") {
     const fields: FormErrors = typeof field === "string" && isFieldKey(field) ? { [field]: error } : {};
@@ -437,14 +439,23 @@ function validate(v: FormValues): FormErrors {
   return e;
 }
 
-/** Foca o 1º campo inválido (ids `${prefix}-${campo}`). */
+/**
+ * Foca o 1º campo inválido (ids `${prefix}-${campo}`). Depois de salvar, o campo pode continuar
+ * `disabled` (saving) por alguns quadros até o React aplicar o estado: tenta de novo até ~30 quadros.
+ */
 function focusFirstInvalid(prefix: string, errors: FormErrors) {
   const key = FIELD_ORDER.find((k) => errors[k]);
   if (!key) return;
-  requestAnimationFrame(() => {
+  let tries = 0;
+  const step = () => {
     const el = document.getElementById(`${prefix}-${key}`);
-    if (el && !(el as HTMLInputElement).disabled) el.focus();
-  });
+    if (el && !(el as HTMLInputElement).disabled) {
+      el.focus();
+      return;
+    }
+    if (++tries < 30) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 const FOCUSABLE =
@@ -562,7 +573,16 @@ function ClientFormFields({
             id={`${prefix}-email`}
             label="E-mail principal"
             required
-            help="Recebe os links de aprovação e os avisos."
+            help={
+              <>
+                Recebe os links de aprovação e os avisos.
+                {values.plan === "sem_aprovacao" && (
+                  <span className="mt-0.5 block">
+                    Sem aprovação: pode repetir o e-mail de outro cliente (ex.: o e-mail da agência).
+                  </span>
+                )}
+              </>
+            }
             error={errors.email}
           >
             <Input

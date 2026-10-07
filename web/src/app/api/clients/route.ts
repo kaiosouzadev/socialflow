@@ -3,7 +3,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { scheduleAllBasicMonths } from "@/lib/basic-plan";
-import { normalizeExtraEmails } from "@/lib/client-emails";
+import { APPROVAL_EMAIL_TAKEN, normalizeExtraEmails } from "@/lib/client-emails";
 import { CLIENT_STATUSES, SEGMENTS } from "@/lib/status-meta";
 import { uuidString } from "@/lib/validators";
 import { z } from "zod";
@@ -110,8 +110,10 @@ export async function POST(req: NextRequest) {
 
     return Response.json({ ...client, basicPlan }, { status: 201 });
   } catch (e) {
+    // único índice único de clients além do id: uq_clients_email_aprovacao (e-mail repetido entre
+    // clientes COM aprovação; sem aprovação pode repetir — migração 2026-10-07)
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      return Response.json({ error: "Já existe um cliente com este email" }, { status: 409 });
+      return Response.json({ error: APPROVAL_EMAIL_TAKEN, field: "email" }, { status: 409 });
     }
     throw e;
   }

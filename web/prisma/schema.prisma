@@ -29,7 +29,13 @@ model User {
 model Client {
   id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name          String
-  email         String    @unique
+  // e-mail principal. SEM @unique de propósito: cliente "sem_aprovacao" pode repetir o e-mail de
+  // outro cliente (ex.: o da agência); entre os "aprovacao_cliente" ele é único (sem diferenciar
+  // maiúsculas) pelo índice parcial uq_clients_email_aprovacao — lower(email) WHERE
+  // plan = 'aprovacao_cliente' — criado em system/migrations/2026-10-07-email-cliente-sem-aprovacao.sql.
+  // O Prisma não modela índice parcial: violação chega como P2002 (409 nas APIs de clients).
+  // Não usar `prisma db push` neste banco (removeria o índice).
+  email         String
   plan          String    @default("sem_aprovacao")
   toneOfVoice   String?   @map("tone_of_voice")
   // override opcional: ID da pasta do cliente no Drive. Se vazio, busca pelo nome.

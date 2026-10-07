@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
-import { normalizeEmail, normalizeExtraEmails } from "@/lib/client-emails";
+import { APPROVAL_EMAIL_TAKEN, normalizeEmail, normalizeExtraEmails } from "@/lib/client-emails";
 import { CLIENT_STATUSES, SEGMENTS } from "@/lib/status-meta";
 import { uuidString } from "@/lib/validators";
 import { z } from "zod";
@@ -208,7 +208,11 @@ export async function PATCH(
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError) {
       if (e.code === "P2025") return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
-      if (e.code === "P2002") return Response.json({ error: "Já existe um cliente com este email" }, { status: 409 });
+      // uq_clients_email_aprovacao: e-mail de outro cliente COM aprovação (inclui trocar o plano
+      // sem → com aprovação). A transação é desfeita: nada é gravado.
+      if (e.code === "P2002") {
+        return Response.json({ error: APPROVAL_EMAIL_TAKEN, field: "email" }, { status: 409 });
+      }
     }
     throw e;
   }
