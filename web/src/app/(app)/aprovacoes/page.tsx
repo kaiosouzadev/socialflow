@@ -11,6 +11,7 @@ import { approvalDeadline } from "@/lib/production";
 import SchedulesManager, { type ScheduleRow } from "./SchedulesManager";
 import AdjustmentsPanel, { type AdjustmentRow } from "./AdjustmentsPanel";
 import WeeklyRunButton from "./WeeklyRunButton";
+import { freshnessOf, lastActivity, parseScheduleFilters } from "./schedules-view";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,9 @@ export const metadata: Metadata = { title: "Aprovações" };
 
 /** Cronograma aberto para o cliente: ajuste pedido aqui bloqueia a aprovação do cronograma. */
 const OPEN_FOR_CLIENT = ["enviado_cliente", "em_revisao"];
+
+/** Aprovados carregados (os mais recentes); os demais status vêm todos — são o trabalho em aberto. */
+const APPROVED_LIMIT = 100;
 
 const DAY = 86_400_000;
 
@@ -48,26 +52,39 @@ function shortDateTime(d: Date, currentYear: string): string {
 }
 
 /** Mês do cronograma (@db.Date, meia-noite UTC): usa a chave civil, nunca o Date (N-03). */
-function scheduleMonth(monthRef: Date): string {
-  return formatMonthLabel(monthRef.toISOString().slice(0, 7));
+function scheduleMonthKey(monthRef: Date): string {
+  return monthRef.toISOString().slice(0, 7);
 }
 
 function hasArt(p: { mediaUrl: string | null; mediaItems: unknown }): boolean {
   return !!p.mediaUrl || (Array.isArray(p.mediaItems) && p.mediaItems.length > 0);
 }
 
-export default async function AprovacoesPage() {
-  const [schedules, pendingAdjustments] = await Promise.all([
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+const scheduleInclude = {
+  client: {
+    select: { name: true, plan: true, agencyPublishes: true, email: true, extraEmails: true },
+  },
+  // só o necessário para as contagens das linhas, dos diálogos e da última atividade — sem legendas/thumbs
+  posts: { select: { status: true, mediaUrl: true, mediaItems: true, clientNote: true, createdAt: true } },
+} as const;
+
+export default async function AprovacoesPage({ searchParams }: { searchParams: SearchParams }) {
+  const filters = parseScheduleFilters(await searchParams);
+
+  const [open, approved, pendingAdjustments] = await Promise.all([
+    // em aberto: todos (é o trabalho da equipe; nenhum pode sumir por limite)
     prisma.schedule.findMany({
+      where: { status: { not: "aprovado_cliente" } },
       orderBy: { createdAt: "desc" },
-      take: 100,
-      include: {
-        client: {
-          select: { name: true, plan: true, agencyPublishes: true, email: true, extraEmails: true },
-        },
-        // só o necessário para as contagens das linhas e dos diálogos — sem legendas/thumbs
-        posts: { select: { status: true, mediaUrl: true, mediaItems: true, clientNote: true } },
-      },
+      include: scheduleInclude,
+    }),
+    prisma.schedule.findMany({
+      where: { status: "aprovado_cliente" },
+      orderBy: [{ approvedAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
+      take: APPROVED_LIMIT,
+      include: scheduleInclude,
     }),
     prisma.postAdjustment.findMany({
       where: { status: "pendente" },
@@ -86,6 +103,7 @@ export default async function AprovacoesPage() {
       },
     }),
   ]);
+  const schedules = [...open, ...approved];
 
   const now = new Date();
   const currentYear = YEAR.format(now);
@@ -107,12 +125,26 @@ export default async function AprovacoesPage() {
     const deadline = waiting
       ? approvalDeadline({ scheduledAt: s.monthRef, schedule: { status: s.status, monthRef: s.monthRef } })
       : null;
+    // última atividade (F13): o post mais novo conta — calendário salvo num cronograma antigo sobe
+    const latestPostAt = s.posts.reduce<Date | null>(
+      (max, p) => (!max || p.createdAt.getTime() > max.getTime() ? p.createdAt : max),
+      null
+    );
+    const activity = {
+      createdAt: s.createdAt,
+      sentAt: s.sentAt,
+      approvedAt: s.approvedAt,
+      changesAskedAt: s.changesAskedAt,
+      latestPostAt,
+    };
+    const monthKey = scheduleMonthKey(s.monthRef);
     return {
       id: s.id,
       client: s.client.name,
       plan: s.client.plan,
       agencyPublishes: s.client.agencyPublishes,
-      month: scheduleMonth(s.monthRef),
+      monthKey,
+      month: formatMonthLabel(monthKey),
       status: s.status,
       posts: s.posts.length,
       withMedia: s.posts.filter(hasArt).length,
@@ -130,6 +162,9 @@ export default async function AprovacoesPage() {
       clientDeadline: deadline ? shortDate(deadline, currentYear) : null,
       overdue: !!deadline && now.getTime() > deadline.getTime(),
       approvedAt: s.approvedAt ? shortDate(s.approvedAt, currentYear) : null,
+      createdAt: shortDate(s.createdAt, currentYear),
+      lastActivity: lastActivity(activity).getTime(),
+      freshness: freshnessOf(activity, now),
       link: s.approvalToken ? approvalLink(s.approvalToken) : null,
     };
   });
@@ -141,7 +176,9 @@ export default async function AprovacoesPage() {
     postId: a.post.id,
     postTheme: a.post.theme ?? "",
     clientName: a.post.client.name,
-    month: a.post.schedule ? scheduleMonth(a.post.schedule.monthRef) : formatMonthLabel(a.post.scheduledAt),
+    month: a.post.schedule
+      ? formatMonthLabel(scheduleMonthKey(a.post.schedule.monthRef))
+      : formatMonthLabel(a.post.scheduledAt),
     scheduleId: a.post.scheduleId,
     phase: a.post.schedule && OPEN_FOR_CLIENT.includes(a.post.schedule.status) ? "cronograma" : "post",
   }));
@@ -154,11 +191,11 @@ export default async function AprovacoesPage() {
         action={<WeeklyRunButton />}
       />
       <AdjustmentsPanel rows={adjustmentRows} />
-      <section aria-labelledby="cronogramas-titulo">
-        <h2 id="cronogramas-titulo" className="mb-3 text-base font-semibold text-fg">
-          Cronogramas
-        </h2>
-        {rows.length === 0 ? (
+      {rows.length === 0 ? (
+        <section aria-labelledby="cronogramas-titulo">
+          <h2 id="cronogramas-titulo" className="mb-3 text-base font-semibold text-fg">
+            Cronogramas
+          </h2>
           <EmptyState
             title="Nenhum cronograma ainda"
             description="Gere o cronograma com IA ou importe o documento do mês na página do cliente."
@@ -169,10 +206,10 @@ export default async function AprovacoesPage() {
             }
             headingLevel={3}
           />
-        ) : (
-          <SchedulesManager rows={rows} />
-        )}
-      </section>
+        </section>
+      ) : (
+        <SchedulesManager rows={rows} initialFilters={filters} approvedCapped={approved.length === APPROVED_LIMIT} />
+      )}
     </div>
   );
 }

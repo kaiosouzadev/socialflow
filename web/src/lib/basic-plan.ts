@@ -223,16 +223,16 @@ export async function scheduleBasicMonth(
 
   const [y, m] = monthKey.split("-").map(Number);
   const monthRef = new Date(`${y}-${pad(m)}-01T00:00:00${SP_OFFSET}`);
-  let schedule = await prisma.schedule.findFirst({
-    where: { clientId, monthRef },
-    select: { id: true },
-  });
-  if (!schedule) {
-    schedule = await prisma.schedule.create({
-      data: { clientId, monthRef, status: "rascunho" },
-      select: { id: true },
-    });
-  }
+  // F13: o cronograma do mês só nasce junto com o 1º post (mesma transação). Antes ele era
+  // criado aqui, antes do laço: mês com todos os dias já passados (ou só templates já
+  // agendados) deixava um cronograma vazio em /aprovacoes.
+  let scheduleId =
+    (
+      await prisma.schedule.findFirst({
+        where: { clientId, monthRef },
+        select: { id: true },
+      })
+    )?.id ?? null;
 
   for (const tpl of templates) {
     if (done.has(tpl.id)) continue;
@@ -262,21 +262,30 @@ export async function scheduleBasicMonth(
     }
     const captions = postCaptions(tplCaptions, hashtagBlock);
 
-    await prisma.post.create({
-      data: {
-        clientId: client.id,
-        scheduleId: schedule.id,
-        theme: tpl.name.slice(0, 200),
-        captions: Object.keys(captions).length
-          ? (captions as Prisma.InputJsonValue)
-          : undefined,
-        format: "feed",
-        scheduledAt,
-        targets,
-        status: "draft",
-        artTemplateId: tpl.id,
-      },
-    });
+    const data = {
+      clientId: client.id,
+      theme: tpl.name.slice(0, 200),
+      captions: Object.keys(captions).length
+        ? (captions as Prisma.InputJsonValue)
+        : undefined,
+      format: "feed",
+      scheduledAt,
+      targets,
+      status: "draft",
+      artTemplateId: tpl.id,
+    };
+    if (scheduleId) {
+      await prisma.post.create({ data: { ...data, scheduleId } });
+    } else {
+      scheduleId = await prisma.$transaction(async (tx) => {
+        const created = await tx.schedule.create({
+          data: { clientId, monthRef, status: "rascunho" },
+          select: { id: true },
+        });
+        await tx.post.create({ data: { ...data, scheduleId: created.id } });
+        return created.id;
+      });
+    }
     result.scheduled++;
   }
 

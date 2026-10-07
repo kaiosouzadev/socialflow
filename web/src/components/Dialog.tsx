@@ -230,7 +230,7 @@ export function Dialog({
         pressedOnBackdrop.current = false;
         if (fromBackdrop && closeOnBackdrop) requestClose();
       }}
-      className="m-0 h-dvh max-h-none w-full max-w-none overflow-visible border-0 bg-transparent p-0 text-fg backdrop:bg-scrim backdrop:animate-[sf-fade-in_var(--sf-dur-base)_var(--sf-ease-out)_backwards]"
+      className="m-0 h-dvh max-h-none w-full max-w-none overflow-visible border-0 bg-transparent p-0 text-left text-fg backdrop:bg-scrim backdrop:animate-[sf-fade-in_var(--sf-dur-base)_var(--sf-ease-out)_backwards]"
     >
       {open && (
         <div ref={wrapperRef} className="flex h-full w-full items-end justify-center sm:items-center sm:p-4">

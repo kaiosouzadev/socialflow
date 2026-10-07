@@ -1,15 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Icon } from "@/components/Icons";
 import { Button, buttonClasses } from "@/components/Button";
 import { Callout } from "@/components/Callout";
 import { ConfirmDialog } from "@/components/Dialog";
-import { StatusBadge, ToneBadge } from "@/components/ui";
+import { Popover } from "@/components/Popover";
+import { EmptyState, StatusBadge, ToneBadge } from "@/components/ui";
 import { Toast, type ToastState } from "@/components/Toast";
-import { metaOf, SCHEDULE_STATUS, type Tone } from "@/lib/status-meta";
+import { labelOf, metaOf, PLAN, SCHEDULE_STATUS, type Tone } from "@/lib/status-meta";
+import EmptySchedules from "./EmptySchedules";
+import ScheduleFilters from "./ScheduleFilters";
+import {
+  APPROVED_PREVIEW,
+  buildScheduleView,
+  countLabel,
+  filtersQuery,
+  FRESHNESS_LABEL,
+  GROUP_META,
+  hasActiveFilters,
+  monthOptions,
+  NO_FILTERS,
+  type Freshness,
+  type ScheduleFilters as Filters,
+  type ScheduleGroup,
+} from "./schedules-view";
 
 export type ScheduleRow = {
   id: string;
@@ -18,6 +35,8 @@ export type ScheduleRow = {
   plan: string;
   /** false = cliente só produção: aprovar não coloca nada na fila */
   agencyPublishes: boolean;
+  /** "2026-10" (filtro de mês) */
+  monthKey: string;
   /** "Outubro de 2026" */
   month: string;
   status: string;
@@ -45,6 +64,12 @@ export type ScheduleRow = {
   /** prazo do cliente vencido sem resposta: tom de aviso e "Reenviar" como ação principal */
   overdue: boolean;
   approvedAt: string | null;
+  /** criado em "07/10" */
+  createdAt: string;
+  /** ms da última atividade (criação, envio, aprovação, ajuste pedido, post mais novo) — ordem da lista */
+  lastActivity: number;
+  /** selo "Novo" / "Atualizado hoje" */
+  freshness: Freshness;
   link: string | null;
 };
 
@@ -83,36 +108,44 @@ function strings(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-/** Contagem de arte (A-023): neutra antes do envio e sem posts; alarme só quando importa. */
-function ArtBadge({ row }: { row: ScheduleRow }) {
-  if (row.posts === 0) return <ToneBadge tone="neutral">Sem posts</ToneBadge>;
+/** Ícone 14 px dentro de texto corrido. */
+function InlineIcon({ children }: { children: React.ReactNode }) {
+  return (
+    <span aria-hidden="true" className="inline-flex size-3.5 shrink-0 [&>svg]:size-full">
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Contagem de arte em texto (A-023): neutra antes do envio; depois do envio, aviso só quando
+ * importa (o texto diz o número; o ícone e a cor reforçam).
+ */
+function ArtText({ row }: { row: ScheduleRow }) {
   const text = `${row.withMedia}/${row.posts} com arte`;
   if (NOT_SENT.has(row.status) || !(row.status in STEP_OF)) {
-    return (
-      <ToneBadge tone="neutral" title="As artes podem chegar depois da aprovação dos temas.">
-        {text}
-      </ToneBadge>
-    );
+    return <span title="As artes podem chegar depois da aprovação dos temas.">{text}</span>;
   }
   if (row.withMedia === row.posts) {
     return (
-      <ToneBadge tone="success" icon={<Icon.check />}>
+      <span className="inline-flex items-center gap-1 text-success-fg">
+        <InlineIcon>
+          <Icon.check />
+        </InlineIcon>
         {text}
-      </ToneBadge>
+      </span>
     );
   }
   const hint = row.agencyPublishes ? "Posts sem arte falham na publicação." : "Ainda faltam artes.";
-  if (row.status === "aprovado_cliente" && row.agencyPublishes && row.withMedia === 0) {
-    return (
-      <ToneBadge tone="danger" icon={<Icon.alert />} title={hint}>
-        {text}
-      </ToneBadge>
-    );
-  }
+  const danger = row.status === "aprovado_cliente" && row.agencyPublishes && row.withMedia === 0;
   return (
-    <ToneBadge tone="warning" icon={<Icon.alert />} title={hint}>
+    <span title={hint} className={`inline-flex items-center gap-1 font-medium ${danger ? "text-danger-fg" : "text-warning-fg"}`}>
+      <InlineIcon>
+        <Icon.alert />
+      </InlineIcon>
       {text}
-    </ToneBadge>
+      <span className="sr-only"> ({hint})</span>
+    </span>
   );
 }
 
@@ -123,27 +156,53 @@ function waitingLabel(days: number): string {
 }
 
 /**
- * Idade do envio ao lado do status (U-09): neutra dentro do prazo; com o prazo do cliente
- * vencido, tom de aviso + ícone (a cor nunca é o único sinal: o texto do prazo diz "vencido").
+ * Envio e espera do cliente (U-09), numa linha de texto: neutra dentro do prazo; com o prazo
+ * vencido, tom de aviso + ícone (a cor nunca é o único sinal: o texto diz "vencido").
  */
-function WaitingBadge({ row }: { row: ScheduleRow }) {
-  if (row.waitingDays === null) return null;
-  const label = waitingLabel(row.waitingDays);
-  if (row.overdue) {
-    return (
-      <ToneBadge
-        tone="warning"
-        icon={<Icon.alert />}
-        title={row.clientDeadline ? `O prazo do cliente venceu em ${row.clientDeadline}` : undefined}
+function ClientLine({ row }: { row: ScheduleRow }) {
+  const parts: React.ReactNode[] = [];
+  if (row.sentAt) parts.push(<span key="sent">Enviado em {row.sentAt}</span>);
+  if (row.waitingDays !== null) {
+    parts.push(
+      <span
+        key="wait"
+        className={`inline-flex items-center gap-1 ${row.overdue ? "font-medium text-warning-fg" : ""}`}
       >
-        {label}
-      </ToneBadge>
+        <InlineIcon>{row.overdue ? <Icon.alert /> : <Icon.clock />}</InlineIcon>
+        {waitingLabel(row.waitingDays)}
+      </span>
     );
   }
+  if (row.clientDeadline) {
+    parts.push(
+      row.overdue ? (
+        <span key="deadline" className="font-medium text-warning-fg">
+          Prazo do cliente: {row.clientDeadline} (vencido)
+        </span>
+      ) : (
+        <span key="deadline">Prazo do cliente: {row.clientDeadline}</span>
+      )
+    );
+  }
+  if (parts.length === 0) return null;
+  return <MetaLine className="mt-1">{parts}</MetaLine>;
+}
+
+/** Partes separadas por "·" (decorativo). O ponto fica no fim da parte: ao quebrar, a linha nova não começa nele. */
+function MetaLine({ children, className = "" }: { children: React.ReactNode[]; className?: string }) {
   return (
-    <ToneBadge tone="neutral" icon={<Icon.clock />}>
-      {label}
-    </ToneBadge>
+    <p className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-fg-muted ${className}`}>
+      {children.map((part, i) => (
+        <span key={i} className="inline-flex items-center gap-2">
+          {part}
+          {i < children.length - 1 && (
+            <span aria-hidden="true" className="text-fg-faint">
+              ·
+            </span>
+          )}
+        </span>
+      ))}
+    </p>
   );
 }
 
@@ -161,6 +220,88 @@ function Steps({ status }: { status: string }) {
         Etapa {current + 1} de {STEPS.length} · {STEPS[current]}
       </p>
     </div>
+  );
+}
+
+/** Item do menu "Mais ações": botão ou link (abre em nova aba). */
+type MenuItem = {
+  key: string;
+  label: string;
+  icon: React.ReactNode;
+  onSelect?: () => void;
+  href?: string;
+};
+
+function MoreMenu({ label, items, disabled }: { label: string; items: MenuItem[]; disabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
+  const itemClass =
+    "flex min-h-11 w-full items-center gap-2.5 rounded-control px-2.5 text-left text-sm text-fg hover:bg-hover active:bg-press sm:min-h-10";
+  const iconBox = (icon: React.ReactNode) => (
+    <span aria-hidden="true" className="inline-flex size-4 shrink-0 text-fg-muted [&>svg]:size-full">
+      {icon}
+    </span>
+  );
+  return (
+    <>
+      <Button
+        ref={anchorRef}
+        iconOnly
+        variant="ghost"
+        aria-label={label}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Icon.moreHorizontal />
+      </Button>
+      <Popover
+        open={open}
+        onOpenChange={setOpen}
+        anchorRef={anchorRef}
+        placement="bottom-end"
+        id={menuId}
+        aria-label={label}
+        className="w-64 p-1.5"
+      >
+        <div className="grid gap-0.5">
+          {items.map((it) =>
+            it.href ? (
+              <a
+                key={it.key}
+                href={it.href}
+                target="_blank"
+                rel="noreferrer"
+                className={itemClass}
+                onClick={() => setOpen(false)}
+              >
+                {iconBox(it.icon)}
+                {it.label}
+                <span className="sr-only"> (abre em nova aba)</span>
+              </a>
+            ) : (
+              <button
+                key={it.key}
+                type="button"
+                className={itemClass}
+                onClick={() => {
+                  // fecha e devolve o foco ao "Mais ações": o diálogo aberto a seguir volta para ele
+                  setOpen(false);
+                  anchorRef.current?.focus();
+                  it.onSelect?.();
+                }}
+              >
+                {iconBox(it.icon)}
+                {it.label}
+              </button>
+            )
+          )}
+        </div>
+      </Popover>
+    </>
   );
 }
 
@@ -185,6 +326,7 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
   const disabled = busy !== "";
   // prazo do cliente vencido sem resposta: a borda acompanha o aviso (U-09)
   const tone: Tone = row.overdue ? "warning" : metaOf(SCHEDULE_STATUS, row.status).tone;
+  const title = `${row.client} · ${row.month}`;
 
   function openDialog(kind: DialogKind) {
     setDialogError(null);
@@ -419,113 +561,41 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
     return out;
   }
 
-  /* ---------------- ações: 1 primária = o próximo passo do status (DESIGN h.3) ---------------- */
+  /* ---------------- ações: 1 primária (o próximo passo do status), 1 secundária, o resto em "…" ---------------- */
 
-  const copyButton = (variant: "primary" | "ghost") =>
-    link ? (
-      <Button
-        key="copy"
-        variant={variant}
-        size="sm"
-        leadingIcon={<Icon.copy />}
-        onClick={() => void copy()}
-        fullWidth={variant === "primary"}
-        className={variant === "primary" ? "sm:w-auto" : ""}
-      >
-        Copiar link
-      </Button>
-    ) : null;
-
-  const openLink = link ? (
-    <a
-      key="open"
-      href={link}
-      target="_blank"
-      rel="noreferrer"
-      className={buttonClasses({ variant: "ghost", size: "sm" })}
-    >
-      <span aria-hidden="true" className="inline-flex size-4 shrink-0 [&>svg]:size-full">
-        <Icon.externalLink />
-      </span>
-      Abrir link
-      <span className="sr-only"> (abre em nova aba)</span>
-    </a>
-  ) : null;
-
-  const resendButton = (variant: "primary" | "secondary") => (
-    <Button
-      key="resend"
-      variant={variant}
-      size="sm"
-      leadingIcon={<Icon.send />}
-      disabled={disabled}
-      onClick={() => openDialog("resend")}
-      fullWidth={variant === "primary"}
-      className={variant === "primary" ? "sm:w-auto" : ""}
-    >
-      Reenviar
-    </Button>
-  );
-
-  const sendButton = (variant: "primary" | "secondary") => (
-    <Button
-      key="send"
-      variant={variant}
-      size="sm"
-      leadingIcon={<Icon.send />}
-      loading={busy === "send"}
-      loadingText="Enviando…"
-      disabled={disabled}
-      onClick={startSend}
-      fullWidth={variant === "primary"}
-      className={variant === "primary" ? "sm:w-auto" : ""}
-    >
-      Enviar ao cliente
-    </Button>
-  );
-
-  const approveButton = (variant: "primary" | "ghost") => (
-    <Button
-      key="approve"
-      variant={variant}
-      size="sm"
-      leadingIcon={<Icon.check />}
-      disabled={disabled}
-      onClick={() => openDialog("approve")}
-      fullWidth={variant === "primary"}
-      className={variant === "primary" ? "sm:w-auto" : ""}
-    >
-      {approveLabel}
-    </Button>
-  );
+  type Action = { key: string; label: string; icon: React.ReactNode; run?: () => void; href?: string; busy?: boolean; busyText?: string };
+  const A = {
+    copy: link ? { key: "copy", label: "Copiar link", icon: <Icon.copy />, run: () => void copy() } : null,
+    open: link ? { key: "open", label: "Abrir link", icon: <Icon.externalLink />, href: link } : null,
+    resend: { key: "resend", label: "Reenviar", icon: <Icon.send />, run: () => openDialog("resend") },
+    send: {
+      key: "send",
+      label: "Enviar ao cliente",
+      icon: <Icon.send />,
+      run: startSend,
+      busy: busy === "send",
+      busyText: "Enviando…",
+    },
+    approve: { key: "approve", label: approveLabel, icon: <Icon.check />, run: () => openDialog("approve") },
+    revert: { key: "revert", label: "Reverter aprovação", icon: <Icon.refresh />, run: () => openDialog("revert") },
+  } satisfies Record<string, Action | null>;
 
   let primary: React.ReactNode = null;
-  let secondary: React.ReactNode[] = [];
+  let primaryAction: Action | null = null;
+  let others: (Action | null)[] = [];
   if (approved) {
-    secondary = [
-      openLink,
-      <Button
-        key="revert"
-        variant="secondary"
-        size="sm"
-        leadingIcon={<Icon.refresh />}
-        disabled={disabled}
-        onClick={() => openDialog("revert")}
-      >
-        Reverter aprovação
-      </Button>,
-    ];
+    others = [A.open, A.revert];
   } else if (row.status === "enviado_cliente") {
+    // prazo vencido sem resposta (U-09): o próximo passo é lembrar o cliente
     if (row.overdue || !link) {
-      // prazo vencido sem resposta (U-09): o próximo passo é lembrar o cliente
-      primary = resendButton("primary");
-      secondary = [copyButton("ghost"), openLink, approveButton("ghost")];
+      primaryAction = A.resend;
+      others = [A.copy, A.open, A.approve];
     } else {
-      primary = copyButton("primary");
-      secondary = [resendButton("secondary"), openLink, approveButton("ghost")];
+      primaryAction = A.copy;
+      others = [A.resend, A.open, A.approve];
     }
   } else if (row.status === "em_revisao") {
-    const adjustLink = `${buttonClasses({ variant: "primary", size: "sm", fullWidth: true })} sm:w-auto`;
+    const adjustLink = `${buttonClasses({ variant: "primary", fullWidth: true })} sm:w-auto`;
     if (row.pendingAdjustments > 0) {
       // ajuste formal: a equipe conclui no painel acima, o que libera a aprovação do cliente
       primary = (
@@ -541,19 +611,55 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
       );
     }
     // sem ajuste para ver, o próximo passo é reenviar
-    if (primary) secondary = [resendButton("secondary"), copyButton("ghost"), approveButton("ghost")];
+    if (primary) others = [A.resend, A.copy, A.open, A.approve];
     else {
-      primary = resendButton("primary");
-      secondary = [copyButton("ghost"), approveButton("ghost")];
+      primaryAction = A.resend;
+      others = [A.copy, A.open, A.approve];
     }
   } else if (withApproval) {
-    primary = sendButton("primary");
-    secondary = [approveButton("ghost")];
+    primaryAction = A.send;
+    others = [A.approve];
   } else {
-    primary = approveButton("primary");
-    secondary = [sendButton("secondary")];
+    primaryAction = A.approve;
+    others = [A.send];
   }
-  secondary = secondary.filter(Boolean);
+  const rest = others.filter((a): a is Action => a !== null);
+  // 1 secundária visível; com 3 ou mais ações além da primária, as outras vão para o "…"
+  const visibleSecondary = rest.length <= 2 ? rest : rest.slice(0, 1);
+  const menuActions = rest.length <= 2 ? [] : rest.slice(1);
+
+  const renderButton = (a: Action, variant: "primary" | "secondary") =>
+    a.href ? (
+      <a
+        key={a.key}
+        href={a.href}
+        target="_blank"
+        rel="noreferrer"
+        className={`${buttonClasses({ variant, fullWidth: variant === "primary" })} ${variant === "primary" ? "sm:w-auto" : ""}`}
+      >
+        <span aria-hidden="true" className="inline-flex size-4.5 shrink-0 [&>svg]:size-full">
+          {a.icon}
+        </span>
+        {a.label}
+        <span className="sr-only"> (abre em nova aba)</span>
+      </a>
+    ) : (
+      <Button
+        key={a.key}
+        variant={variant}
+        leadingIcon={a.icon}
+        loading={a.busy}
+        loadingText={a.busyText}
+        disabled={disabled}
+        onClick={a.run}
+        fullWidth={variant === "primary"}
+        className={variant === "primary" ? "sm:w-auto" : ""}
+      >
+        {a.label}
+      </Button>
+    );
+
+  if (primaryAction) primary = renderButton(primaryAction, "primary");
 
   /* ---------------- diálogo aberto ---------------- */
 
@@ -599,40 +705,40 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
               }
             : null;
 
+  const meta: React.ReactNode[] = [
+    <span key="posts">{count(row.posts, "post", "posts")}</span>,
+    <ArtText key="art" row={row} />,
+    <span key="plan">{labelOf(PLAN, row.plan).toLowerCase()}</span>,
+  ];
+  if (!row.agencyPublishes) {
+    meta.push(
+      <span key="prod" title="A agência produz o conteúdo, mas o sistema não agenda nem publica.">
+        só produção
+      </span>
+    );
+  }
+
   return (
-    <li className={`border-l-3 px-4 py-4 ${BORDER[tone]}`}>
+    <li className={`border-l-3 px-4 py-4 sm:px-5 ${BORDER[tone]}`} data-schedule={row.id}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-            <h3 className="text-sm font-semibold text-fg">
+            <h3 className="text-base font-semibold text-fg">
               {row.client} <span className="font-normal text-fg-muted">· {row.month}</span>
             </h3>
             <StatusBadge kind="schedule" status={row.status} />
-            <WaitingBadge row={row} />
-            {!row.agencyPublishes && (
-              <span title="A agência produz o conteúdo, mas o sistema não agenda nem publica.">
-                <StatusBadge kind="agencyPublishes" status="nao" />
-              </span>
+            {row.freshness && (
+              <ToneBadge tone={row.freshness === "novo" ? "accent" : "info"}>{FRESHNESS_LABEL[row.freshness]}</ToneBadge>
             )}
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-fg-muted">
-            <span>{count(row.posts, "post", "posts")}</span>
-            <ArtBadge row={row} />
-            <StatusBadge kind="plan" status={row.plan} />
-            {row.sentAt && <span>Enviado em {row.sentAt}</span>}
-            {row.clientDeadline &&
-              (row.overdue ? (
-                <span className="font-medium text-warning-fg">Prazo do cliente: {row.clientDeadline} (vencido)</span>
-              ) : (
-                <span>Prazo do cliente: {row.clientDeadline}</span>
-              ))}
-          </div>
+          <MetaLine className="mt-1.5">{meta}</MetaLine>
+          <ClientLine row={row} />
           <Steps status={row.status} />
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:max-w-xl lg:shrink-0 lg:justify-end">
           {approved && (
-            <p className="inline-flex min-h-10 items-center gap-1.5 text-sm font-medium text-success-fg sm:min-h-8">
+            <p className="inline-flex min-h-11 items-center gap-1.5 text-sm font-medium text-success-fg sm:min-h-10">
               <span aria-hidden="true" className="inline-flex size-4 shrink-0 [&>svg]:size-full">
                 <Icon.check />
               </span>
@@ -640,7 +746,24 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
             </p>
           )}
           {primary}
-          {secondary.length > 0 && <div className="flex flex-wrap items-center gap-2">{secondary}</div>}
+          {(visibleSecondary.length > 0 || menuActions.length > 0) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {visibleSecondary.map((a) => renderButton(a, "secondary"))}
+              {menuActions.length > 0 && (
+                <MoreMenu
+                  label={`Mais ações: ${title}`}
+                  disabled={disabled}
+                  items={menuActions.map((a) => ({
+                    key: a.key,
+                    label: a.label,
+                    icon: a.icon,
+                    href: a.href,
+                    onSelect: a.run,
+                  }))}
+                />
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -653,7 +776,7 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
           onDismiss={() => setEmailIssue(null)}
           action={
             link ? (
-              <Button variant="secondary" size="sm" leadingIcon={<Icon.copy />} onClick={() => void copy()}>
+              <Button variant="secondary" leadingIcon={<Icon.copy />} onClick={() => void copy()}>
                 Copiar link
               </Button>
             ) : undefined
@@ -696,15 +819,132 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
   );
 }
 
-export default function SchedulesManager({ rows }: { rows: ScheduleRow[] }) {
-  const [toast, setToast] = useState<ToastState>(null);
+function GroupSection({
+  id,
+  rows,
+  notify,
+  collapsible,
+  approvedCapped,
+}: {
+  id: ScheduleGroup;
+  rows: ScheduleRow[];
+  notify: Notify;
+  /** "Aprovados" sem filtro: só os mais recentes + "Ver todos" */
+  collapsible: boolean;
+  approvedCapped: boolean;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const titleId = `grupo-${id}`;
+  const listId = `grupo-${id}-lista`;
+  const meta = GROUP_META[id];
+  const limited = collapsible && !showAll && rows.length > APPROVED_PREVIEW;
+  const shown = limited ? rows.slice(0, APPROVED_PREVIEW) : rows;
   return (
-    <>
-      <ul aria-labelledby="cronogramas-titulo" className="card divide-y divide-line overflow-hidden">
-        {rows.map((r) => (
-          <RowItem key={r.id} row={r} notify={setToast} />
+    <section aria-labelledby={titleId}>
+      <div className="mb-3">
+        <h2 id={titleId} className="flex flex-wrap items-center gap-2 text-lg font-semibold text-fg">
+          {meta.title}
+          <span className="inline-flex min-w-7 items-center justify-center rounded-full border border-line bg-neutral-bg px-2 text-sm font-semibold tabular-nums text-fg-muted">
+            {rows.length}
+            <span className="sr-only"> {rows.length === 1 ? "cronograma" : "cronogramas"}</span>
+          </span>
+        </h2>
+        <p className="mt-0.5 text-sm text-fg-muted">{meta.hint}</p>
+      </div>
+      <ul id={listId} aria-labelledby={titleId} className="card divide-y divide-line overflow-hidden">
+        {shown.map((r) => (
+          <RowItem key={r.id} row={r} notify={notify} />
         ))}
       </ul>
+      {collapsible && rows.length > APPROVED_PREVIEW && (
+        <Button
+          variant="ghost"
+          className="mt-2"
+          aria-expanded={showAll}
+          aria-controls={listId}
+          onClick={() => setShowAll((v) => !v)}
+        >
+          {showAll ? `Mostrar só os ${APPROVED_PREVIEW} mais recentes` : `Ver todos os ${rows.length} aprovados`}
+        </Button>
+      )}
+      {collapsible && showAll && approvedCapped && (
+        <p className="mt-1 text-xs text-fg-muted">Mostrando os aprovados mais recentes. Use os filtros para achar um mais antigo.</p>
+      )}
+    </section>
+  );
+}
+
+export default function SchedulesManager({
+  rows,
+  initialFilters,
+  approvedCapped,
+}: {
+  rows: ScheduleRow[];
+  initialFilters: Filters;
+  /** só os aprovados mais recentes vieram do servidor */
+  approvedCapped: boolean;
+}) {
+  const [toast, setToast] = useState<ToastState>(null);
+  const [filters, setFilters] = useState<Filters>(initialFilters);
+  const view = useMemo(() => buildScheduleView(rows, filters), [rows, filters]);
+  const months = useMemo(() => monthOptions(rows), [rows]);
+  const filtered = hasActiveFilters(filters);
+
+  function changeFilters(next: Filters) {
+    setFilters(next);
+    // a URL acompanha (recarregar/compartilhar mantém o filtro) sem ir ao servidor
+    try {
+      window.history.replaceState(null, "", `${window.location.pathname}${filtersQuery(next)}${window.location.hash}`);
+    } catch {
+      /* sem history: o filtro continua só na tela */
+    }
+  }
+
+  return (
+    <>
+      <ScheduleFilters
+        value={filters}
+        months={months}
+        summary={countLabel(view.shown, view.total, filtered)}
+        onChange={changeFilters}
+      />
+
+      {view.groups.length === 0 ? (
+        filtered ? (
+          <EmptyState
+            title="Nenhum cronograma encontrado"
+            description="Nenhum cronograma com posts corresponde aos filtros."
+            action={<Button onClick={() => changeFilters(NO_FILTERS)}>Limpar filtros</Button>}
+            headingLevel={2}
+          />
+        ) : (
+          <EmptyState
+            title="Nenhum cronograma com posts"
+            description="Gere o cronograma com IA ou importe o documento do mês na página do cliente."
+            action={
+              <Link href="/clients" className={buttonClasses({ variant: "secondary" })}>
+                Ver clientes
+              </Link>
+            }
+            headingLevel={2}
+          />
+        )
+      ) : (
+        <div className="grid gap-10">
+          {view.groups.map((g) => (
+            <GroupSection
+              key={g.id}
+              id={g.id}
+              rows={g.rows}
+              notify={setToast}
+              collapsible={g.id === "aprovados" && !filtered}
+              approvedCapped={approvedCapped}
+            />
+          ))}
+        </div>
+      )}
+
+      <EmptySchedules rows={view.empty} notify={setToast} />
       <Toast toast={toast} onClose={() => setToast(null)} />
     </>
   );
