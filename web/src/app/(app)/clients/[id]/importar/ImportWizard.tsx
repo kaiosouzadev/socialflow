@@ -15,7 +15,9 @@ import type {
   BriefingField,
   ImportAnalysis,
   ImportCommitResult,
+  ImportCredential,
   ImportItem,
+  ImportNotImported,
   ImportScheduleStatus,
 } from "@/lib/doc-import-commit";
 import { DOCX_ERROR_MESSAGE, DocxReadError, readDocxFile, refMonthFromFileName } from "@/lib/docx-text";
@@ -26,12 +28,15 @@ import { toUserMessage } from "@/lib/user-facing-error";
 
 /*
  * Importador do documento mensal (S33, DESIGN g.2) em 3 etapas:
- * 1. Fonte: .docx lido AQUI (lib/docx-text) ou texto colado. As credenciais
- *    saem com `stripCredentials` antes de qualquer envio; o .docx nunca vai ao
- *    servidor e nenhum request é multipart (só JSON com o texto).
+ * 1. Fonte: .docx lido AQUI (lib/docx-text) ou texto colado. O .docx nunca vai
+ *    ao servidor e nenhum request é multipart (só JSON com o texto). O texto
+ *    vai inteiro: credenciais saem dele no servidor (extractCredentials) e
+ *    nenhuma resposta traz senha — a prévia só recebe rede, login e "tem senha".
  * 2. Prévia (`mode: "preview"`, S18): nada é gravado. Incluir/excluir por item,
- *    horários padrão por formato, status do cronograma, campos do briefing.
+ *    horários padrão por formato, status do cronograma, campos do briefing,
+ *    credenciais a gravar e a lista do que não tem onde ficar ("não importado").
  * 3. Resultado (`mode: "commit"`, S18): posts SEMPRE rascunho. Nunca agenda.
+ *    Credenciais marcadas: gravadas cifradas em Credenciais do cliente.
  * Estado num `useReducer` (DATA FLOW do DESIGN).
  */
 
@@ -45,11 +50,15 @@ type Step = 1 | 2 | 3;
 type FileState =
   | { status: "empty" }
   | { status: "reading"; name: string; size: number }
-  | { status: "ready"; name: string; size: number; text: string; lines: number; credentialDetected: boolean }
+  | { status: "ready"; name: string; size: number; text: string; lines: number }
   | { status: "error"; name: string; size: number; message: string };
 
-/** O que a prévia recebeu (texto já sem credenciais). O commit reenvia o mesmo texto e mês. */
-type Sent = { text: string; refMonth: string; credentialDetected: boolean };
+/**
+ * O que a prévia recebeu. O commit reenvia o mesmo texto e mês (as credenciais
+ * só são lidas no servidor). Nada do texto com credencial aparece na tela: os
+ * trechos dos avisos saem de `stripCredentials(text)`.
+ */
+type Sent = { text: string; refMonth: string };
 
 type State = {
   step: Step;
@@ -69,6 +78,8 @@ type State = {
   times: Times;
   scheduleStatus: ImportScheduleStatus;
   briefingFields: BriefingField[];
+  /** redes das credenciais do documento que serão gravadas */
+  credentials: string[];
   commitError: string | null;
   result: ImportCommitResult | null;
 };
@@ -81,7 +92,6 @@ type Action =
       name: string;
       size: number;
       text: string;
-      credentialDetected: boolean;
       detected: { refMonth: string; label: string } | null;
     }
   | { type: "fileError"; name: string; size: number; message: string }
@@ -94,6 +104,7 @@ type Action =
   | { type: "time"; format: PostFormat; value: string }
   | { type: "scheduleStatus"; value: ImportScheduleStatus }
   | { type: "briefing"; field: BriefingField; checked: boolean }
+  | { type: "credential"; network: string; checked: boolean }
   | { type: "back" }
   | { type: "commitStart" }
   | { type: "commitFail"; message: string }
@@ -196,6 +207,7 @@ function initialState(): State {
     times: { ...DEFAULT_TIMES },
     scheduleStatus: "rascunho",
     briefingFields: [],
+    credentials: [],
     commitError: null,
     result: null,
   };
@@ -216,7 +228,6 @@ function reducer(state: State, action: Action): State {
           size: action.size,
           text: action.text,
           lines: action.text.split("\n").length,
-          credentialDetected: action.credentialDetected,
         },
         detected: action.detected,
         // o mês vem do nome "_MM - AAAA" e continua editável
@@ -245,6 +256,11 @@ function reducer(state: State, action: Action): State {
         scheduleStatus: "rascunho",
         // só os campos vazios no cadastro vêm marcados
         briefingFields: action.preview.briefing.filter((b) => b.suggested).map((b) => b.field),
+        // vêm marcadas só as `suggested` (briefing, rede identificada, sem credencial salva da rede) e se der
+        // para gravar; "Geral", as de fora do briefing e as que substituiriam uma salva vêm desmarcadas
+        credentials: action.preview.credentialsBlocked
+          ? []
+          : (action.preview.credentials ?? []).filter((c) => c.suggested).map((c) => c.network),
         commitError: null,
         result: null,
       };
@@ -265,6 +281,12 @@ function reducer(state: State, action: Action): State {
       if (action.checked) set.add(action.field);
       else set.delete(action.field);
       return { ...state, briefingFields: [...set] };
+    }
+    case "credential": {
+      const set = new Set(state.credentials);
+      if (action.checked) set.add(action.network);
+      else set.delete(action.network);
+      return { ...state, credentials: [...set] };
     }
     case "back":
       return { ...state, step: 1, busy: null, commitError: null };
@@ -410,18 +432,10 @@ function SourceStep({
     const token = ++readToken.current;
     dispatch({ type: "fileReading", name: file.name, size: file.size });
     try {
-      const raw = await readDocxFile(file);
+      const text = await readDocxFile(file);
       if (token !== readToken.current) return;
-      // credenciais saem aqui, no navegador; o texto bruto não fica guardado no estado
-      const clean = stripCredentials(raw);
-      dispatch({
-        type: "fileReady",
-        name: file.name,
-        size: file.size,
-        text: clean.text,
-        credentialDetected: clean.credentialDetected,
-        detected: refMonthFromFileName(file.name),
-      });
+      // o texto vai inteiro para a prévia: as credenciais são lidas e protegidas no servidor
+      dispatch({ type: "fileReady", name: file.name, size: file.size, text, detected: refMonthFromFileName(file.name) });
     } catch (e) {
       if (token !== readToken.current) return;
       dispatch({
@@ -435,17 +449,13 @@ function SourceStep({
 
   async function generatePreview() {
     if (!canPreview) return;
-    const fromFile = state.source === "file" && state.file.status === "ready";
-    // o arquivo já foi limpo na leitura; o texto colado é limpo agora, antes do envio
-    const clean = stripCredentials(fromFile && state.file.status === "ready" ? state.file.text : state.paste);
-    const credentialDetected =
-      clean.credentialDetected || (state.file.status === "ready" && fromFile && state.file.credentialDetected);
-    if (utf8Bytes(clean.text) > TEXT_MAX_BYTES) {
+    const text = state.source === "file" && state.file.status === "ready" ? state.file.text : state.paste;
+    if (utf8Bytes(text) > TEXT_MAX_BYTES) {
       dispatch({ type: "previewFail", message: TEXT_TOO_LARGE });
       return;
     }
     dispatch({ type: "previewStart" });
-    const r = await callImport(client.id, { mode: "preview", text: clean.text, refMonth: state.refMonth }, PREVIEW_FAILED);
+    const r = await callImport(client.id, { mode: "preview", text, refMonth: state.refMonth }, PREVIEW_FAILED);
     if (!r.ok) {
       dispatch({ type: "previewFail", message: r.message });
       return;
@@ -454,11 +464,7 @@ function SourceStep({
       dispatch({ type: "previewFail", message: PREVIEW_FAILED });
       return;
     }
-    dispatch({
-      type: "previewOk",
-      sent: { text: clean.text, refMonth: state.refMonth, credentialDetected },
-      preview: r.data as unknown as ImportAnalysis,
-    });
+    dispatch({ type: "previewOk", sent: { text, refMonth: state.refMonth }, preview: r.data as unknown as ImportAnalysis });
   }
 
   const pickFile = () => inputRef.current?.click();
@@ -476,8 +482,9 @@ function SourceStep({
         Fonte do documento
       </h2>
 
-      <Callout tone="info" title="Seu documento não sai do navegador">
-        Lemos o .docx aqui mesmo. Senhas e dados de acesso são removidos antes de enviar o texto para a prévia.
+      <Callout tone="info" title="O arquivo .docx não sai do navegador">
+        Lemos o .docx aqui mesmo e só o texto vai para a prévia. Se houver login e senha, a senha não aparece na
+        prévia e só é gravada, criptografada nas credenciais do cliente, quando você importar.
       </Callout>
 
       <Field label="Origem" kind="group" id={originId}>
@@ -573,7 +580,7 @@ function SourceStep({
         <div className="grid gap-1">
           <Field
             label="Texto do documento"
-            help="Cole o documento inteiro, do cabeçalho ao STAND BY. Senhas e dados de acesso são removidos antes do envio."
+            help="Cole o documento inteiro, do cabeçalho ao STAND BY. Senhas não aparecem na prévia e só são gravadas, criptografadas, ao importar."
           >
             <Textarea
               value={state.paste}
@@ -727,8 +734,14 @@ function PreviewStep({
     if (state.commitError) errorRef.current?.focus();
   }, [state.commitError]);
 
+  const credentialsId = useId();
+  const notImportedId = useId();
   const excluded = new Set(state.excluded);
-  const sentLines = sent.text.split("\n");
+  // trechos dos avisos: do texto SEM as linhas de credencial (a numeração das linhas é a mesma)
+  const sentLines = useMemo(() => stripCredentials(sent.text).text.split("\n"), [sent.text]);
+  const docCredentials = preview.credentials ?? [];
+  const notImported = preview.notImported ?? [];
+  const credentialCount = state.credentials.length;
   const posts = preview.items.filter((i) => i.kind !== "stand_by");
   const standBy = preview.items.filter((i) => i.kind === "stand_by");
   const isIncluded = (i: ImportItem) => i.action === "create" && !excluded.has(i.line);
@@ -737,15 +750,15 @@ function PreviewStep({
   const awaiting = posts.filter((i) => i.pendingKind === "aguardando_material");
   const pendingCount = standBy.filter(isIncluded).length + awaiting.filter(isIncluded).length;
   const briefingCount = state.briefingFields.length;
-  const nothing = includedPosts.length + pendingCount + briefingCount === 0;
+  const nothing = includedPosts.length + pendingCount + briefingCount + credentialCount === 0;
   // reimportação: tudo já existe (posts, stand-by) e o briefing já está igual
   const nothingNew =
     selectable.length === 0 &&
     standBy.every((i) => i.action !== "create") &&
-    preview.briefing.every((b) => !b.changed);
+    preview.briefing.every((b) => !b.changed) &&
+    (docCredentials.length === 0 || preview.credentialsBlocked !== null);
   const timeOf = (i: ImportItem) => (i.timeSource === "padrao" ? state.times[i.format] : i.time);
 
-  const credential = sent.credentialDetected || preview.credentialDetected;
   const missingWriters = preview.writers.filter((w) => w.status !== "matched");
   const docWarnings = preview.warnings.filter((w) => w.code === "documento");
   const lineWarnings = (line: number) => docWarnings.filter((w) => w.line === line);
@@ -774,6 +787,7 @@ function PreviewStep({
           scheduleStatus: state.scheduleStatus,
           exclude: state.excluded,
           briefingFields: state.briefingFields,
+          credentials: state.credentials,
         },
       },
       COMMIT_FAILED,
@@ -823,26 +837,12 @@ function PreviewStep({
       </div>
 
       {/* avisos, nesta ordem e só os que existirem */}
-      {(credential ||
-        preview.endOfContract ||
+      {(preview.endOfContract ||
         missingWriters.length > 0 ||
         docWarnings.length > 0 ||
         conflictsTotal > 0 ||
         lockedSchedules.length > 0) && (
         <div className="grid gap-3">
-          {credential && (
-            <Callout tone="warning" title="Credencial descartada">
-              <p>
-                O documento tinha dados de acesso (ex.: “Acesso ao Instagram”). Eles não foram enviados nem serão
-                gravados.
-              </p>
-              <p>
-                <Link href={`/clients/${client.id}#credenciais-titulo`} className={`${LOOSE_LINK} font-medium`}>
-                  Abrir credenciais do cliente
-                </Link>
-              </p>
-            </Callout>
-          )}
           {preview.endOfContract && (
             <Callout
               tone="warning"
@@ -1181,16 +1181,29 @@ function PreviewStep({
       )}
 
       {/* briefing */}
-      {(preview.briefing.length > 0 || preview.emailSuggestion) && (
+      {preview.briefing.length > 0 && (
         <BriefingSection
           id={briefingId}
-          client={client}
           entries={preview.briefing}
           selected={state.briefingFields}
-          emailSuggestion={preview.emailSuggestion}
           onToggle={(field, checked) => dispatch({ type: "briefing", field, checked })}
         />
       )}
+
+      {/* credenciais: rede, login e senha sempre oculta (a senha não vem do servidor) */}
+      {(docCredentials.length > 0 || preview.credentialDetected) && (
+        <CredentialsSection
+          id={credentialsId}
+          client={client}
+          credentials={docCredentials}
+          blocked={preview.credentialsBlocked ?? null}
+          selected={state.credentials}
+          onToggle={(network, checked) => dispatch({ type: "credential", network, checked })}
+        />
+      )}
+
+      {/* o que o documento traz e não tem onde ficar */}
+      {notImported.length > 0 && <NotImportedSection id={notImportedId} client={client} items={notImported} />}
 
       {/* barra de ações (fica presa no rodapé da tela enquanto a prévia rola) */}
       <div className="sticky bottom-0 z-20 -mx-4 border-t border-line bg-raised px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 shadow-bar sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
@@ -1198,6 +1211,7 @@ function PreviewStep({
           <p className="hidden text-sm text-fg sm:block" aria-live="polite">
             {count(includedPosts.length, "post", "posts")} · {count(pendingCount, "pendência", "pendências")} ·{" "}
             {count(briefingCount, "campo do briefing", "campos do briefing")}
+            {docCredentials.length > 0 && ` · ${count(credentialCount, "credencial", "credenciais")}`}
           </p>
           <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto">
             <Button variant="secondary" onClick={() => dispatch({ type: "back" })} disabled={state.busy === "commit"}>
@@ -1219,7 +1233,7 @@ function PreviewStep({
           <p className="mt-2 text-sm font-medium text-fg" role="status">
             {nothingNew
               ? "Nada novo para importar: o que está no documento já existe no sistema."
-              : "Marque ao menos um post, uma pendência ou um campo do briefing."}
+              : "Marque ao menos um post, uma pendência, um campo do briefing ou uma credencial."}
           </p>
         )}
         <p className="mt-2 text-sm text-fg-muted">Nada é agendado. Os posts entram como rascunho.</p>
@@ -1236,6 +1250,13 @@ function PostTitle({ item, warnings }: { item: ImportItem; warnings: { message: 
         {item.title || item.kindLabel}
       </p>
       {item.kind === "avulso" && <p className="text-xs text-fg-muted">Post avulso</p>}
+      {item.caption ? (
+        <p className="line-clamp-2 text-xs text-fg-muted wrap-break-word" title={item.caption}>
+          <span className="font-medium text-fg">Legenda:</span> {item.caption}
+        </p>
+      ) : (
+        <p className="text-xs text-fg-muted">Sem legenda no documento</p>
+      )}
       {item.action === "conflict" && item.conflictWith?.type === "post" && (
         <p className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
           <ToneBadge tone="neutral">Já existe</ToneBadge>
@@ -1273,20 +1294,22 @@ function TimeCell({ item, time, inline = false }: { item: ImportItem; time: stri
 
 function BriefingSection({
   id,
-  client,
   entries,
   selected,
-  emailSuggestion,
   onToggle,
 }: {
   id: string;
-  client: ClientInfo;
   entries: BriefingDiffEntry[];
   selected: BriefingField[];
-  emailSuggestion: string | null;
   onToggle: (field: BriefingField, checked: boolean) => void;
 }) {
   const chosen = new Set(selected);
+  const fieldLabel = (e: BriefingDiffEntry) => (
+    <>
+      {e.label}
+      {e.hint && <span className="mt-0.5 block text-xs font-normal text-fg-muted">{e.hint}</span>}
+    </>
+  );
   const value = (v: string | null) =>
     v ? (
       <span className="line-clamp-3 whitespace-pre-line wrap-break-word" title={v}>
@@ -1305,20 +1328,6 @@ function BriefingSection({
     ) : (
       <span className="inline-flex min-h-11 items-center text-xs text-fg-muted sm:min-h-10">Já igual</span>
     );
-  const emailNote = emailSuggestion && (
-    <div className="text-sm">
-      <p className="text-fg">
-        <span className="font-medium">E-mail no documento:</span> <span className="break-all">{emailSuggestion}</span>
-        <span className="text-fg-muted"> — sugestão, não é gravado.</span>
-      </p>
-      <Link
-        href={`/clients/${client.id}#cadastro-titulo`}
-        className={`${LOOSE_LINK} font-medium text-link hover:text-link-hover hover:underline`}
-      >
-        Revisar e-mails em Editar cliente
-      </Link>
-    </div>
-  );
 
   return (
     <section aria-labelledby={id} className="grid gap-3">
@@ -1358,7 +1367,7 @@ function BriefingSection({
                 {entries.map((e) => (
                   <tr key={e.field} className="border-t border-line align-top">
                     <th scope="row" className="w-44 py-3 pl-4 pr-3 text-left font-medium text-fg">
-                      {e.label}
+                      {fieldLabel(e)}
                     </th>
                     <td className="px-3 py-3 text-fg">
                       <div className="max-w-72">{value(e.current)}</div>
@@ -1377,7 +1386,7 @@ function BriefingSection({
             {entries.map((e) => (
               <li key={e.field} className="card grid gap-2 p-3">
                 <div className="flex items-start justify-between gap-2">
-                  <p className="pt-2 text-sm font-medium text-fg">{e.label}</p>
+                  <p className="pt-2 text-sm font-medium text-fg">{fieldLabel(e)}</p>
                   {control(e)}
                 </div>
                 <dl className="grid gap-2 text-sm">
@@ -1395,7 +1404,158 @@ function BriefingSection({
           </ul>
         </>
       )}
-      {emailNote}
+    </section>
+  );
+}
+
+/** Senha sempre oculta: a prévia nem recebe o valor, só se ele existe. */
+function MaskedPassword({ has }: { has: boolean }) {
+  if (!has) return <span className="text-fg-muted">não informada</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-fg">
+      <span aria-hidden="true" className="tracking-widest">
+        ••••••••
+      </span>
+      <span className="text-xs text-fg-muted">(oculta)</span>
+    </span>
+  );
+}
+
+function CredentialsSection({
+  id,
+  client,
+  credentials,
+  blocked,
+  selected,
+  onToggle,
+}: {
+  id: string;
+  client: ClientInfo;
+  credentials: ImportCredential[];
+  blocked: string | null;
+  selected: string[];
+  onToggle: (network: string, checked: boolean) => void;
+}) {
+  const chosen = new Set(selected);
+  const link = (
+    <Link
+      href={`/clients/${client.id}#credenciais-titulo`}
+      className={`${LOOSE_LINK} font-medium text-link hover:text-link-hover hover:underline`}
+    >
+      Abrir credenciais do cliente
+    </Link>
+  );
+
+  return (
+    <section aria-labelledby={id} className="grid gap-3">
+      <div>
+        <h3 id={id} className={H3}>
+          Credenciais encontradas ({credentials.length})
+        </h3>
+        <p className="mt-1 text-sm text-fg-muted">
+          Marcadas, são gravadas criptografadas em Credenciais do cliente ao importar. A senha não aparece aqui.
+        </p>
+      </div>
+
+      {blocked && (
+        <Callout tone="warning" title="As credenciais não serão gravadas">
+          <p>{blocked}</p>
+          <p>{link}</p>
+        </Callout>
+      )}
+      {credentials.length === 0 ? (
+        <p className="card p-4 text-sm text-fg-muted">
+          O documento menciona dados de acesso, mas sem login nem senha para gravar.
+        </p>
+      ) : (
+        <ul aria-label="Credenciais encontradas no documento" className="card divide-y divide-line">
+          {credentials.map((c) => (
+            <li key={c.network} className="flex items-start gap-1 p-2 pr-4">
+              <Checkbox
+                checked={chosen.has(c.network)}
+                disabled={blocked !== null}
+                label={`Gravar credencial de ${c.network}`}
+                onChange={(checked) => onToggle(c.network, checked)}
+              />
+              <div className="grid min-w-0 flex-1 gap-1.5 pt-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium text-fg">{c.network}</span>
+                  {c.replaces ? (
+                    <ToneBadge tone="warning">Substitui a atual</ToneBadge>
+                  ) : (
+                    <ToneBadge tone="neutral">Nova</ToneBadge>
+                  )}
+                </div>
+                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+                  <dt className="text-fg-muted">Login</dt>
+                  <dd className="break-all text-fg">{c.login ?? <span className="text-fg-muted">não informado</span>}</dd>
+                  <dt className="text-fg-muted">Senha</dt>
+                  <dd>
+                    <MaskedPassword has={c.hasPassword} />
+                  </dd>
+                </dl>
+                {(!c.inBriefing || c.network === "Geral") && (
+                  <p className="text-xs text-fg-muted">
+                    {!c.inBriefing
+                      ? `Encontrada na linha ${c.line}, fora do briefing: vem desmarcada.`
+                      : `Rede não identificada no documento (linha ${c.line}): vem desmarcada.`}{" "}
+                    Marque só se for mesmo um acesso do cliente.
+                  </p>
+                )}
+                {c.replaces && (
+                  <p className="text-xs text-fg-muted" aria-live="polite">
+                    {chosen.has(c.network) && !blocked
+                      ? `Vai substituir a credencial atual de ${c.network}. As das outras redes ficam como estão.`
+                      : `Já existe uma credencial de ${c.network} salva. Marque para substituir.`}
+                  </p>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function NotImportedSection({ id, client, items }: { id: string; client: ClientInfo; items: ImportNotImported[] }) {
+  const hasEmail = items.some((i) => i.kind === "email");
+  return (
+    <section aria-labelledby={id} className="grid gap-3">
+      <div>
+        <h3 id={id} className={H3}>
+          Não será importado ({items.length})
+        </h3>
+        <p className="mt-1 text-sm text-fg-muted">
+          Está no documento, mas o sistema não tem onde guardar. Se precisar, copie para o cadastro do cliente.
+        </p>
+      </div>
+      <ul className="card divide-y divide-line">
+        {items.map((it, i) => (
+          <li key={`${it.kind}-${it.line ?? "x"}-${i}`} className="grid gap-1 p-4">
+            <p className="text-sm text-fg">
+              <span className="font-medium">{it.label}</span>
+              {it.line !== null && <span className="text-fg-muted"> · linha {it.line}</span>}
+            </p>
+            {it.kind === "credencial" ? (
+              <p className="text-sm italic text-fg-muted">{it.value}</p>
+            ) : (
+              <p className="line-clamp-3 whitespace-pre-line text-sm text-fg wrap-break-word" title={it.value}>
+                {it.value}
+              </p>
+            )}
+            <p className="text-xs text-fg-muted">{it.reason}</p>
+          </li>
+        ))}
+      </ul>
+      {hasEmail && (
+        <Link
+          href={`/clients/${client.id}#cadastro-titulo`}
+          className={`${LOOSE_LINK} font-medium text-link hover:text-link-hover hover:underline`}
+        >
+          Revisar e-mails em Editar cliente
+        </Link>
+      )}
     </section>
   );
 }
@@ -1424,9 +1584,12 @@ function ResultStep({
   const mainMonth = months.includes(sent.refMonth) ? sent.refMonth : (months[0] ?? sent.refMonth);
   const monthByLine = new Map(preview.items.map((i) => [i.line, i.monthKey]));
   const postsIn = (month: string) => result.posts.filter((p) => monthByLine.get(p.line) === month).length;
+  const saved = result.credentialsSaved ?? [];
   const nothingNew =
-    created.posts + created.pendingItems + created.schedules + result.briefingUpdated.length === 0;
-  const credential = sent.credentialDetected || result.credentialDetected;
+    created.posts + created.pendingItems + created.schedules + result.briefingUpdated.length + saved.length === 0;
+  const docCredentials = preview.credentials ?? [];
+  // encontradas no documento e não gravadas (desmarcadas ou bloqueadas)
+  const notSaved = docCredentials.filter((c) => !saved.includes(c.network));
 
   const stats: { label: string; value: number; detail?: string }[] = [
     { label: "Posts criados (rascunho)", value: created.posts },
@@ -1440,6 +1603,9 @@ function ResultStep({
           : undefined,
     },
     { label: "Campos do briefing atualizados", value: result.briefingUpdated.length },
+    ...(docCredentials.length > 0
+      ? [{ label: "Credenciais gravadas", value: saved.length, detail: saved.length ? saved.join(", ") : undefined }]
+      : []),
     ...(skipped.excluded > 0 ? [{ label: "Desmarcados na prévia", value: skipped.excluded }] : []),
     ...(skipped.invalid > 0 ? [{ label: "Sem data válida", value: skipped.invalid }] : []),
   ];
@@ -1508,11 +1674,25 @@ function ResultStep({
           A importação não mudou o status do cliente. Se a gestão acabou, marque-o como encerrado.
         </Callout>
       )}
-      {credential && (
+      {(saved.length > 0 || notSaved.length > 0 || result.credentialDetected) && (
         <div className="text-sm">
-          <p className="text-fg-muted">
-            Os dados de acesso do documento foram descartados. Se precisar, cadastre-os nas credenciais do cliente.
-          </p>
+          {saved.length > 0 && (
+            <p className="text-fg">
+              Credenciais gravadas, criptografadas: {saved.join(", ")}. As das outras redes ficaram como estavam.
+            </p>
+          )}
+          {notSaved.length > 0 && (
+            <p className="text-fg-muted">
+              Não gravadas: {notSaved.map((c) => c.network).join(", ")}. Se precisar, cadastre nas credenciais do
+              cliente.
+            </p>
+          )}
+          {saved.length === 0 && notSaved.length === 0 && (
+            <p className="text-fg-muted">
+              O documento mencionava dados de acesso sem login nem senha. Se precisar, cadastre nas credenciais do
+              cliente.
+            </p>
+          )}
           <Link
             href={`/clients/${client.id}#credenciais-titulo`}
             className={`${LOOSE_LINK} font-medium text-link hover:text-link-hover hover:underline`}

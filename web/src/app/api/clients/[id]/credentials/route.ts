@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
-import { encryptToken, decryptToken } from "@/lib/crypto";
+import { cleanCredentials, decryptCredentials, encryptCredentials } from "@/lib/client-credentials";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -35,12 +35,10 @@ export async function GET(
   if (!client) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
 
   let credentials: Credential[] = [];
-  if (client.credentialsEnc) {
-    try {
-      credentials = JSON.parse(decryptToken(client.credentialsEnc));
-    } catch {
-      return Response.json({ error: "Falha ao decifrar credenciais" }, { status: 500 });
-    }
+  try {
+    credentials = decryptCredentials(client.credentialsEnc);
+  } catch {
+    return Response.json({ error: "Falha ao decifrar credenciais" }, { status: 500 });
   }
   return Response.json({ credentials });
 }
@@ -60,11 +58,9 @@ export async function PUT(
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  // descarta entradas totalmente vazias
-  const clean = parsed.data.credentials.filter(
-    (c) => c.network.trim() && (c.login.trim() || c.password.trim())
-  );
-  const credentialsEnc = clean.length ? encryptToken(JSON.stringify(clean)) : null;
+  // descarta entradas totalmente vazias (mesmo formato do importador: lib/client-credentials)
+  const clean = cleanCredentials(parsed.data.credentials);
+  const credentialsEnc = encryptCredentials(clean);
 
   try {
     await prisma.client.update({ where: { id }, data: { credentialsEnc } });

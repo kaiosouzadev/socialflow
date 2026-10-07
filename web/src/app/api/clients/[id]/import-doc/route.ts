@@ -23,7 +23,8 @@ const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "horário no formato 
 
 const schema = z.object({
   mode: z.enum(["preview", "commit"]),
-  // só texto: o .docx nunca é enviado ao servidor
+  // só texto: o .docx nunca é enviado ao servidor. Pode trazer credenciais: elas saem do
+  // texto aqui, a prévia só devolve rede/login/"tem senha" e o commit grava cifrado
   text: z.string().min(1, "Cole o texto do documento"),
   refMonth: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "mês no formato AAAA-MM"),
   options: z
@@ -33,6 +34,8 @@ const schema = z.object({
       exclude: z.array(z.number().int().positive()).max(1000).optional(),
       briefingFields: z.array(z.enum(BRIEFING_FIELDS)).max(BRIEFING_FIELDS.length * 2).optional(),
       targets: z.array(z.enum(POST_TARGETS)).min(1).optional(),
+      // redes das credenciais do documento a gravar (os valores vêm do próprio texto, no servidor)
+      credentials: z.array(z.string().trim().min(1).max(80)).max(50).optional(),
     })
     .optional(),
 });

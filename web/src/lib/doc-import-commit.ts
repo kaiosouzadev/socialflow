@@ -1,28 +1,40 @@
 /**
  * Importação do documento mensal da redação (S18): prévia e gravação.
  *
- * - `analyzeImport` lê o texto (credenciais descartadas de novo aqui, por
- *   defesa em profundidade), cruza com o banco e devolve o que SERIA gravado.
- *   Não escreve nada.
+ * - `analyzeImport` lê o texto (as credenciais saem do texto antes da leitura),
+ *   cruza com o banco e devolve o que SERIA gravado. Não escreve nada. Das
+ *   credenciais, a prévia só recebe a rede, o login e SE há senha — nunca a senha.
  * - `commitImport` refaz a análise dentro de UMA transação e grava:
  *   cronogramas por mês civil, posts SEMPRE `draft`, pendências (stand-by e
- *   aguardando material) e o merge do briefing nos campos marcados.
+ *   aguardando material), o merge do briefing nos campos marcados e, nas redes
+ *   marcadas, as credenciais do documento em `credentialsEnc` (cifradas, pelo
+ *   mesmo formato da tela Credenciais; as outras redes ficam como estão).
  *   Conflitos (post do cliente no mesmo dia SP e mesmo formato; stand-by com
  *   o mesmo título) são ignorados: reimportar o mesmo texto cria 0.
  *
- * O texto bruto nunca é gravado nem logado.
+ * O texto bruto e as senhas nunca são gravados em claro nem logados.
  */
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
+  credentialsKeyConfigured,
+  decryptCredentials,
+  encryptCredentials,
+  mergeCredentials,
+  type ClientCredential,
+} from "@/lib/client-credentials";
+import {
   DEFAULT_TIMES,
   DEFAULT_WRITER_NAMES,
+  extractCredentials,
   firstNameKey,
+  networkKey,
   parseMonthlyDoc,
-  stripCredentials,
+  proposeBriefing,
   type BriefingClientField,
   type BriefingKey,
+  type DocCredential,
   type DocStatus,
   type ParsedPost,
   type TimeSource,
@@ -41,7 +53,17 @@ export type ImportScheduleStatus = (typeof IMPORT_SCHEDULE_STATUSES)[number];
 export const POST_TARGETS = ["instagram", "facebook", "linkedin"] as const;
 export type PostTarget = (typeof POST_TARGETS)[number];
 
-const CLIENT_FIELDS = ["tradeName", "facebookUrl", "instagramUrl", "website", "city", "phone"] as const;
+const CLIENT_FIELDS = [
+  "tradeName",
+  "facebookUrl",
+  "instagramUrl",
+  "website",
+  "city",
+  "phone",
+  "whatsapp",
+  "toneOfVoice",
+] as const;
+/** As 18 chaves de Client.briefing (ClientBriefingEditor / PATCH de clientes). */
 const BRIEFING_KEYS = [
   "partnerships",
   "products",
@@ -57,6 +79,10 @@ const BRIEFING_KEYS = [
   "linkedinUrl",
   "linkedinRepost",
   "positioning",
+  "plan",
+  "designNotes",
+  "mandatoryArtText",
+  "responsibleTech",
 ] as const;
 
 /** Campos que a prévia pode propor e o commit pode gravar (merge). */
@@ -70,6 +96,8 @@ const BRIEFING_FIELD_LABEL: Record<BriefingField, string> = {
   website: "Site",
   city: "Cidade / UF",
   phone: "Telefone fixo",
+  whatsapp: "WhatsApp",
+  toneOfVoice: "Tom de voz",
   partnerships: "Parcerias / convênios",
   products: "Produtos / serviços",
   themes: "Principais temas a abordar",
@@ -84,6 +112,10 @@ const BRIEFING_FIELD_LABEL: Record<BriefingField, string> = {
   linkedinUrl: "Company Page do LinkedIn",
   linkedinRepost: "Repostar no LinkedIn",
   positioning: "Posicionamento da marca",
+  plan: "Plano (nível / frequência)",
+  designNotes: "Notas de design",
+  mandatoryArtText: "Texto obrigatório nas artes",
+  responsibleTech: "Responsável técnico / registro",
 };
 
 const isClientField = (f: BriefingField): f is BriefingClientField =>
@@ -105,6 +137,8 @@ export type ImportOptions = {
   briefingFields?: BriefingField[];
   /** redes dos posts criados; padrão = redes das contas do cliente, ou IG + FB */
   targets?: PostTarget[];
+  /** credenciais do documento a gravar (nome da rede como veio na prévia); as demais não são gravadas */
+  credentials?: string[];
 };
 
 export type ImportInput = { text: string; refMonth: string; options?: ImportOptions };
@@ -182,12 +216,55 @@ export type BriefingDiffEntry = {
   changed: boolean;
   /** sugestão de marcar: o campo atual está vazio */
   suggested: boolean;
+  /** de onde veio o valor quando não é um rótulo do documento (ex.: linha do plano) */
+  hint: string | null;
+};
+
+/**
+ * Credencial encontrada no documento, como a PRÉVIA a vê: rede, login e se há
+ * senha. A senha nunca sai do servidor (só é usada, cifrada, no commit).
+ */
+export type ImportCredential = {
+  network: string;
+  line: number;
+  /** login como está no documento (a tela Credenciais também mostra o login) */
+  login: string | null;
+  hasPassword: boolean;
+  /** o cliente já tem credencial desta rede: o commit substitui só ela */
+  replaces: boolean;
+  /** lida no briefing (antes do 1º post); false = numa legenda/tela */
+  inBriefing: boolean;
+  /**
+   * vem marcada na prévia: rede identificada, lida no briefing e SEM credencial
+   * salva da mesma rede. "Geral" (rede não identificada), credencial fora do
+   * briefing (ex.: numa legenda) e a que substituiria uma já salva (`replaces`)
+   * vêm desmarcadas: nenhum erro de leitura troca uma senha sem a pessoa marcar.
+   */
+  suggested: boolean;
+};
+
+/** Valor mostrado no lugar de um texto de credencial que não foi lido (nunca o próprio texto). */
+const CREDENTIAL_HIDDEN = "Texto oculto por segurança.";
+
+/** O que o documento traz e o sistema não grava (a prévia lista; nada se perde calado). */
+export type ImportNotImported = {
+  /** "credencial": rótulo de acesso sem login/senha reconhecível (o valor não vai para a prévia) */
+  kind: "campo" | "credencial" | "email" | "molde";
+  line: number | null;
+  label: string;
+  value: string;
+  reason: string;
 };
 
 export type ImportAnalysis = {
   refMonth: string;
   header: string | null;
   credentialDetected: boolean;
+  /** credenciais do documento (sem senha) */
+  credentials: ImportCredential[];
+  /** por que as credenciais não podem ser gravadas agora (null = podem) */
+  credentialsBlocked: string | null;
+  notImported: ImportNotImported[];
   endOfContract: boolean;
   emailSuggestion: string | null;
   hashtagsBlock: string | null;
@@ -219,6 +296,8 @@ export type ImportCommitResult = {
   pendingItems: { id: string; kind: "stand_by" | "aguardando_material"; title: string; postId: string | null }[];
   briefingUpdated: BriefingField[];
   credentialDetected: boolean;
+  /** redes cujas credenciais foram gravadas (cifradas) */
+  credentialsSaved: string[];
   endOfContract: boolean;
   warnings: ImportWarning[];
 };
@@ -330,12 +409,26 @@ const clientSelect = {
   website: true,
   city: true,
   phone: true,
+  whatsapp: true,
+  toneOfVoice: true,
+  credentialsEnc: true,
   socialAccounts: { select: { platform: true } },
 } satisfies Prisma.ClientSelect;
 
 type ClientRow = Prisma.ClientGetPayload<{ select: typeof clientSelect }>;
 
-type Analysis = ImportAnalysis & { clientRow: ClientRow; proposedBriefing: Map<BriefingField, string> };
+/** Análise + o que só o servidor vê (nunca vai para a resposta). */
+type Analysis = ImportAnalysis & {
+  clientRow: ClientRow;
+  proposedBriefing: Map<BriefingField, string>;
+  docCredentials: DocCredential[];
+  currentCredentials: ClientCredential[];
+};
+
+const CREDENTIALS_NO_KEY =
+  "A proteção de credenciais não está configurada no servidor: as credenciais do documento não podem ser gravadas agora. Avise o administrador do sistema.";
+const CREDENTIALS_UNREADABLE =
+  "Não conseguimos ler as credenciais já salvas deste cliente. Para não perdê-las, as do documento não serão gravadas: confira em Credenciais do cliente.";
 
 async function analyze(db: Db, clientId: string, input: ImportInput): Promise<Analysis> {
   const opts = input.options ?? {};
@@ -344,27 +437,57 @@ async function analyze(db: Db, clientId: string, input: ImportInput): Promise<An
 
   const users = await db.user.findMany({ select: { id: true, name: true }, orderBy: { createdAt: "asc" } });
 
-  // defesa em profundidade: o navegador já removeu; o servidor remove de novo
-  const stripped = stripCredentials(input.text);
+  // as credenciais saem do texto antes da leitura; os valores ficam só aqui no servidor
+  const extracted = extractCredentials(input.text);
   const writerNames = [
     ...DEFAULT_WRITER_NAMES,
     ...users.map((u) => u.name.trim().split(/\s+/)[0] ?? "").filter((n) => n.length >= 2),
   ];
-  const parsed = parseMonthlyDoc(stripped.text, {
+  const parsed = parseMonthlyDoc(extracted.text, {
     refMonth: input.refMonth,
     writerNames,
     defaultTimes: opts.defaultTimes,
   });
-  const credentialDetected = stripped.credentialDetected || parsed.credentialDetected;
+  const credentialDetected = extracted.credentialDetected || parsed.credentialDetected;
   const warnings: ImportWarning[] = [];
 
+  // ---- credenciais: rede, login e se há senha; o cliente já tem a rede? dá para gravar?
+  const docCredentials = extracted.credentials;
+  let currentCredentials: ClientCredential[] = [];
+  let credentialsBlocked: string | null = null;
+  if (docCredentials.length > 0) {
+    if (!credentialsKeyConfigured()) credentialsBlocked = CREDENTIALS_NO_KEY;
+    else {
+      try {
+        currentCredentials = decryptCredentials(clientRow.credentialsEnc);
+      } catch {
+        credentialsBlocked = CREDENTIALS_UNREADABLE;
+      }
+    }
+  }
+  const currentKeys = new Set(currentCredentials.map((c) => networkKey(c.network)));
+  const credentials: ImportCredential[] = docCredentials.map((c) => {
+    const replaces = currentKeys.has(networkKey(c.network));
+    return {
+      network: c.network,
+      line: c.line,
+      login: c.login || null,
+      hasPassword: c.password !== "",
+      replaces,
+      inBriefing: c.inBriefing,
+      suggested: c.inBriefing && c.network !== "Geral" && !replaces,
+    };
+  });
   if (credentialDetected) {
+    const names = credentials.map((c) => c.network).join(", ");
     warnings.push({
       code: "credencial",
       line: null,
-      message:
-        "O documento tinha senha ou dados de acesso. Eles foram descartados e não serão gravados. " +
-        "Se precisar, cadastre o acesso em Credenciais do cliente.",
+      message: credentialsBlocked
+        ? credentialsBlocked
+        : credentials.length > 0
+          ? `O documento tem dados de acesso (${names}). A senha não aparece na prévia; ao importar, as credenciais marcadas são gravadas criptografadas em Credenciais do cliente.`
+          : "O documento menciona dados de acesso, mas sem login nem senha para gravar. Se precisar, cadastre o acesso em Credenciais do cliente.",
     });
   }
   for (const w of parsed.warnings) warnings.push({ code: "documento", line: w.line, message: w.message });
@@ -561,11 +684,12 @@ async function analyze(db: Db, clientId: string, input: ImportInput): Promise<An
   }
 
   // ---- briefing: proposta × atual (só campos que o documento traz)
+  const proposals = proposeBriefing(parsed);
   const proposed = new Map<BriefingField, string>();
-  for (const [k, v] of Object.entries(parsed.briefing.client)) if (v?.trim()) proposed.set(k as BriefingField, v.trim());
-  for (const [k, v] of Object.entries(parsed.briefing.briefing)) if (v?.trim()) proposed.set(k as BriefingField, v.trim());
-  // o campo "Hashtags::" costuma vir vazio, com o bloco fixo logo abaixo
-  if (!proposed.has("hashtags") && parsed.hashtagsBlock) proposed.set("hashtags", parsed.hashtagsBlock.trim());
+  for (const f of BRIEFING_FIELDS) {
+    const p = proposals.fields[f];
+    if (p?.value.trim()) proposed.set(f, p.value.trim());
+  }
 
   const currentBriefing = (clientRow.briefing ?? {}) as Record<string, unknown>;
   const briefing: BriefingDiffEntry[] = BRIEFING_FIELDS.filter((f) => proposed.has(f)).map((field) => {
@@ -579,8 +703,67 @@ async function analyze(db: Db, clientId: string, input: ImportInput): Promise<An
       proposed: value,
       changed: current !== value,
       suggested: current === null,
+      hint: proposals.fields[field]?.hint ?? null,
     };
   });
+
+  // ---- o que o documento traz e não tem onde ficar: listado, nunca perdido calado
+  // linhas no lugar de uma senha que não pareceram senha ("Pendente", "-", frase…): ocultas, nunca no briefing
+  const withheld: ImportNotImported[] = extracted.withheld.map((w) => ({
+    kind: "credencial",
+    line: w.line,
+    label: w.label,
+    value: CREDENTIAL_HIDDEN,
+    reason:
+      "Está no lugar de uma senha, mas não parece senha (frase, palavra como “Pendente” ou “N/A”, data ou símbolo). Não foi gravado e a senha atual do cliente não muda: confira esta linha no documento e, se for a senha, cadastre em Credenciais do cliente.",
+  }));
+  const notImported: ImportNotImported[] = [
+    ...[
+      ...withheld,
+      ...proposals.unmapped.map((u): ImportNotImported =>
+        u.credential
+          ? {
+              kind: "credencial",
+              line: u.line || null,
+              label: u.label,
+              value: CREDENTIAL_HIDDEN,
+              reason:
+                "Rótulo de acesso com um texto que não parece login nem senha (frase, palavra como “Pendente”, data ou símbolo). Não foi gravado: confira esta linha no documento e, se for um acesso, cadastre em Credenciais do cliente.",
+            }
+          : {
+              kind: "campo",
+              line: u.line || null,
+              label: u.label,
+              value: u.value,
+              reason: u.duplicate
+                ? "Campo repetido no documento com outro valor: vale o primeiro."
+                : "Sem campo correspondente no cadastro do cliente.",
+            }
+      ),
+    ].sort((a, b) => (a.line ?? 0) - (b.line ?? 0)),
+    ...(proposals.email
+      ? [
+          {
+            kind: "email" as const,
+            line: null,
+            label: "E-mail",
+            value: proposals.email,
+            reason: "Os e-mails do cliente recebem aprovações: confira e cadastre em Editar cliente.",
+          },
+        ]
+      : []),
+    ...(parsed.ignoredTemplates > 0
+      ? [
+          {
+            kind: "molde" as const,
+            line: null,
+            label: "Moldes de posts",
+            value: `${parsed.ignoredTemplates} ${parsed.ignoredTemplates === 1 ? "bloco" : "blocos"}`,
+            reason: "São modelos de referência, não posts do mês.",
+          },
+        ]
+      : []),
+  ];
 
   const creating = items.filter((i) => i.action === "create");
   warnings.sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
@@ -589,8 +772,11 @@ async function analyze(db: Db, clientId: string, input: ImportInput): Promise<An
     refMonth: parsed.refMonth,
     header: parsed.header,
     credentialDetected,
+    credentials,
+    credentialsBlocked,
+    notImported,
     endOfContract: parsed.endOfContract,
-    emailSuggestion: parsed.briefing.emailSuggestion,
+    emailSuggestion: proposals.email,
     hashtagsBlock: parsed.hashtagsBlock,
     ignoredTemplates: parsed.ignoredTemplates,
     client: {
@@ -621,15 +807,30 @@ async function analyze(db: Db, clientId: string, input: ImportInput): Promise<An
     warnings,
     clientRow,
     proposedBriefing: proposed,
+    docCredentials,
+    currentCredentials,
   };
+}
+
+/** Só o que a prévia pode ver: sem a linha do cliente (credentialsEnc) e sem nenhuma senha. */
+function publicAnalysis(a: Analysis): ImportAnalysis {
+  const {
+    clientRow: _row,
+    proposedBriefing: _proposed,
+    docCredentials: _doc,
+    currentCredentials: _current,
+    ...analysis
+  } = a;
+  void _row;
+  void _proposed;
+  void _doc;
+  void _current;
+  return analysis;
 }
 
 /** Prévia: nada é gravado. */
 export async function analyzeImport(clientId: string, input: ImportInput): Promise<ImportAnalysis> {
-  const { clientRow: _row, proposedBriefing: _proposed, ...analysis } = await analyze(prisma, clientId, input);
-  void _row;
-  void _proposed;
-  return analysis;
+  return publicAnalysis(await analyze(prisma, clientId, input));
 }
 
 // ------------------------------------------------------------ commit (uma transação)
@@ -731,6 +932,16 @@ export async function commitImport(clientId: string, input: ImportInput): Promis
         await tx.client.update({ where: { id: clientId }, data: clientData });
       }
 
+      // credenciais: só as redes marcadas; substitui a rede e preserva as outras (cifrado)
+      const chosen = new Set((opts.credentials ?? []).map(networkKey));
+      const toSave = a.docCredentials.filter((c) => chosen.has(networkKey(c.network)));
+      let credentialsSaved: string[] = [];
+      if (toSave.length > 0 && !a.credentialsBlocked) {
+        const merged = mergeCredentials(a.currentCredentials, toSave);
+        await tx.client.update({ where: { id: clientId }, data: { credentialsEnc: encryptCredentials(merged) } });
+        credentialsSaved = toSave.map((c) => c.network);
+      }
+
       return {
         created: {
           posts: postRows.length,
@@ -749,6 +960,7 @@ export async function commitImport(clientId: string, input: ImportInput): Promis
         pendingItems: createdPending,
         briefingUpdated: marked,
         credentialDetected: a.credentialDetected,
+        credentialsSaved,
         endOfContract: a.endOfContract,
         warnings: a.warnings,
       };

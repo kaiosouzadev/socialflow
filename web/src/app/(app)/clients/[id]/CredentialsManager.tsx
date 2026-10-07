@@ -168,17 +168,17 @@ export default function CredentialsManager({
           {rows.length === 0 ? (
             <p className="text-sm text-fg-muted">Nenhuma credencial cadastrada.</p>
           ) : (
-            <ul className="grid gap-2">
+            <ul className="@container grid gap-2">
               {rows.map((r, i) => (
                 <li
                   key={i}
-                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-control border border-line bg-sunken px-3 py-2 text-sm sm:grid-cols-[6rem_minmax(0,1fr)_minmax(0,10rem)_auto]"
+                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-control border border-line bg-sunken px-3 py-2 text-sm @lg:grid-cols-[6rem_minmax(0,1fr)_minmax(0,10rem)_auto]"
                 >
                   <span className="font-medium text-fg">{r.network}</span>
-                  <span className="col-start-1 truncate text-fg-muted sm:col-start-auto" title={r.login}>
+                  <span className="col-start-1 truncate text-fg-muted @lg:col-start-auto" title={r.login}>
                     {r.login || "—"}
                   </span>
-                  <span className="col-start-1 truncate font-mono text-fg-muted sm:col-start-auto">
+                  <span className="col-start-1 truncate font-mono text-fg-muted @lg:col-start-auto">
                     {show[i] ? (
                       r.password
                     ) : (
@@ -188,7 +188,7 @@ export default function CredentialsManager({
                       </>
                     )}
                   </span>
-                  <span className="col-start-2 row-span-3 row-start-1 sm:col-start-auto sm:row-span-1 sm:row-start-auto">
+                  <span className="col-start-2 row-span-3 row-start-1 @lg:col-start-auto @lg:row-span-1 @lg:row-start-auto">
                     <RevealButton
                       pressed={!!show[i]}
                       onToggle={() => toggleShow(i)}
@@ -203,11 +203,11 @@ export default function CredentialsManager({
       )}
 
       {editing && (
-        <div className="grid gap-4">
+        <div className="@container grid gap-4">
           {rows.map((r, i) => (
-            <fieldset key={i} className="m-0 grid min-w-0 gap-3 rounded-control border border-line p-3 sm:grid-cols-12 sm:items-end">
+            <fieldset key={i} className="m-0 grid min-w-0 gap-3 rounded-control border border-line p-3 @lg:grid-cols-12 @lg:items-end">
               <legend className="sr-only">Credencial {i + 1}</legend>
-              <Field label="Rede" className="sm:col-span-3">
+              <Field label="Rede" className="@lg:col-span-3">
                 <Input
                   value={r.network}
                   onChange={(e) => setRow(i, { network: e.target.value })}
@@ -216,7 +216,7 @@ export default function CredentialsManager({
                   placeholder="Instagram"
                 />
               </Field>
-              <Field label="Login" className="sm:col-span-4">
+              <Field label="Login" className="@lg:col-span-4">
                 <Input
                   value={r.login}
                   onChange={(e) => setRow(i, { login: e.target.value })}
@@ -225,7 +225,7 @@ export default function CredentialsManager({
                   placeholder="usuário ou e-mail"
                 />
               </Field>
-              <Field label="Senha" className="sm:col-span-4">
+              <Field label="Senha" className="@lg:col-span-4">
                 <Input
                   type={show[i] ? "text" : "password"}
                   value={r.password}
@@ -244,7 +244,7 @@ export default function CredentialsManager({
                   }
                 />
               </Field>
-              <div className="sm:col-span-1 sm:justify-self-end">
+              <div className="@lg:col-span-1 @lg:justify-self-end">
                 <Button
                   iconOnly
                   variant="ghost"
