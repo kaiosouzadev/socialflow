@@ -3,6 +3,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { guardQueueTransition } from "@/lib/publish-guard";
+import { mediaUrlProblem } from "@/lib/media-url";
 import { uuidString } from "@/lib/validators";
 import { z } from "zod";
 
@@ -63,6 +64,10 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   const body = await req.json().catch(() => null);
+  // OWASP AUD2-04: mídia só por https público (javascript:/data:/IP interno → 400 pt-BR)
+  const rawMedia = (body as { mediaUrl?: unknown } | null)?.mediaUrl;
+  const mediaProblem = typeof rawMedia === "string" && rawMedia !== "" ? mediaUrlProblem(rawMedia) : null;
+  if (mediaProblem) return Response.json({ error: mediaProblem, field: "mediaUrl" }, { status: 400 });
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });

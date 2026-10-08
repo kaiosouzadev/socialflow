@@ -2,7 +2,8 @@ import type { NextRequest } from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { checkInternalKey } from "@/lib/internal-auth";
-import { r2Configured, r2KeyFromUrl, deleteFromR2 } from "@/lib/r2";
+import { r2Configured } from "@/lib/r2";
+import { deletePostMedia } from "@/lib/r2-cleanup";
 import { thumbFromUrl } from "@/lib/media-thumb";
 import { z } from "zod";
 
@@ -48,6 +49,7 @@ export async function POST(req: NextRequest) {
 
   let cleaned = 0;
   let freedKeys = 0;
+  let keptKeys = 0;
   const errors: string[] = [];
 
   for (const post of posts) {
@@ -64,14 +66,11 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // só remove do R2 o que é nosso (URLs fora do R2 são ignoradas)
-      for (const u of urls) {
-        const key = r2KeyFromUrl(u);
-        if (key) {
-          await deleteFromR2(key);
-          freedKeys++;
-        }
-      }
+      // só remove do R2 mídia de POST que nenhum outro registro usa (nunca logo/arte-base;
+      // URLs fora do R2 são ignoradas) — OWASP AUD2
+      const { freed, kept } = await deletePostMedia(post.id, urls);
+      freedKeys += freed;
+      keptKeys += kept;
 
       await prisma.post.update({
         where: { id: post.id },
@@ -88,5 +87,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return Response.json({ checked: posts.length, cleaned, freedKeys, days, errors });
+  return Response.json({ checked: posts.length, cleaned, freedKeys, keptKeys, days, errors });
 }

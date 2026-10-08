@@ -1,5 +1,6 @@
 import { GEMINI_BASE, IMAGE_MODEL, geminiFetch, logTextGeneration, parseModelJson } from "@/lib/gemini";
 import { getGeminiTextModel } from "@/lib/ai-models";
+import { SafeFetchError, safeFetchBuffer, sniffImageType } from "@/lib/safe-fetch";
 
 /**
  * Geração de arte para clientes de gestão básica: a IA (Gemini image) recebe a
@@ -13,46 +14,36 @@ import { getGeminiTextModel } from "@/lib/ai-models";
 
 type InlineImage = { mimeType: string; data: string };
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB por imagem de entrada
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB por imagem de entrada (mesmo teto do upload)
 
-/** Anti-SSRF: só https e nunca hosts privados/loopback/metadata. */
-function assertSafeImageUrl(raw: string): URL {
-  const u = new URL(raw);
-  if (u.protocol !== "https:") throw new Error(`URL de imagem deve ser https: ${raw}`);
-  const h = u.hostname.toLowerCase();
-  const privado =
-    h === "localhost" ||
-    h.endsWith(".local") ||
-    h.endsWith(".internal") ||
-    /^127\./.test(h) ||
-    /^10\./.test(h) ||
-    /^192\.168\./.test(h) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
-    /^169\.254\./.test(h) ||
-    h === "0.0.0.0" ||
-    h === "[::1]" ||
-    h === "::1";
-  if (privado) throw new Error(`Host de imagem não permitido: ${h}`);
-  return u;
-}
-
+/**
+ * Baixa a arte-base/logo sem SSRF (OWASP AUD2-03): `safeFetchBuffer` troca a
+ * antiga lista de bloqueio por hostname (que deixava passar IPv6 mapeado,
+ * fd00::/fe80::, 100.64/10 e nomes que resolvem para IP interno) por checagem
+ * do IP resolvido na hora da conexão. Sem redirecionamento, 20 s, teto de
+ * 8 MB; só JPEG/PNG/WebP pelo conteúdo. A mensagem de erro não leva a URL.
+ */
 async function fetchInlineImage(url: string): Promise<InlineImage> {
-  assertSafeImageUrl(url);
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 20_000);
+  let buffer: Buffer;
   try {
-    const res = await fetch(url, { cache: "no-store", redirect: "error", signal: ctrl.signal });
-    if (!res.ok) throw new Error(`Falha ao baixar imagem (${res.status}): ${url}`);
-    const type = res.headers.get("content-type") ?? "image/png";
-    if (!type.startsWith("image/")) throw new Error(`Conteúdo não é imagem (${type})`);
-    const bytes = await res.arrayBuffer();
-    if (bytes.byteLength > MAX_IMAGE_BYTES) {
-      throw new Error(`Imagem muito grande (${Math.round(bytes.byteLength / 1024 / 1024)}MB, máx 8MB)`);
+    ({ buffer } = await safeFetchBuffer(url, {
+      maxBytes: MAX_IMAGE_BYTES,
+      timeoutMs: 20_000,
+      maxRedirects: 0,
+      accept: (type) => type.startsWith("image/"),
+    }));
+  } catch (e) {
+    if (e instanceof SafeFetchError) {
+      if (e.code === "url") throw new Error("URL de imagem deve ser https (pública)");
+      if (e.code === "host") throw new Error("Host de imagem não permitido");
+      if (e.code === "too_large") throw new Error("Falha ao baixar imagem: maior que 8MB");
+      throw new Error(`Falha ao baixar imagem (${e.code})`);
     }
-    return { mimeType: type, data: Buffer.from(bytes).toString("base64") };
-  } finally {
-    clearTimeout(timer);
+    throw e;
   }
+  const type = sniffImageType(buffer);
+  if (!type) throw new Error("Falha ao baixar imagem: o arquivo não é JPEG, PNG nem WebP");
+  return { mimeType: type, data: buffer.toString("base64") };
 }
 
 export type GenerateArtInput = {

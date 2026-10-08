@@ -36,6 +36,9 @@ function reset(agencyPublishes = true) {
     id: REVIEW_ID,
     token: TOKEN,
     clientId: CLIENT_ID,
+    // link aberto e dentro do prazo de 60 dias (OWASP-R3: o ciclo de vida é provado em links-publicos-ciclo)
+    status: "enviado",
+    sentAt: new Date(),
     client: { name: "ZZ QA PC1", agencyPublishes },
   };
   state.posts = [];

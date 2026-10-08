@@ -529,7 +529,7 @@ function RowItem({ row, notify }: { row: ScheduleRow; notify: Notify }) {
         ? ["Este cliente não tem e-mail válido cadastrado. Cadastre um e-mail na página do cliente antes de reenviar."]
         : [
             `O cliente recebe de novo o e-mail com o link de aprovação (${count(row.recipients, "endereço", "endereços")}).`,
-            "O link continua o mesmo.",
+            "O link anterior deixa de funcionar: vale só o link novo deste envio.",
           ];
     if (row.status === "em_revisao") out.push("O status volta para “Enviado ao cliente”.");
     if (noArt) out.push("Nenhum post tem arte: o cliente verá só temas e legendas.");

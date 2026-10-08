@@ -1,14 +1,16 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Avatar } from "@/components/Avatar";
-import { Button } from "@/components/Button";
+import { Button, buttonClasses } from "@/components/Button";
 import { ConfirmDialog, Dialog } from "@/components/Dialog";
 import { Field, Input, Select } from "@/components/Field";
 import { Icon } from "@/components/Icons";
 import { Toast, type ToastState } from "@/components/Toast";
 import { PageHeader, ToneBadge } from "@/components/ui";
+import { PASSWORD_HELP, PASSWORD_MESSAGES, checkPasswordPolicy } from "@/lib/password-policy";
 import { toUserMessage } from "@/lib/user-facing-error";
 
 type User = {
@@ -35,11 +37,18 @@ const FIELD_ORDER: readonly UserField[] = ["name", "email", "password", "role"];
 const FIELD_MESSAGES: Record<UserField, string> = {
   name: "Informe o nome.",
   email: "Informe um e-mail válido.",
-  password: "A senha precisa ter pelo menos 8 caracteres.",
+  password: PASSWORD_MESSAGES.tooShort,
   role: "Escolha o papel.",
 };
 const ROLE_HELP =
-  "Administrador também gerencia usuários e conexões Meta. A mudança de papel vale a partir do próximo login.";
+  "Administrador também gerencia usuários e conexões Meta. A mudança de papel vale na hora: a pessoa precisa entrar de novo.";
+const SELF_EDIT_NOTE = "Se você trocar o seu papel ou a sua senha, vai precisar entrar de novo.";
+
+/** 400 da política de senha: `{ error: "<pt-BR>", field: "password" }`. */
+function passwordFieldError(data: unknown): string | null {
+  const d = data as { error?: unknown; field?: unknown } | null;
+  return d?.field === "password" && typeof d.error === "string" ? d.error : null;
+}
 
 /** Texto da API só quando é string (N-14), sem detalhe técnico; senão o texto da tela. */
 function apiMessage(status: number, data: unknown, fallback: string): string {
@@ -113,7 +122,8 @@ function CreateUserDialog({
     const next: FieldErrors = {};
     if (!name) next.name = FIELD_MESSAGES.name;
     if (!EMAIL_RE.test(email)) next.email = FIELD_MESSAGES.email;
-    if (values.password.length < 8) next.password = FIELD_MESSAGES.password;
+    const policy = checkPasswordPolicy(values.password, { email, name });
+    if (!policy.ok) next.password = policy.message;
     setErrors(next);
     setError(null);
     if (focusFirst(next, "user-new")) return;
@@ -127,8 +137,15 @@ function CreateUserDialog({
       });
       if (!res.ok) {
         const data: unknown = await res.json().catch(() => null);
+        const weak = res.status === 400 ? passwordFieldError(data) : null;
         const fields: FieldErrors =
-          res.status === 409 ? { email: "Já existe um usuário com este e-mail." } : res.status === 400 ? zodFields(data) : {};
+          res.status === 409
+            ? { email: "Já existe um usuário com este e-mail." }
+            : weak
+              ? { password: weak }
+              : res.status === 400
+                ? zodFields(data)
+                : {};
         if (focusFirst(fields, "user-new")) {
           setErrors(fields);
           return;
@@ -181,7 +198,7 @@ function CreateUserDialog({
             onChange={(e) => set("email", e.target.value)}
           />
         </Field>
-        <Field id="user-new-password" label="Senha" required help="Mínimo de 8 caracteres." error={errors.password}>
+        <Field id="user-new-password" label="Senha" required help={PASSWORD_HELP} error={errors.password}>
           <Input
             type="password"
             value={values.password}
@@ -201,10 +218,13 @@ function CreateUserDialog({
 
 function EditUserDialog({
   user,
+  isSelf,
   onClose,
   onSaved,
 }: {
   user: User | null;
+  /** a admin editando a si mesma: trocar papel ou senha encerra a própria sessão */
+  isSelf: boolean;
   onClose: () => void;
   onSaved: (name: string) => void;
 }) {
@@ -219,10 +239,14 @@ function EditUserDialog({
     e.preventDefault();
     if (!user) return;
     const trimmed = name.trim();
-    const newPassword = password.trim();
+    // em branco = manter a senha; senão vai como foi digitada (espaços fazem parte da senha)
+    const newPassword = password.trim() ? password : "";
     const next: FieldErrors = {};
     if (!trimmed) next.name = FIELD_MESSAGES.name;
-    if (newPassword && newPassword.length < 8) next.password = FIELD_MESSAGES.password;
+    if (newPassword) {
+      const policy = checkPasswordPolicy(newPassword, { email: user.email, name: trimmed });
+      if (!policy.ok) next.password = policy.message;
+    }
     setErrors(next);
     setError(null);
     if (focusFirst(next, "user-edit")) return;
@@ -239,7 +263,8 @@ function EditUserDialog({
       });
       if (!res.ok) {
         const data: unknown = await res.json().catch(() => null);
-        const fields = res.status === 400 ? zodFields(data) : {};
+        const weak = res.status === 400 ? passwordFieldError(data) : null;
+        const fields: FieldErrors = weak ? { password: weak } : res.status === 400 ? zodFields(data) : {};
         if (focusFirst(fields, "user-edit")) {
           setErrors(fields);
           return;
@@ -264,7 +289,7 @@ function EditUserDialog({
       open={user !== null}
       onClose={onClose}
       title={user ? `Editar ${user.name}` : "Editar usuário"}
-      description={user?.email}
+      description={user ? (isSelf ? `${user.email} · ${SELF_EDIT_NOTE}` : user.email) : undefined}
       busy={busy}
       error={error}
       footer={
@@ -298,7 +323,7 @@ function EditUserDialog({
           id="user-edit-password"
           label="Nova senha"
           optional
-          help="Deixe em branco para manter a senha atual. Mínimo de 8 caracteres."
+          help={`Deixe em branco para manter a senha atual. ${PASSWORD_HELP}`}
           error={errors.password}
           className="sm:col-span-2"
         >
@@ -381,16 +406,21 @@ export default function UsersManager({
         title="Usuários"
         subtitle="Quem tem acesso ao painel"
         action={
-          <Button
-            variant="primary"
-            leadingIcon={<Icon.plus />}
-            onClick={() => {
-              setCreateSeq((n) => n + 1);
-              setCreating(true);
-            }}
-          >
-            Novo usuário
-          </Button>
+          <>
+            <Link href="/users/minha-senha" className={buttonClasses({ variant: "secondary" })}>
+              Minha senha
+            </Link>
+            <Button
+              variant="primary"
+              leadingIcon={<Icon.plus />}
+              onClick={() => {
+                setCreateSeq((n) => n + 1);
+                setCreating(true);
+              }}
+            >
+              Novo usuário
+            </Button>
+          </>
         }
       />
 
@@ -455,6 +485,7 @@ export default function UsersManager({
       <EditUserDialog
         key={editing?.id ?? "fechado"}
         user={editing}
+        isSelf={editing?.id === currentUserId}
         onClose={() => setEditing(null)}
         onSaved={(name) => {
           setEditing(null);

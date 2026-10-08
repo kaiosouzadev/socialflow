@@ -2,10 +2,21 @@ import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import { z } from "zod";
+import {
+  LINK_ACTIONS_PER_MINUTE,
+  bodyTooLarge,
+  declaredBodyTooLarge,
+  isTokenShaped,
+  linkNotFound,
+  monthlyLinkBlocked,
+  monthlyLinkState,
+  publicJson,
+  readJsonCapped,
+  tokenKey,
+  withPublicHeaders,
+} from "@/lib/approval";
 
 export const dynamic = "force-dynamic";
-
-const OPEN = ["enviado_cliente", "em_revisao"];
 
 const schema = z.object({
   note: z.string().max(2000).optional(),
@@ -17,30 +28,34 @@ const schema = z.object({
  * Não mexe no status dos posts — eles continuam em rascunho, fora da fila.
  * Só marca o cronograma como "em_revisao" e guarda o comentário geral para a
  * agência ver na tela de Aprovações.
+ * Ciclo de vida do link (lib/approval): aprovado → 409; 60 dias após o envio → 410.
+ * O token é validado ANTES de ler o corpo, e o corpo tem teto de 32 KB (CF-16).
  */
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ token: string }> }
 ) {
   const limited = enforceRateLimit(`aprovar-changes:${clientIp(req)}`, 20, 60_000);
-  if (limited) return limited;
+  if (limited) return withPublicHeaders(limited);
+  if (declaredBodyTooLarge(req)) return bodyTooLarge();
 
   const { token } = await params;
-  const body = await req.json().catch(() => null);
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!isTokenShaped(token)) return linkNotFound();
+  const perLink = enforceRateLimit(`aprovar-link:${tokenKey(token)}`, LINK_ACTIONS_PER_MINUTE, 60_000);
+  if (perLink) return withPublicHeaders(perLink);
 
   const schedule = await prisma.schedule.findUnique({
     where: { approvalToken: token },
-    select: { id: true, status: true },
+    select: { id: true, status: true, sentAt: true, createdAt: true },
   });
-  if (!schedule) return Response.json({ error: "Link inválido" }, { status: 404 });
-  if (!OPEN.includes(schedule.status)) {
-    return Response.json(
-      { error: "Cronograma não está aberto para revisão" },
-      { status: 409 }
-    );
-  }
+  if (!schedule) return linkNotFound();
+  const blocked = monthlyLinkBlocked(monthlyLinkState(schedule));
+  if (blocked) return blocked;
+
+  const body = await readJsonCapped(req);
+  if (body.tooLarge) return bodyTooLarge();
+  const parsed = schema.safeParse(body.value);
+  if (!parsed.success) return publicJson({ error: parsed.error.flatten() }, 400);
 
   const note = (parsed.data.note ?? "").trim();
 
@@ -59,5 +74,5 @@ export async function POST(
     }),
   ]);
 
-  return Response.json({ ok: true, postsWithNotes: withNotes });
+  return publicJson({ ok: true, postsWithNotes: withNotes });
 }

@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { checkInternalKey } from "@/lib/internal-auth";
-import { r2Configured, r2KeyFromUrl, deleteFromR2 } from "@/lib/r2";
+import { checkInternalKey, internalJson } from "@/lib/internal-auth";
+import { r2Configured } from "@/lib/r2";
+import { deletePostMedia } from "@/lib/r2-cleanup";
 
 export const dynamic = "force-dynamic";
 
@@ -19,14 +20,17 @@ export async function DELETE(
   if (denied) return denied;
 
   const { postId } = await params;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)) {
+    return internalJson({ error: "Post inválido." }, 400);
+  }
   const post = await prisma.post.findUnique({
     where: { id: postId },
     select: { mediaUrl: true, mediaItems: true },
   });
-  if (!post) return Response.json({ error: "Post não encontrado" }, { status: 404 });
+  if (!post) return internalJson({ error: "Post não encontrado" }, 404);
 
   if (!r2Configured()) {
-    return Response.json({ deleted: 0, note: "R2 não configurado" });
+    return internalJson({ deleted: 0, note: "R2 não configurado" });
   }
 
   // coleta as URLs (single + itens do carrossel)
@@ -38,16 +42,12 @@ export async function DELETE(
     }
   }
 
+  // só objetos de mídia de post que nenhum outro registro usa (nunca logos/artes-base)
   let deleted = 0;
-  for (const url of urls) {
-    const key = r2KeyFromUrl(url);
-    if (!key) continue;
-    try {
-      await deleteFromR2(key);
-      deleted++;
-    } catch {
-      // segue; não falha a publicação por causa de limpeza
-    }
+  try {
+    deleted = (await deletePostMedia(postId, urls)).freed;
+  } catch {
+    // segue; não falha a publicação por causa de limpeza
   }
 
   await prisma.post.update({
@@ -55,5 +55,5 @@ export async function DELETE(
     data: { mediaUrl: null, mediaItems: Prisma.JsonNull },
   });
 
-  return Response.json({ deleted });
+  return internalJson({ deleted });
 }

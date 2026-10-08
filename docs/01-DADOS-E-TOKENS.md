@@ -18,9 +18,12 @@ Por quê não no n8n:
 Como fazer:
 - Tabela `social_accounts` guarda o token **criptografado** (ex.: AES via uma chave
   em variável de ambiente, ou pgcrypto).
-- O n8n, na hora de publicar, faz um HTTP Request ao sistema (`GET /internal/token/:account_id`)
-  ou lê direto do Postgres via node Postgres. O sistema descriptografa e devolve.
-- WF de refresh de token roda no n8n e **atualiza a linha no Postgres**.
+- **O token decifrado nunca sai do sistema.** O n8n só dispara: a publicação acontece
+  em `POST /api/internal/publish/:post_id` (o sistema decifra e chama a Graph com o
+  token no header `Authorization`) e a renovação em `POST /api/internal/tokens/refresh`
+  (o sistema troca o token na Meta e regrava cifrado; responde só contagens).
+- As antigas rotas que devolviam token ao n8n (`/internal/token/:id`,
+  `/internal/accounts/:clientId`) foram removidas (auditoria OWASP 07/10).
 
 > Nunca coloque token em URL/query string. Sempre header ou body.
 

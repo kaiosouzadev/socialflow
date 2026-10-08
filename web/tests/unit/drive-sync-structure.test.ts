@@ -187,6 +187,12 @@ async function fakeFetch(input: string | URL | Request, init?: RequestInit): Pro
     }
   }
   const media = /^\/drive\/v3\/files\/([^/]+)$/.exec(url.pathname);
+  // OWASP AUD2-08: metadados (pais) para conferir se a pasta salva fica dentro da raiz
+  if (url.origin === "https://www.googleapis.com" && media && method === "GET" && url.searchParams.get("fields") === "id,parents,trashed") {
+    if (state.failList) return new Response("forbidden", { status: 403 });
+    const node = state.nodes.find((n) => n.id === decodeURIComponent(media[1]));
+    return node ? Response.json({ id: node.id, parents: [node.parent], trashed: false }) : new Response("not found", { status: 404 });
+  }
   if (url.origin === "https://www.googleapis.com" && media && url.searchParams.get("alt") === "media") {
     const node = state.nodes.find((n) => n.id === media[1]);
     return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": node?.mimeType ?? "image/jpeg" } });

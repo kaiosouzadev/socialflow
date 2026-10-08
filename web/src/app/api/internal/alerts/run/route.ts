@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { checkInternalKey } from "@/lib/internal-auth";
+import { checkInternalKey, noStore } from "@/lib/internal-auth";
 import { scheduleClientDeadline, spTodayKey, postResponseDeadline, shortLabel } from "@/lib/deadlines";
 import { raiseAlert, teamEmails, notifyEmailHtml, escapeHtml } from "@/lib/notify";
 import { approvalLink } from "@/lib/approval";
@@ -20,6 +20,11 @@ export const maxDuration = 120;
  *    cliente e alerta a redatora.
  */
 export async function POST(req: NextRequest) {
+  // nada desta rota (contagens, avisos) fica em cache de proxy/CDN
+  return noStore(await run(req));
+}
+
+async function run(req: NextRequest): Promise<Response> {
   const session = await auth();
   if (!session?.user) {
     const denied = checkInternalKey(req);

@@ -3,9 +3,12 @@
 import * as server from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuthUser } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { consumeAiQuota } from "@/lib/ai-quota";
+import { readJsonLimited } from "@/lib/read-json";
+import { mediaUrlProblem } from "@/lib/media-url";
 import { prepareClientDriveFolders, spMonthKey } from "@/lib/drive-sync";
 import { fillMissingCaptions, needsContent } from "@/lib/calendar-captions";
 import { z } from "zod";
@@ -15,6 +18,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 /** Não começa lote de IA novo depois disso (folga para o lote em andamento terminar). */
 const FILL_BUDGET_MS = 180_000;
+/**
+ * Posts por chamada de IA no `after()` (= CAPTION_BATCH_SIZE de lib/calendar-captions; repetido
+ * aqui porque os testes antigos trocam aquele módulo por um falso só com as funções).
+ */
+const FILL_BATCH_SIZE = 4;
+/** Teto do corpo: até 62 posts com legendas e roteiros (o proxy já recusa acima de 2 MB). */
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 const captionsSchema = z
   .object({
@@ -58,14 +68,24 @@ const SAVE_FAILED = "Não foi possível salvar o cronograma agora. Nada foi grav
  * grava onde a legenda continua vazia.
  */
 export async function POST(req: server.NextRequest) {
-  const denied = await requireAuth();
+  const { user, denied } = await requireAuthUser();
   if (denied) return denied;
 
   const limited = enforceRateLimit(`calendar-commit:${clientIp(req)}`, 20, 5 * 60_000);
   if (limited) return limited;
 
-  const body = await req.json().catch(() => null);
-  const parsed = schema.safeParse(body);
+  const read = await readJsonLimited(req, MAX_BODY_BYTES);
+  if (!read.ok) return read.response;
+  // OWASP AUD2-04 (lib/media-url): mídia de cada post só por https público — 400 pt-BR com o campo
+  const rawPosts = (read.value as { posts?: unknown } | null)?.posts;
+  if (Array.isArray(rawPosts)) {
+    for (const [i, p] of rawPosts.entries()) {
+      const media = (p as { mediaUrl?: unknown } | null)?.mediaUrl;
+      const problem = typeof media === "string" && media.trim() !== "" ? mediaUrlProblem(media) : null;
+      if (problem) return Response.json({ error: problem, field: `posts.${i}.mediaUrl` }, { status: 400 });
+    }
+  }
+  const parsed = schema.safeParse(read.value);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
@@ -169,7 +189,21 @@ export async function POST(req: server.NextRequest) {
   // Drive (best-effort, depois de gravar): pasta do cliente e Cliente/AAAA/MM - Mês
   // de cada mês tocado. Nunca derruba o commit: falha vira `driveWarning`.
   const { pendingIds, ...saved } = result;
+  // teto de gerações por IA (CF-12): as legendas que faltam saem em lotes de 4 posts, e cada
+  // lote conta 1 geração. Sem cota, o cronograma fica salvo e o lote semanal completa depois.
+  let captionsPending = pendingIds.length;
   if (pendingIds.length > 0) {
+    const quota = consumeAiQuota(user.id, Math.ceil(pendingIds.length / FILL_BATCH_SIZE));
+    if (!quota.ok) {
+      console.warn(
+        `[ai/calendar/commit] limite de IA (${quota.scope}): ${pendingIds.length} post(s) ficam sem legenda por agora`,
+        clientId,
+        month
+      );
+      captionsPending = 0;
+    }
+  }
+  if (captionsPending > 0) {
     server.after(async () => {
       try {
         const fill = await fillMissingCaptions(pendingIds, { deadlineAt: Date.now() + FILL_BUDGET_MS });
@@ -190,5 +224,5 @@ export async function POST(req: server.NextRequest) {
   const months = posts.map((p) => spMonthKey(new Date(p.scheduledAt)));
   const driveInfo = await prepareClientDriveFolders(client, months);
 
-  return Response.json({ ...saved, captionsPending: pendingIds.length, month, ...driveInfo }, { status: 201 });
+  return Response.json({ ...saved, captionsPending, month, ...driveInfo }, { status: 201 });
 }

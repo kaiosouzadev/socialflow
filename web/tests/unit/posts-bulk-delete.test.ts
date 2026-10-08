@@ -5,6 +5,11 @@
  *   - apaga num só deleteMany os posts pedidos, EXCETO os "publishing" (o publicador está com eles);
  *   - responde { ok, deleted, skippedPublishing, notFound } com as contagens certas;
  *   - falha do banco → 500 pt-BR, sem o texto do Prisma.
+ * OWASP R2 (AC-07, decisão "Só admin + registro"):
+ *   - post PUBLICADO só a admin exclui: staff com publicado na seleção → 403 pt-BR (com a contagem) e
+ *     NADA é apagado; o deleteMany da staff também filtra "published" (corrida "publicou no meio");
+ *   - staff continua excluindo rascunho/agendado/com falha;
+ *   - cada exclusão grava `posts.bulk_delete` na trilha com as contagens por status (sem o conteúdo).
  *
  * Técnica do doc-import-captions.test.ts / aprovar-semana-guard.test.ts: hooks de módulo resolvem
  * "@/" para os fontes e trocam Prisma e a sessão (@/auth) por versões falsas em memória (sem rede e
@@ -26,15 +31,24 @@ const HEX = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 // ------------------------------------------------------------ banco e sessão falsos
 
-type Row = { id: string; status: string; theme: string };
-type Session = { user: { role?: string } } | null;
-type Where = { id?: { in?: string[] }; status?: { not?: string } };
+type Row = { id: string; status: string; theme: string; clientId: string };
+type Session = { user: { id?: string; email?: string; role?: string } } | null;
+type Where = { id?: { in?: string[] }; status?: { not?: string; notIn?: string[] } };
+type AuditRow = { action: string; actorId: string | null; actorEmail: string | null; clientId: string | null; meta: unknown };
+
+const STAFF: Session = { user: { id: uid(901), email: "zzqa.r2.staff@example.com", role: "staff" } };
+const ADMIN: Session = { user: { id: uid(900), email: "zzqa.r2.admin@example.com", role: "admin" } };
+const CLIENT_A = uid(801);
+const CLIENT_B = uid(802);
 
 const state = {
-  session: { user: { role: "staff" } } as Session,
+  session: STAFF as Session,
   posts: [] as Row[],
   calls: [] as { op: string; where: Where }[],
+  audit: [] as AuditRow[],
   fail: null as Error | null,
+  /** chamado depois do 1º findMany (simula o publicador mudando um post no meio do caminho) */
+  afterFirstFind: null as (() => void) | null,
 };
 
 /** Igualdade de UUID do Postgres: sem diferenciar maiúsculas. */
@@ -47,8 +61,10 @@ function matches(row: Row, where: Where): boolean {
   assert.ok(Array.isArray(where.id?.in), "where.id.in deve ser a lista de ids");
   if (!where.id!.in!.some((id) => sameId(id, row.id))) return false;
   if (where.status !== undefined) {
-    assert.deepEqual(Object.keys(where.status), ["not"], "where.status só com `not`");
-    if (row.status === where.status.not) return false;
+    const keys = Object.keys(where.status);
+    assert.ok(keys.length === 1 && (keys[0] === "not" || keys[0] === "notIn"), "where.status só com `not` ou `notIn`");
+    if (where.status.not !== undefined && row.status === where.status.not) return false;
+    if (where.status.notIn !== undefined && where.status.notIn.includes(row.status)) return false;
   }
   return true;
 }
@@ -70,10 +86,20 @@ const fakePrisma = {
     findMany: async ({ where }: { where: Where }) => {
       state.calls.push({ op: "findMany", where });
       if (state.fail) throw state.fail;
-      return state.posts.filter((p) => matches(p, where)).map((p) => ({ id: p.id, status: p.status }));
+      const out = state.posts.filter((p) => matches(p, where)).map((p) => ({ id: p.id, status: p.status, clientId: p.clientId }));
+      const hook = state.afterFirstFind;
+      state.afterFirstFind = null;
+      hook?.();
+      return out;
     },
     // a exclusão em massa nunca usa a exclusão individual
     delete: async () => assert.fail("bulk-delete não deve usar prisma.post.delete"),
+  },
+  auditLog: {
+    create: async ({ data }: { data: AuditRow }) => {
+      state.audit.push({ action: data.action, actorId: data.actorId, actorEmail: data.actorEmail, clientId: data.clientId, meta: data.meta });
+      return data;
+    },
   },
 };
 
@@ -88,6 +114,7 @@ const FAKE_MODULES: Record<string, string> = {
   "next/server": "export class NextRequest extends Request {} export class NextResponse extends Response {}",
   "@/auth": "export const auth = async () => globalThis.__p5b.state.session;",
   "@/lib/prisma": "export const prisma = globalThis.__p5b.prisma;",
+  "@/generated/prisma/client": "export const Prisma = { JsonNull: null };",
 };
 type ResolveHook = (
   specifier: string,
@@ -124,7 +151,12 @@ async function call(body: unknown, raw = false): Promise<{ status: number; json:
 }
 
 function seed(...rows: [number, string][]) {
-  state.posts = rows.map(([n, status]) => ({ id: uid(n), status, theme: `ZZ QA P5B ${status} ${n}` }));
+  state.posts = rows.map(([n, status]) => ({
+    id: uid(n),
+    status,
+    theme: `ZZ QA P5B ${status} ${n}`,
+    clientId: n % 2 ? CLIENT_A : CLIENT_B,
+  }));
 }
 
 /** `error` é texto pt-BR para a tela (N-14): string, sem inglês/jargão do zod ou do Prisma. */
@@ -138,10 +170,12 @@ function assertFriendly(json: Record<string, unknown>, expected?: string) {
 }
 
 beforeEach(() => {
-  state.session = { user: { role: "staff" } };
+  state.session = STAFF;
   state.posts = [];
   state.calls = [];
+  state.audit = [];
   state.fail = null;
+  state.afterFirstFind = null;
   logs.length = 0;
 });
 
@@ -158,11 +192,11 @@ describe("POST /api/posts/bulk-delete — sessão", () => {
     assert.equal(state.posts.length, 1);
   });
 
-  test("qualquer usuário logado (não só admin) pode excluir", async () => {
-    seed([1, "draft"]);
-    const r = await call({ ids: [uid(1)] });
+  test("staff (não só admin) exclui rascunho, agendado e com falha", async () => {
+    seed([1, "draft"], [2, "scheduled"], [3, "failed"]);
+    const r = await call({ ids: [uid(1), uid(2), uid(3)] });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.json, { ok: true, deleted: 1, skippedPublishing: 0, notFound: 0 });
+    assert.deepEqual(r.json, { ok: true, deleted: 3, skippedPublishing: 0, notFound: 0 });
   });
 });
 
@@ -205,7 +239,8 @@ describe("POST /api/posts/bulk-delete — validação (400 com texto pt-BR, banc
 });
 
 describe("POST /api/posts/bulk-delete — exclusão", () => {
-  test("apaga rascunho, agendado, publicado e com falha; mantém o em publicação; conta o inexistente", async () => {
+  test("admin: apaga rascunho, agendado, publicado e com falha; mantém o em publicação; conta o inexistente", async () => {
+    state.session = ADMIN;
     seed([1, "draft"], [2, "scheduled"], [3, "published"], [4, "failed"], [5, "publishing"], [6, "scheduled"]);
     const r = await call({ ids: [uid(1), uid(2), uid(3), uid(4), uid(5), uid(99)] });
     assert.equal(r.status, 200);
@@ -220,13 +255,22 @@ describe("POST /api/posts/bulk-delete — exclusão", () => {
     );
   });
 
-  test("um só deleteMany, filtrado por ids E por status ≠ publishing", async () => {
+  test("um só deleteMany, filtrado por ids E por status (admin: ≠ publishing; staff: ≠ publishing e ≠ published)", async () => {
+    state.session = ADMIN;
     seed([1, "draft"], [2, "publishing"]);
     await call({ ids: [uid(1), uid(2)] });
-    const deletes = state.calls.filter((c) => c.op === "deleteMany");
+    let deletes = state.calls.filter((c) => c.op === "deleteMany");
     assert.equal(deletes.length, 1);
-    assert.deepEqual(deletes[0].where.status, { not: "publishing" });
+    assert.deepEqual(deletes[0].where.status, { notIn: ["publishing"] });
     assert.deepEqual([...(deletes[0].where.id?.in ?? [])].sort(), [uid(1), uid(2)]);
+
+    state.session = STAFF;
+    state.calls = [];
+    seed([1, "draft"], [2, "publishing"]);
+    await call({ ids: [uid(1), uid(2)] });
+    deletes = state.calls.filter((c) => c.op === "deleteMany");
+    assert.equal(deletes.length, 1);
+    assert.deepEqual(deletes[0].where.status, { notIn: ["publishing", "published"] });
   });
 
   test("só posts em publicação → nada apagado, todos contados como em publicação", async () => {
@@ -247,11 +291,80 @@ describe("POST /api/posts/bulk-delete — exclusão", () => {
 
   test("UUID em maiúsculas encontra o post (o Postgres não diferencia)", async () => {
     seed([2, "scheduled"]);
-    state.posts.push({ id: HEX, status: "draft", theme: "ZZ QA P5B hex" });
+    state.posts.push({ id: HEX, status: "draft", theme: "ZZ QA P5B hex", clientId: CLIENT_A });
     const r = await call({ ids: [HEX.toUpperCase()] });
     assert.equal(r.status, 200);
     assert.deepEqual(r.json, { ok: true, deleted: 1, skippedPublishing: 0, notFound: 0 });
     assert.deepEqual(state.posts.map((p) => p.id), [uid(2)]);
+  });
+
+  test("ataque que passava antes (AC-07): staff com publicado na seleção → 403 pt-BR e NADA é apagado", async () => {
+    seed([1, "draft"], [3, "published"], [5, "published"]);
+    const r = await call({ ids: [uid(1), uid(3), uid(5)] });
+    assert.equal(r.status, 403);
+    assertFriendly(
+      r.json,
+      "Só administradoras podem excluir posts já publicados. Tire da seleção os 2 posts publicados e tente de novo."
+    );
+    assert.equal(r.json.published, 2);
+    assert.equal(state.posts.length, 3, "nada apagado, nem o rascunho");
+    assert.equal(state.calls.filter((c) => c.op === "deleteMany").length, 0);
+    assert.equal(state.audit.length, 0);
+  });
+
+  test("staff com 1 publicado → texto no singular", async () => {
+    seed([3, "published"]);
+    const r = await call({ ids: [uid(3)] });
+    assert.equal(r.status, 403);
+    assertFriendly(r.json, "Só administradoras podem excluir posts já publicados. Tire da seleção o post publicado e tente de novo.");
+  });
+
+  test("staff: post publicado no meio do caminho fica (skippedPublished), nunca é apagado", async () => {
+    seed([1, "draft"], [2, "scheduled"]);
+    // depois da conferência, o publicador publica o agendado
+    state.afterFirstFind = () => {
+      state.posts.find((p) => p.id === uid(2))!.status = "published";
+    };
+    const r = await call({ ids: [uid(1), uid(2)] });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json, { ok: true, deleted: 1, skippedPublishing: 0, notFound: 0, skippedPublished: 1 });
+    assert.deepEqual(state.posts.map((p) => [p.id, p.status]), [[uid(2), "published"]]);
+  });
+
+  test("registro posts.bulk_delete: quem, contagens por status, cliente único; nunca o tema dos posts", async () => {
+    state.session = ADMIN;
+    seed([1, "draft"], [3, "published"], [5, "scheduled"], [7, "publishing"]);
+    const r = await call({ ids: [uid(1), uid(3), uid(5), uid(7), uid(99)] });
+    assert.equal(r.status, 200);
+    assert.equal(state.audit.length, 1);
+    const a = state.audit[0];
+    assert.equal(a.action, "posts.bulk_delete");
+    assert.equal(a.actorId, uid(900));
+    assert.equal(a.actorEmail, "zzqa.r2.admin@example.com");
+    assert.equal(a.clientId, CLIENT_A, "todos os apagados são do cliente A (ímpares)");
+    assert.deepEqual(a.meta, {
+      requested: 5,
+      deleted: 3,
+      byStatus: { draft: 1, published: 1, scheduled: 1 },
+      skippedPublishing: 1,
+      notFound: 1,
+      clients: 1,
+    });
+    assert.doesNotMatch(JSON.stringify(a.meta), /ZZ QA P5B/);
+  });
+
+  test("dois clientes → clientId null no registro (contagem de clientes em meta)", async () => {
+    seed([1, "draft"], [2, "draft"]);
+    await call({ ids: [uid(1), uid(2)] });
+    assert.equal(state.audit.length, 1);
+    assert.equal(state.audit[0].clientId, null);
+    assert.equal((state.audit[0].meta as { clients: number }).clients, 2);
+  });
+
+  test("nada apagado → sem registro", async () => {
+    seed([1, "publishing"]);
+    await call({ ids: [uid(1)] });
+    assert.equal(state.audit.length, 0);
   });
 
   test("falha do banco → 500 em pt-BR, sem o texto do Prisma (detalhe só no log)", async () => {

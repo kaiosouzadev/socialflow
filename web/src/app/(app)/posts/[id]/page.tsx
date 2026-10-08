@@ -524,7 +524,9 @@ export default async function PostDetailPage({ params, searchParams }: Props) {
                           </p>
                         )}
                       </div>
-                      <StatusBadge status={pub.status === "success" ? "published" : "failed"} />
+                      <StatusBadge
+                        status={pub.status === "success" ? "published" : pub.status === "publishing" ? "publishing" : "failed"}
+                      />
                     </li>
                   );
                 })}

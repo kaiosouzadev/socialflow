@@ -4,16 +4,13 @@
  * nenhum post chega a scheduled, publishing ou published — a produção segue
  * normal, com os posts em draft.
  *
- * Usada em todos os caminhos que põem post na fila ou publicam: criação e
- * edição de post, reenvio, aprovação mensal, semanal e interna, e o publicador.
+ * Usada em todos os caminhos que põem post na fila: criação e edição de post,
+ * reenvio, aprovação mensal, semanal e interna. O publicador aplica a mesma
+ * política dentro da tomada atômica do post (lib/publish-queue `claimPost`):
+ * post de cliente só produção volta para draft e a resposta é 409.
  */
 import { prisma } from "@/lib/prisma";
-import {
-  PUBLISH_BLOCKED,
-  PUBLISH_BLOCKED_LAST_ERROR,
-  blocksStatus,
-  isQueueStatus,
-} from "@/lib/publish-policy";
+import { PUBLISH_BLOCKED, blocksStatus, isQueueStatus } from "@/lib/publish-policy";
 
 /**
  * Filtro da relação `client` para os `updateMany` que põem posts na fila.
@@ -46,18 +43,4 @@ export async function guardQueueTransition(
   const client = await loadClientPolicy(clientId);
   if (!client) return null;
   return blocksStatus(client, nextStatus) ? publishBlockedResponse() : null;
-}
-
-/**
- * O publicador recusou um post de cliente só produção: o post volta para
- * draft — nunca failed, que o WF-03 não reagenda para esse cliente e ficaria
- * preso no contador "Falharam" (N-01) — com um `lastError` legível. Só mexe
- * se o post ainda estiver em publishing. Devolve o 409.
- */
-export async function refusePublishing(postId: string): Promise<Response> {
-  await prisma.post.updateMany({
-    where: { id: postId, status: "publishing" },
-    data: { status: "draft", lastError: PUBLISH_BLOCKED_LAST_ERROR },
-  });
-  return publishBlockedResponse();
 }

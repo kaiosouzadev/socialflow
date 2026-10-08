@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { checkInternalKey } from "@/lib/internal-auth";
+import { checkInternalKey, internalJson } from "@/lib/internal-auth";
 import { syncMedia } from "@/lib/drive-sync";
 
 export const dynamic = "force-dynamic";
@@ -14,9 +14,9 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await syncMedia({ withinDays: 30 });
-    return Response.json(result);
+    return internalJson(result);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Erro na sincronização";
-    return Response.json({ error: msg }, { status: 500 });
+    return internalJson({ error: msg }, 500);
   }
 }

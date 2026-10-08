@@ -88,7 +88,7 @@ function Networks({ targets }: { targets: string[] }) {
 }
 
 /** Situação da postagem: um selo por estado, texto ≥ 14 px (DESIGN h.2). */
-function StateBadge({ post }: { post: Post }) {
+function StateBadge({ post, readOnly = false }: { post: Post; readOnly?: boolean }) {
   if (post.approved) {
     return (
       <ToneBadge tone="success" size="md" icon={<Icon.check />}>
@@ -100,6 +100,14 @@ function StateBadge({ post }: { post: Post }) {
     return (
       <ToneBadge tone="warning" size="md" icon={<Icon.edit />}>
         Ajuste em andamento
+      </ToneBadge>
+    );
+  }
+  // semana concluída: não há mais prazo para responder por este link
+  if (readOnly) {
+    return (
+      <ToneBadge tone="neutral" size="md">
+        Sem resposta
       </ToneBadge>
     );
   }
@@ -245,12 +253,15 @@ function PostCard({
   post,
   label,
   onChange,
+  readOnly = false,
 }: {
   token: string;
   post: Post;
   /** nome único da postagem nesta semana (tema; repetido → com formato e data), para os nomes acessíveis (U-11) */
   label: string;
   onChange: (p: Post) => void;
+  /** semana concluída: só leitura, sem Aprovar/Pedir ajuste (o servidor também recusa, AC-05) */
+  readOnly?: boolean;
 }) {
   const uid = useId();
   const [showForm, setShowForm] = useState(false);
@@ -262,7 +273,7 @@ function PostCard({
   const pending = pendingOf(post);
   const resolved = post.adjustments.length - pending;
   // regra do cliente: aprovada não pede ajuste; com ajuste aberto não aprova até a equipe concluir
-  const canAnswer = !post.approved && pending === 0;
+  const canAnswer = !readOnly && !post.approved && pending === 0;
   const remaining = MIN_ADJUST - comment.trim().length;
 
   // foco: abrir o pedido leva à caixa de texto; cancelar devolve ao "Pedir ajuste" (o botão some enquanto o
@@ -356,7 +367,7 @@ function PostCard({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <StateBadge post={post} />
+          <StateBadge post={post} readOnly={readOnly} />
           <Networks targets={post.targets} />
         </div>
       </div>
@@ -415,6 +426,11 @@ function PostCard({
             <p className="text-sm text-fg-muted">
               Você aprovou esta postagem. Por este link não é mais possível pedir ajuste; se precisar mudar algo, fale
               com a agência.
+            </p>
+          ) : readOnly ? (
+            <p className="text-sm text-fg-muted">
+              A revisão desta semana foi concluída. Por este link não é mais possível responder a esta postagem; se
+              precisar mudar algo, fale com a agência.
             </p>
           ) : pending > 0 ? (
             <p className="text-sm font-medium text-warning-fg">
@@ -531,6 +547,7 @@ export default function WeeklyView({
   clientLogoUrl,
   weekRange,
   posts: initialPosts,
+  readOnly = false,
 }: {
   token: string;
   clientName: string;
@@ -538,6 +555,8 @@ export default function WeeklyView({
   /** "12 a 18 de outubro" */
   weekRange: string;
   posts: Post[];
+  /** semana concluída (weekly_reviews.status = concluido): só leitura */
+  readOnly?: boolean;
 }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
   // respondida = aprovada ou com pedido de ajuste aberto
@@ -572,10 +591,10 @@ export default function WeeklyView({
           </div>
           <h1 className="mt-4 font-display text-3xl font-semibold tracking-display text-fg">Postagens da semana</h1>
           <p className="mt-1 text-base text-fg-muted">
-            Semana de {weekRange}. Responda até o prazo de cada postagem.
+            {readOnly ? `Semana de ${weekRange}.` : `Semana de ${weekRange}. Responda até o prazo de cada postagem.`}
           </p>
           {/* o que cada resposta faz: uma vez aqui, não em cada cartão (U-10) */}
-          {posts.length > 0 && (
+          {!readOnly && posts.length > 0 && (
             <ul className="mt-3 grid gap-1 text-sm text-fg-muted">
               <li>
                 <span className="font-semibold text-fg">Aprovar postagem:</span> confirma o texto e a arte. Depois
@@ -588,6 +607,12 @@ export default function WeeklyView({
             </ul>
           )}
         </div>
+
+        {readOnly && (
+          <Callout tone="success" title="Revisão da semana concluída">
+            Por este link não é mais possível aprovar nem pedir ajustes. Se precisar mudar algo, fale com a agência.
+          </Callout>
+        )}
 
         {posts.length > 0 && (
           <div className="card p-4">
@@ -620,6 +645,7 @@ export default function WeeklyView({
             post={p}
             label={labels.get(p.id) ?? (p.theme || "Postagem sem tema")}
             onChange={handleChange}
+            readOnly={readOnly}
           />
         ))}
 

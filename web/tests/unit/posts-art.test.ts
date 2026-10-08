@@ -204,12 +204,12 @@ describe("PATCH /api/posts/[id]/art — marcar e desmarcar", () => {
     assert.deepEqual(r.json, { ok: true, artDoneAt: null, artDoneBy: null });
   });
 
-  test("sessão sem id no token → acha a usuária pelo e-mail", async () => {
+  test("sessão sem id no token → 401 (OWASP R1/CF-01: a sessão precisa de identidade; nada é marcado)", async () => {
     state.session = { user: { email: ANA.email } };
     const r = await call(uid(1), { done: true });
-    assert.equal(r.status, 200);
-    assert.deepEqual(r.json.artDoneBy, { id: ANA.id, name: ANA.name });
-    assert.equal(state.posts[0].artDoneBy, ANA.id);
+    assert.equal(r.status, 401);
+    assert.equal(state.posts[0].artDoneBy, null);
+    assert.equal(state.posts[0].artDoneAt, null);
   });
 
   test("usuária da sessão excluída do banco → marca mesmo assim, com artDoneBy null (sem violar a FK)", async () => {

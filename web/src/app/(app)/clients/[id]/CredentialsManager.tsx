@@ -60,7 +60,13 @@ export default function CredentialsManager({
       const data: unknown = await res.json().catch(() => null);
       const list = (data as { credentials?: unknown } | null)?.credentials;
       if (!res.ok || !Array.isArray(list)) {
-        setError("Não foi possível carregar as credenciais. Tente de novo.");
+        // 429 (limite de revelações por hora) e 503 trazem o motivo em pt-BR (N-14: só texto)
+        const reason = (data as { error?: unknown } | null)?.error;
+        setError(
+          (res.status === 429 || res.status === 503) && typeof reason === "string"
+            ? reason
+            : "Não foi possível carregar as credenciais. Tente de novo.",
+        );
         return;
       }
       setRows(list as Credential[]);
@@ -159,7 +165,9 @@ export default function CredentialsManager({
       </div>
 
       {!revealed && hasSaved && !editing && (
-        <p className="text-sm text-fg-muted">Credenciais salvas e criptografadas. Use “Revelar” para ver.</p>
+        <p className="text-sm text-fg-muted">
+          Credenciais salvas e criptografadas. Use “Revelar” para ver; cada revelação fica no registro de ações.
+        </p>
       )}
       {!revealed && !hasSaved && !editing && <p className="text-sm text-fg-muted">Nenhuma credencial cadastrada.</p>}
 

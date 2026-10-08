@@ -180,6 +180,12 @@ const FAKE_MODULES: Record<string, string> = {
     ` export const uploadToDrive = ${BLOCKED("Drive")}; export const serviceAccountEmail = () => null;`,
   "@/lib/drive-sync":
     "export const ensureClientDriveFolder = async () => null; export const monthIndexFor = async () => new Map();",
+  // OWASP R4: o art-gen baixa a arte-base por lib/safe-fetch (node:https com DNS conferido); aqui o download
+  // passa pelo fetch falso acima (https://example.com/ → TINY_PNG), sem rede. O resto do módulo é o real.
+  "@/lib/safe-fetch":
+    `export * from ${JSON.stringify(pathToFileURL(path.join(SRC, "lib/safe-fetch.ts")).href)};` +
+    " export async function safeFetchBuffer(url) { const r = await fetch(url); if (!r.ok) throw new Error('status ' + r.status);" +
+    " return { buffer: Buffer.from(await r.arrayBuffer()), contentType: String(r.headers.get('content-type') ?? '').split(';')[0], finalUrl: url }; }",
 };
 type ResolveHook = (
   specifier: string,

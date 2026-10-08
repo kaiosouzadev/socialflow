@@ -41,6 +41,7 @@ import {
 } from "@/lib/doc-import";
 import { formatMonthLabel, spLocalInputFromISO, spLocalInputToISO } from "@/lib/format-date";
 import type { PostFormat } from "@/lib/formats";
+import { normalizeClientUrl } from "@/lib/client-urls";
 
 type Db = Prisma.TransactionClient;
 
@@ -922,8 +923,13 @@ export async function commitImport(clientId: string, input: ImportInput): Promis
         let briefingTouched = false;
         for (const f of marked) {
           const v = a.proposedBriefing.get(f) as string;
-          if (isClientField(f)) clientData[f] = v;
-          else {
+          if (isClientField(f)) {
+            // endereços do cadastro: mesma regra do formulário (só https; javascript:/data: etc. não entram)
+            if (f === "website" || f === "instagramUrl" || f === "facebookUrl") {
+              const url = normalizeClientUrl(f, v);
+              if (url.ok) clientData[f] = url.value || null;
+            } else clientData[f] = v;
+          } else {
             briefing[f] = v;
             briefingTouched = true;
           }

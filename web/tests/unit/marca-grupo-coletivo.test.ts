@@ -42,7 +42,7 @@ const fakePrisma = {
 
 const FAKE_MODULES: Record<string, string> = {
   "next/server": "export class NextRequest extends Request {} export class NextResponse extends Response {}",
-  "@/auth": "export const auth = async () => ({ user: { role: 'staff' } });",
+  "@/auth": "export const auth = async () => ({ user: { id: '00000000-0000-4000-8000-0000000000a5', role: 'staff' } });",
   "@/lib/prisma": "export const prisma = globalThis.__p4a2m.prisma;",
 };
 type ResolveHook = (

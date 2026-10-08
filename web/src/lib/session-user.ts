@@ -4,7 +4,11 @@ import { uuidString } from "@/lib/validators";
 
 type SessionUser = { id?: string; email?: string | null } | undefined;
 
-/** Usuária da sessão no banco (id) — pelo id do token; sem ele, pelo e-mail. null se não existir mais. */
+/**
+ * Usuária da sessão no banco (id) — pelo id do token; sem ele, pelo e-mail. null se não existir mais.
+ * (A sessão já chega revalidada por `auth()` — lib/session-guard —; a releitura aqui só garante
+ * a FK de quem grava, como `app_settings.updated_by`.)
+ */
 export async function sessionUserId(): Promise<string | null> {
   const session = await auth();
   const user = session?.user as SessionUser;

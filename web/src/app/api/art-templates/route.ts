@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
+import { mediaUrlProblem } from "@/lib/media-url";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,10 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   const body = await req.json().catch(() => null);
+  // OWASP AUD2-04: arte-base só https do R2 público (javascript:/data:/outro host → 400 pt-BR)
+  const raw = (body as { baseImageUrl?: unknown } | null)?.baseImageUrl;
+  const problem = typeof raw === "string" ? mediaUrlProblem(raw, { r2Only: true }) : null;
+  if (problem) return Response.json({ error: problem, field: "baseImageUrl" }, { status: 400 });
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });

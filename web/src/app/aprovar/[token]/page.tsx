@@ -3,7 +3,14 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { PublicHeader } from "@/components/Logo";
-import { monthLabel } from "@/lib/approval";
+import {
+  EXPIRED_PAGE_TITLE,
+  PUBLIC_PAGE_ROBOTS,
+  isTokenShaped,
+  monthLabel,
+  monthlyLinkState,
+  tokenKey,
+} from "@/lib/approval";
 import { formatMonthLabel } from "@/lib/format-date";
 import { getInstagramProfilePreview } from "@/lib/ig-profile";
 import { MONTHLY_POST_SELECT, mediaItemsOf, toMonthlyApprovalPost } from "@/lib/monthly-approval";
@@ -17,12 +24,18 @@ export const dynamic = "force-dynamic";
  * Fase cronograma: sem legenda e sem slides — o cliente revisa a legenda no link
  * semanal (MONTHLY_POST_SELECT / toMonthlyApprovalPost em lib/monthly-approval).
  * `cache` faz a página e o generateMetadata dividirem UMA consulta por request.
+ * Ciclo de vida (lib/approval): 60 dias após o envio o link expira → mesma página amigável do
+ * link inexistente (HTTP 404, sem revelar qual dos dois); aprovado → só leitura.
  */
-const loadSchedule = cache((token: string) =>
-  prisma.schedule.findUnique({
+const loadSchedule = cache(async (token: string) => {
+  // formato impossível: nem consulta o banco
+  if (!isTokenShaped(token)) return null;
+  const schedule = await prisma.schedule.findUnique({
     where: { approvalToken: token },
     select: {
       status: true,
+      sentAt: true,
+      createdAt: true,
       monthRef: true,
       clientNote: true,
       changesAskedAt: true,
@@ -33,8 +46,11 @@ const loadSchedule = cache((token: string) =>
         select: MONTHLY_POST_SELECT,
       },
     },
-  })
-);
+  });
+  if (!schedule) return null;
+  const state = monthlyLinkState(schedule);
+  return state === "expirado" ? null : { ...schedule, state };
+});
 
 /**
  * Perfil do Instagram (ou do cadastro) para "Ver como feed": uma chamada por
@@ -53,14 +69,18 @@ type Params = { params: Promise<{ token: string }> };
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { token } = await params;
   const schedule = await loadSchedule(token);
-  if (!schedule) return { title: "Link indisponível" };
-  return { title: `Cronograma de ${monthTitle(schedule.monthRef)} · ${schedule.client.name}` };
+  if (!schedule) return { title: EXPIRED_PAGE_TITLE, robots: PUBLIC_PAGE_ROBOTS };
+  return {
+    title: `Cronograma de ${monthTitle(schedule.monthRef)} · ${schedule.client.name}`,
+    robots: PUBLIC_PAGE_ROBOTS,
+  };
 }
 
 export default async function ApprovalPage({ params }: Params) {
   const { token } = await params;
   const schedule = await loadSchedule(token);
-  // antes de qualquer streaming: a resposta sai com HTTP 404 (not-found.tsx do segmento)
+  // inexistente, substituído (reenvio) ou expirado: antes de qualquer streaming a resposta sai
+  // com HTTP 404 e a mesma página amigável (not-found.tsx do segmento)
   if (!schedule) notFound();
 
   const posts = schedule.posts.map(toMonthlyApprovalPost);
@@ -78,6 +98,7 @@ export default async function ApprovalPage({ params }: Params) {
       <main id="conteudo">
         <ApprovalView
           token={token}
+          seenKey={tokenKey(token)}
           clientName={schedule.client.name}
           clientLogoUrl={schedule.client.logoUrl}
           monthTitle={monthTitle(schedule.monthRef)}
@@ -85,7 +106,7 @@ export default async function ApprovalPage({ params }: Params) {
           year={schedule.monthRef.getUTCFullYear()}
           month={schedule.monthRef.getUTCMonth()}
           posts={posts}
-          readOnly={schedule.status === "aprovado_cliente"}
+          readOnly={schedule.state === "aprovado"}
           changesAsked={schedule.status === "em_revisao" && !!schedule.changesAskedAt}
           scheduleNote={schedule.clientNote}
           igProfile={igProfile}

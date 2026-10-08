@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/Button";
 import { ConfirmDialog } from "@/components/Dialog";
+import { flashToast } from "@/components/FlashToast";
 import { Icon } from "@/components/Icons";
 
 /**
@@ -36,7 +37,16 @@ export default function DeletePostButton({
       const res = await fetch(`/api/posts/${postId}`, { method: "DELETE" });
       if (!res.ok) {
         const d = await res.json().catch(() => null);
-        setError(typeof d?.error === "string" ? d.error : "Não foi possível excluir o post. Tente de novo.");
+        const message = typeof d?.error === "string" ? d.error : "Não foi possível excluir o post. Tente de novo.";
+        if (res.status === 403 || res.status === 404 || res.status === 409) {
+          // o post mudou (ex.: foi publicado) e a lista vai se atualizar: este botão pode sumir,
+          // então o aviso vai para o Toast do layout, que sobrevive ao refresh
+          setOpen(false);
+          flashToast(message, "error");
+          router.refresh();
+          return;
+        }
+        setError(message);
         return;
       }
       setOpen(false);

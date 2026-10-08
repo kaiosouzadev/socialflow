@@ -22,7 +22,7 @@ const CLIENT_ID = "33333333-3333-4333-8333-333333333333";
 
 type Row = Record<string, unknown>;
 const state = {
-  session: { user: { role: "staff" } } as { user: { role?: string } } | null,
+  session: { user: { id: "00000000-0000-4000-8000-0000000000a5", role: "staff" } } as { user: { id?: string; role?: string } } | null,
   client: null as Row | null,
   users: [] as Row[],
   posts: [] as Row[],

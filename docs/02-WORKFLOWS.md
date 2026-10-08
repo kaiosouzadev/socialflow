@@ -20,11 +20,16 @@ branches presentes em `targets`.
 
 ### WF-01 — Publicação (o core)
 ```
-Trigger (webhook OU schedule poll a cada 5min)
-  └─ Busca posts com status=scheduled e scheduled_at <= now(),
-     só de clientes com clients.agency_publishes = true  [Postgres]
-      └─ Para cada post:
-          ├─ Checa rate limit da conta (content_publishing_limit)
+Trigger (schedule poll a cada 5min)
+  └─ Seleciona posts com status=scheduled e scheduled_at <= now(),
+     só de clientes com clients.agency_publishes = true  [Postgres, só leitura,
+     FOR UPDATE SKIP LOCKED]
+      └─ Para cada post: POST /api/internal/publish/:id  (o SISTEMA publica)
+          ├─ Toma o post de forma atômica (scheduled → publishing, trava de linha);
+          │     já tomado / fora da fila → 409, nada é publicado
+          ├─ Pula a rede que já tem publications.success (retry não duplica)
+          ├─ Checa o limite da conta: daily_post_limit (24 h) e, no IG,
+          │     content_publishing_limit — excedido → rede adiada, post volta à fila
           ├─ Branch Instagram (se 'instagram' in targets)
           │     ├─ Cria container de mídia (POST /{ig_id}/media)
           │     ├─ Aguarda processamento (mídia/vídeo demora)
@@ -35,19 +40,24 @@ Trigger (webhook OU schedule poll a cada 5min)
           │     └─ POST /rest/posts (UGC)
           └─ Grava resultado em publications + atualiza posts.status
 ```
+Detalhes da fila idempotente: `web/src/lib/publish-queue.ts`.
 
 ### WF-02 — Refresh de tokens
 ```
-Schedule (1x/dia)
-  └─ Busca social_accounts com token_expires_at < now()+7d
-      └─ Troca por token de longa duração (fb_exchange_token)
-          └─ Atualiza access_token_enc + token_expires_at no Postgres
+Schedule (a cada 12h)
+  └─ POST /api/internal/tokens/refresh {"days":7}   (o n8n só dispara)
+      └─ O SISTEMA busca social_accounts com token_expires_at < now()+7d,
+         troca por token de longa duração (fb_exchange_token, client_secret no
+         CORPO do POST) e regrava access_token_enc + token_expires_at.
+         Resposta: só contagens — nenhum token passa pelo n8n.
 ```
 
 ### WF-03 — Retry de falhas
 ```
 Schedule (a cada 15min)
-  ├─ Destrava posts em status=publishing há 20+ min → failed (todos os clientes)
+  ├─ Destrava posts em status=publishing cuja tentativa (publications.status=
+  │     'publishing', published_at = início) parou há 20+ min → failed
+  │     (todos os clientes) e fecha essas tentativas como falha
   └─ Busca posts com status=failed e retry_count < 3,
      só de clientes com clients.agency_publishes = true
       └─ Reagenda com backoff (5min, 30min, 2h)

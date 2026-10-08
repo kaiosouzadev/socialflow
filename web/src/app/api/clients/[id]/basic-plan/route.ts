@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuth, requireAuthUser } from "@/lib/api-auth";
+import { enforceAiQuota } from "@/lib/ai-quota";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
 import {
   listBasicMonths,
@@ -35,7 +36,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const denied = await requireAuth();
+  const { user, denied } = await requireAuthUser();
   if (denied) return denied;
 
   const limited = enforceRateLimit(`basic-plan:${clientIp(req)}`, 30, 5 * 60_000);
@@ -49,6 +50,9 @@ export async function POST(
   }
 
   try {
+    // cota de IA por usuária: legendas (agendar) ou artes do mês contam como 5 gerações
+    const quota = enforceAiQuota(user.id, 5, "plano-basico");
+    if (quota) return quota;
     if (parsed.data.action === "schedule") {
       const result = await scheduleBasicMonth(id, parsed.data.month);
       return Response.json(result);

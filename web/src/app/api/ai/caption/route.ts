@@ -1,11 +1,13 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuthUser } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { parseModelJson } from "@/lib/gemini";
 import { generateAiText } from "@/lib/ai-text";
 import { getTextModel } from "@/lib/ai-models";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { enforceAiQuota } from "@/lib/ai-quota";
+import { readJsonLimited } from "@/lib/read-json";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { briefingForPrompt } from "@/lib/client-briefing-prompt";
 import { clientHashtagBlock, hashtagPromptRule, withClientHashtags } from "@/lib/client-hashtags";
@@ -18,8 +20,8 @@ const FALLBACK = "Não foi possível gerar a legenda agora. Tente de novo em ins
 
 const schema = z.object({
   clientId: uuidString,
-  theme: z.string().optional(),
-  notes: z.string().optional(),
+  theme: z.string().max(400).optional(),
+  notes: z.string().max(4000).optional(),
   targets: z.array(z.enum(["instagram", "facebook", "linkedin"])).min(1),
   // carrossel/reels: gera também o roteiro por tela (slides)
   format: z.enum(["feed", "story", "carrossel", "reels"]).optional(),
@@ -36,16 +38,20 @@ const SHARED_GUIDE_FIXED_TAGS =
 const LINKEDIN_GUIDE_FIXED_TAGS =
   '"linkedin": legenda para LinkedIn (tom profissional, foco em valor/insight, sem excesso de emojis, SEM hashtags)';
 
+/** Teto do corpo (tema + observações + redes). */
+const MAX_BODY_BYTES = 64 * 1024;
+
 export async function POST(req: NextRequest) {
-  const denied = await requireAuth();
+  const { user, denied } = await requireAuthUser();
   if (denied) return denied;
 
   // limita custo/abuso de IA: 20 gerações/min por IP
   const limited = enforceRateLimit(`ai-caption:${clientIp(req)}`, 20, 60_000);
   if (limited) return limited;
 
-  const body = await req.json().catch(() => null);
-  const parsed = schema.safeParse(body);
+  const read = await readJsonLimited(req, MAX_BODY_BYTES);
+  if (!read.ok) return read.response;
+  const parsed = schema.safeParse(read.value);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
@@ -58,6 +64,10 @@ export async function POST(req: NextRequest) {
     select: { name: true, toneOfVoice: true, briefing: true },
   });
   if (!client) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
+
+  // teto de gerações por IA da usuária e do sistema (CF-12)
+  const quota = enforceAiQuota(user.id, 1, "legenda");
+  if (quota) return quota;
 
   // briefing inteiro no prompt; hashtags fixas do cliente sempre no fim (código, não IA)
   const briefing = briefingForPrompt(client.briefing);

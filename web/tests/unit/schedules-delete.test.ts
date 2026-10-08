@@ -24,10 +24,10 @@ const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0"
 
 type Schedule = { id: string; status: string; approvalToken: string | null };
 type Post = { id: string; scheduleId: string | null };
-type Session = { user: { role?: string } } | null;
+type Session = { user: { id?: string; role?: string } } | null;
 
 const state = {
-  session: { user: { role: "staff" } } as Session,
+  session: { user: { id: "00000000-0000-4000-8000-0000000000a5", role: "staff" } } as Session,
   schedules: [] as Schedule[],
   posts: [] as Post[],
   calls: [] as string[],
@@ -176,7 +176,7 @@ function assertFriendly(json: Record<string, unknown>, expected?: string) {
 const HAS_POSTS = "Este cronograma tem posts. Exclua ou mova os posts antes.";
 
 beforeEach(() => {
-  state.session = { user: { role: "staff" } };
+  state.session = { user: { id: "00000000-0000-4000-8000-0000000000a5", role: "staff" } };
   state.schedules = [
     { id: uid(1), status: "rascunho", approvalToken: null }, // vazio
     { id: uid(2), status: "enviado_cliente", approvalToken: "tok-vazio" }, // vazio, link enviado
@@ -216,9 +216,9 @@ describe("DELETE /api/schedules/[id]", () => {
   });
 
   test("mesma autorização das outras ações: equipe (staff) e admin podem", async () => {
-    state.session = { user: { role: "admin" } };
+    state.session = { user: { id: "00000000-0000-4000-8000-0000000000a1", role: "admin" } };
     assert.equal((await del(uid(4))).status, 200);
-    state.session = { user: {} };
+    state.session = { user: { id: "00000000-0000-4000-8000-0000000000a5" } }; // sem papel = equipe
     assert.equal((await del(uid(2))).status, 200);
   });
 

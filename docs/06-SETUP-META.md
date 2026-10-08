@@ -34,24 +34,23 @@ Para publicar você vai precisar de:
 3. Esse token é **curto** (~1-2h). Troque por um de **longa duração** (60 dias):
 
 ```
-GET https://graph.facebook.com/v21.0/oauth/access_token
-  ?grant_type=fb_exchange_token
-  &client_id={META_APP_ID}
-  &client_secret={META_APP_SECRET}
-  &fb_exchange_token={TOKEN_CURTO}
+curl -X POST https://graph.facebook.com/v21.0/oauth/access_token   -d grant_type=fb_exchange_token   -d client_id={META_APP_ID}   -d client_secret={META_APP_SECRET}   -d fb_exchange_token={TOKEN_CURTO}
 ```
+
+> Segredo e token sempre no **corpo** (`-d`) ou no header — nunca na URL (a URL fica
+> em histórico, log de proxy e ferramentas de observabilidade).
 
 4. Com o token longo, pegue o **Page Access Token** (esse é o que publica no FB):
 
 ```
-GET https://graph.facebook.com/v21.0/me/accounts?access_token={TOKEN_LONGO}
+curl -H "Authorization: Bearer {TOKEN_LONGO}" https://graph.facebook.com/v21.0/me/accounts
 ```
 Resposta traz cada Página e seu `access_token` (Page Token) + o `id` da Página.
 
 ## 4. Descobrir os IDs que você vai guardar
 - **IG User ID** (para publicar no Instagram):
 ```
-GET https://graph.facebook.com/v21.0/{PAGE_ID}?fields=instagram_business_account&access_token={PAGE_TOKEN}
+curl -H "Authorization: Bearer {PAGE_TOKEN}" "https://graph.facebook.com/v21.0/{PAGE_ID}?fields=instagram_business_account"
 ```
 Retorna `instagram_business_account.id` → esse é o `ig_user_id`.
 

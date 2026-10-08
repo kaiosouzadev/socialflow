@@ -36,10 +36,10 @@ type Row = {
   clientNote: string | null;
 };
 type Client = { id: string; name: string; agencyPublishes: boolean };
-type Session = { user: { role?: string } } | null;
+type Session = { user: { id?: string; role?: string } } | null;
 
 const state = {
-  session: { user: { role: "staff" } } as Session,
+  session: { user: { id: "00000000-0000-4000-8000-0000000000a5", role: "staff" } } as Session,
   posts: [] as Row[],
   clients: [
     { id: CLIENT_PUB, name: "ZZ QA Publica", agencyPublishes: true },
@@ -201,7 +201,7 @@ function seed() {
 const ids = (rows: { id: string }[]) => rows.map((r) => Number(r.id.slice(-12)));
 
 beforeEach(() => {
-  state.session = { user: { role: "staff" } };
+  state.session = { user: { id: "00000000-0000-4000-8000-0000000000a5", role: "staff" } };
   seed();
 });
 

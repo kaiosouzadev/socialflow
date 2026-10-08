@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuthUser } from "@/lib/api-auth";
+import { enforceAiQuota } from "@/lib/ai-quota";
 import { r2Configured, uploadToR2 } from "@/lib/r2";
 import { generateArt } from "@/lib/art-gen";
 import { contactLines } from "@/lib/basic-plan";
@@ -27,7 +28,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const denied = await requireAuth();
+  const { user, denied } = await requireAuthUser();
   if (denied) return denied;
   if (!r2Configured()) {
     const cause = "R2 não configurado (variáveis R2_* ausentes)";
@@ -38,6 +39,9 @@ export async function POST(
   // rota mais cara de IA (imagem): 6 gerações/min por IP
   const limited = enforceRateLimit(`generate-art:${clientIp(req)}`, 6, 60_000);
   if (limited) return limited;
+  // cota de IA por usuária (imagem conta como 1 geração)
+  const quota = enforceAiQuota(user.id, 1, "arte");
+  if (quota) return quota;
 
   const { id } = await params;
   const post = await prisma.post.findUnique({

@@ -164,7 +164,10 @@ export default function ClientBriefingEditor({ client }: { client: BriefingClien
         body: JSON.stringify({ ...contacts, briefing: b }),
       });
       if (!res.ok) {
-        setError("Não foi possível salvar o briefing. Tente de novo.");
+        // 400 com texto: campo recusado (ex.: site/Instagram/Facebook que não é endereço https; N-14)
+        const data: unknown = res.status === 400 ? await res.json().catch(() => null) : null;
+        const reason = (data as { error?: unknown } | null)?.error;
+        setError(typeof reason === "string" ? reason : "Não foi possível salvar o briefing. Tente de novo.");
         return;
       }
       stopEditing();

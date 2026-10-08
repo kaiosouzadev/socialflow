@@ -104,8 +104,10 @@ function useIsMobile() {
  * O conjunto de temas já revisados vive no localStorage, que é estado externo
  * ao React — por isso um store com useSyncExternalStore, e não um efeito que
  * chama setState logo após montar.
+ * A chave usa um identificador NÃO reversível do link (CR-05), nunca o token; a chave antiga
+ * (`legacyKey`, com o token em claro) é migrada uma vez e apagada.
  */
-function createSeenStore(key: string) {
+function createSeenStore(key: string, legacyKey?: string) {
   let value: string[] = EMPTY;
   let loaded = false;
   const listeners = new Set<() => void>();
@@ -115,7 +117,17 @@ function createSeenStore(key: string) {
       if (!loaded) {
         loaded = true;
         try {
-          const raw = localStorage.getItem(key);
+          let raw = localStorage.getItem(key);
+          if (legacyKey) {
+            const legacy = localStorage.getItem(legacyKey);
+            if (legacy !== null) {
+              if (raw === null) {
+                raw = legacy;
+                localStorage.setItem(key, legacy);
+              }
+              localStorage.removeItem(legacyKey);
+            }
+          }
           const parsed = raw ? (JSON.parse(raw) as unknown) : null;
           if (Array.isArray(parsed) && parsed.length) value = parsed as string[];
         } catch {
@@ -727,6 +739,7 @@ function GroupCard({
 
 export default function ApprovalView({
   token,
+  seenKey,
   clientName,
   clientLogoUrl,
   monthTitle,
@@ -741,6 +754,8 @@ export default function ApprovalView({
   plannedFeedCount,
 }: {
   token: string;
+  /** identificador não reversível do link (lib/approval tokenKey): chave do "já revisado" no localStorage */
+  seenKey: string;
   clientName: string;
   clientLogoUrl: string | null;
   /** "Outubro de 2026" (títulos) */
@@ -780,7 +795,9 @@ export default function ApprovalView({
 
   const groups = useMemo(() => groupPosts(posts), [posts]);
 
-  const [seenStore] = useState(() => createSeenStore(`sf-approval-seen:${token}`));
+  const [seenStore] = useState(() =>
+    createSeenStore(`sf-approval-seen:${seenKey}`, `sf-approval-seen:${token}`)
+  );
   const seenList = useSyncExternalStore(
     seenStore.subscribe,
     seenStore.getSnapshot,

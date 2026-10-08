@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { requireAdmin } from "@/lib/api-auth";
+import { audit } from "@/lib/audit";
 import { sessionUserId } from "@/lib/session-user";
 import { isValidOpenAiKey } from "@/lib/ai-model-options";
 import { readTextModelInfo, saveTextModelSetting } from "@/lib/ai-models";
@@ -63,6 +64,11 @@ export async function PUT(req: Request) {
     return Response.json({ error: MSG.failed }, { status: 500 });
   }
   console.info("[settings/openai-key] chave da OpenAI salva");
+  // só o fato (salvou / substituiu); NUNCA a chave nem parte dela
+  await audit(
+    { action: "settings.openai_key", targetType: "setting", targetId: "ai.openaiKey", meta: { op: before.source === "saved" ? "replaced" : "saved" } },
+    { req }
+  );
   return Response.json(await readOpenAiKeyStatus());
 }
 
@@ -91,5 +97,6 @@ export async function DELETE() {
     return Response.json({ error: MSG.removeFailed }, { status: 500 });
   }
   console.info(`[settings/openai-key] chave da OpenAI removida${modelReset ? "; modelo de texto voltou ao padrão do sistema" : ""}`);
+  await audit({ action: "settings.openai_key", targetType: "setting", targetId: "ai.openaiKey", meta: { op: "removed", modelReset } });
   return Response.json({ ...(await readOpenAiKeyStatus()), modelReset, textModel: await readTextModelInfo() });
 }

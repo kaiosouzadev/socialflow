@@ -40,12 +40,12 @@ type Row = {
   targets: string[];
   scheduledAt: Date;
 };
-type Session = { user: { role?: string } } | null;
+type Session = { user: { id?: string; role?: string } } | null;
 
 const ANY_NULL = { __anyNull: true };
 
 const state = {
-  session: { user: { role: "staff" } } as Session,
+  session: { user: { id: "00000000-0000-4000-8000-0000000000a5", role: "staff" } } as Session,
   client: null as null | { name: string; toneOfVoice: string | null; briefing: unknown },
   posts: [] as Row[],
   afterCalls: [] as (() => unknown)[],
@@ -257,7 +257,7 @@ const BRIEFING = {
 };
 
 beforeEach(() => {
-  state.session = { user: { role: "staff" } };
+  state.session = { user: { id: "00000000-0000-4000-8000-0000000000a5", role: "staff" } };
   state.client = { name: "ZZ QA F9 Cliente", toneOfVoice: "próximo e leve", briefing: BRIEFING };
   state.posts = [];
   state.afterCalls = [];

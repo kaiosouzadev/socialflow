@@ -2,15 +2,18 @@ import { NextRequest } from "next/server";
 import bcrypt from "bcryptjs";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/lib/api-auth";
+import { requireAdmin, requireAdminUser } from "@/lib/api-auth";
+import { audit } from "@/lib/audit";
+import { checkPasswordPolicy } from "@/lib/password-policy";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
-  password: z.string().min(8, "A senha deve ter ao menos 8 caracteres"),
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().email().max(254),
+  // a política (tamanho, senhas comuns, nome/e-mail) é conferida depois, com mensagem pt-BR
+  password: z.string().max(1024),
   role: z.enum(["admin", "staff"]).default("staff"),
 });
 
@@ -27,7 +30,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = await requireAdmin();
+  const { user: actor, denied } = await requireAdminUser();
   if (denied) return denied;
 
   const body = await req.json().catch(() => null);
@@ -37,6 +40,10 @@ export async function POST(req: NextRequest) {
   }
 
   const { password, ...rest } = parsed.data;
+  const policy = checkPasswordPolicy(password, { email: rest.email, name: rest.name });
+  if (!policy.ok) {
+    return Response.json({ error: policy.message, field: "password" }, { status: 400 });
+  }
   const passwordHash = await bcrypt.hash(password, 12);
 
   try {
@@ -44,6 +51,10 @@ export async function POST(req: NextRequest) {
       data: { ...rest, passwordHash },
       select: { id: true, name: true, email: true, role: true },
     });
+    await audit(
+      { action: "user.create", targetType: "user", targetId: user.id, meta: { role: user.role, email: user.email } },
+      { req, actor: { id: actor.id, email: actor.email } }
+    );
     return Response.json(user, { status: 201 });
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {

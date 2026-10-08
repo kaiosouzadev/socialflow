@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import { Bricolage_Grotesque, DM_Sans, Geist_Mono } from "next/font/google";
 import { ThemeSync } from "@/components/ThemeToggle";
 import "./globals.css";
@@ -51,11 +52,14 @@ export const viewport: Viewport = {
 // primeira pintura. Conteúdo constante, sem dado de usuário.
 const THEME_SCRIPT = `(function(){try{var p=localStorage.getItem("sf-theme");if(p!=="light"&&p!=="dark")p="system";var d=p==="dark"||(p==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);var h=document.documentElement;h.dataset.theme=d?"dark":"light";h.dataset.themePref=p;}catch(e){}})();`;
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // CSP (proxy.ts): o script de tema só roda com o nonce desta resposta. Ler o cabeçalho deixa
+  // todas as páginas dinâmicas, que é o exigido para o nonce valer (nada de HTML pré-gerado).
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html
       lang="pt-BR"
@@ -63,7 +67,7 @@ export default function RootLayout({
       className={`${dmSans.variable} ${bricolage.variable} ${geistMono.variable}`}
     >
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body className="min-h-dvh bg-canvas text-fg font-sans antialiased">
         <ThemeSync />

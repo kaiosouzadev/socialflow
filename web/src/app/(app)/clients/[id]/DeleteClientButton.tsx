@@ -30,10 +30,15 @@ export default function DeleteClientButton({
     try {
       const res = await fetch(`/api/clients/${clientId}`, { method: "DELETE" });
       if (!res.ok) {
+        // 403: só administradoras excluem (o servidor diz o motivo em pt-BR; N-14)
+        const data: unknown = res.status === 403 ? await res.json().catch(() => null) : null;
+        const reason = (data as { error?: unknown } | null)?.error;
         setError(
           res.status === 404
             ? "Este cliente não existe mais. Volte para a lista de clientes."
-            : "Não foi possível excluir o cliente. Tente de novo.",
+            : typeof reason === "string"
+              ? reason
+              : "Não foi possível excluir o cliente. Tente de novo.",
         );
         setLoading(false);
         return;

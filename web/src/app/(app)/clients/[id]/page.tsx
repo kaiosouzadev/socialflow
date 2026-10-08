@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { Avatar } from "@/components/Avatar";
 import { buttonClasses } from "@/components/Button";
@@ -52,6 +53,10 @@ export default async function ClientDetailPage({ params }: Props) {
 
   const todayStart = dateWindow("day", spDateKey())!.gte;
 
+  // excluir cliente e trocar contas/Páginas de publicação são só da admin (AC-07): a staff vê o motivo
+  const session = await auth();
+  const isAdmin = (session?.user as { role?: string } | undefined)?.role === "admin";
+
   const [client, metaConnections, users, openPending, queuedPostsCount] = await Promise.all([
     prisma.client.findUnique({
       where: { id },
@@ -68,11 +73,13 @@ export default async function ClientDetailPage({ params }: Props) {
         _count: { select: { posts: true } },
       },
     }),
-    prisma.metaConnection.findMany({
-      where: { status: "active" },
-      select: { id: true, name: true },
-      orderBy: { createdAt: "desc" },
-    }),
+    isAdmin
+      ? prisma.metaConnection.findMany({
+          where: { status: "active" },
+          select: { id: true, name: true },
+          orderBy: { createdAt: "desc" },
+        })
+      : Promise.resolve([]),
     // GET /api/users é só para admin: a lista de redatoras e designers vem do servidor
     prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.pendingItem.count({ where: { clientId: id, resolvedAt: null } }),
@@ -244,7 +251,12 @@ export default async function ClientDetailPage({ params }: Props) {
         </dl>
 
         <div id="contas" className="scroll-mt-20">
-          <AccountsManager clientId={client.id} accounts={accounts} metaConnections={metaConnections} />
+          <AccountsManager
+            clientId={client.id}
+            accounts={accounts}
+            metaConnections={metaConnections}
+            canManage={isAdmin}
+          />
         </div>
 
         <section aria-labelledby="proximos-posts" className="card overflow-hidden">
@@ -312,12 +324,21 @@ export default async function ClientDetailPage({ params }: Props) {
             Excluir o cliente apaga o cadastro, os posts, os cronogramas e as credenciais. Não dá para desfazer.
           </p>
           <div className="mt-4">
-            <DeleteClientButton
-              clientId={client.id}
-              clientName={client.name}
-              postsCount={client._count.posts}
-              accountsCount={client.socialAccounts.length}
-            />
+            {isAdmin ? (
+              <DeleteClientButton
+                clientId={client.id}
+                clientName={client.name}
+                postsCount={client._count.posts}
+                accountsCount={client.socialAccounts.length}
+              />
+            ) : (
+              <p className="flex max-w-prose items-start gap-2 text-sm text-fg-muted">
+                <span aria-hidden="true" className="mt-0.5 inline-flex size-4 shrink-0 [&>svg]:size-full">
+                  <Icon.shield />
+                </span>
+                Só administradoras podem excluir clientes. Se precisar excluir este cliente, peça a uma administradora.
+              </p>
+            )}
           </div>
         </section>
       </div>

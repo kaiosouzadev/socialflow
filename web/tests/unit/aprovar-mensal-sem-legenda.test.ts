@@ -42,6 +42,9 @@ function reset() {
   state.schedule = {
     id: SCHEDULE_ID,
     status: "enviado_cliente",
+    // enviado agora: dentro do prazo de 60 dias (OWASP-R3: ciclo de vida em links-publicos-ciclo)
+    sentAt: new Date(),
+    createdAt: new Date(),
     client: { name: "ZZ QA F10 Cliente", toneOfVoice: null, briefing: null },
   };
   state.post = {

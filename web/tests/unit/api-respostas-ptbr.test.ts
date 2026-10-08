@@ -24,9 +24,9 @@ const KEY_HEX = "a".repeat(64);
 // ------------------------------------------------------------ estado falso
 
 type Row = Record<string, unknown>;
-type Session = { user: { role?: string } } | null;
+type Session = { user: { id?: string; role?: string } } | null;
 const state = {
-  session: { user: { role: "admin" } } as Session,
+  session: { user: { id: "00000000-0000-4000-8000-0000000000a1", role: "admin" } } as Session,
   connections: new Map<string, Row>(),
   txError: null as Error | null,
   syncMedia: async (): Promise<unknown> => ({ attached: 0 }),
@@ -78,7 +78,9 @@ const FAKE_MODULES: Record<string, string> = {
     " export const spMonthKey = (d) => d.toISOString().slice(0, 7);",
   "@/lib/google-drive":
     "const s = globalThis.__p4a2.state;" +
-    " export const listFolders = (...a) => s.listFolders(...a); export const driveConfigured = () => true;",
+    " export const listFolders = (...a) => s.listFolders(...a); export const driveConfigured = () => true;" +
+    // OWASP R4 (AUD2-08): ?parent= conferido dentro da raiz — aqui a lista é sempre a da raiz
+    " export const isDriveId = () => true; export const isInsideRoot = async () => true; export const FOLDER_OUTSIDE_ROOT = 'fora';",
   "@/lib/weekly": "const s = globalThis.__p4a2.state; export const runWeeklyReviews = (...a) => s.runWeeklyReviews(...a);",
   "@/lib/basic-plan": "export const genTemplateCaptions = async () => ({});",
 };
@@ -164,7 +166,7 @@ const TOKEN_UNREADABLE =
   "Não foi possível ler o token salvo desta conexão. Cole o token de novo para atualizar a conexão.";
 
 function resetState() {
-  state.session = { user: { role: "admin" } };
+  state.session = { user: { id: "00000000-0000-4000-8000-0000000000a1", role: "admin" } };
   state.connections.clear();
   state.txError = null;
   state.fetch = null;
@@ -185,7 +187,7 @@ describe("4. 401/403 em pt-BR (api-auth e internal-auth), mesmo status e formato
     const r = await read(await requireAuth());
     assert.equal(r.status, 401);
     assert.deepEqual(r.json, { error: SESSION_EXPIRED });
-    state.session = { user: { role: "staff" } };
+    state.session = { user: { id: "00000000-0000-4000-8000-0000000000a5", role: "staff" } };
     assert.equal(await requireAuth(), null);
   });
 
@@ -194,11 +196,11 @@ describe("4. 401/403 em pt-BR (api-auth e internal-auth), mesmo status e formato
     const anon = await read(await requireAdmin());
     assert.equal(anon.status, 401);
     assert.deepEqual(anon.json, { error: SESSION_EXPIRED });
-    state.session = { user: { role: "staff" } };
+    state.session = { user: { id: "00000000-0000-4000-8000-0000000000a5", role: "staff" } };
     const staff = await read(await requireAdmin());
     assert.equal(staff.status, 403);
     assert.deepEqual(staff.json, { error: ADMIN_ONLY });
-    state.session = { user: { role: "admin" } };
+    state.session = { user: { id: "00000000-0000-4000-8000-0000000000a1", role: "admin" } };
     assert.equal(await requireAdmin(), null);
   });
 

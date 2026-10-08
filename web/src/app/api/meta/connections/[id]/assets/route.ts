@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { ADMIN_ONLY, requireAdminFor } from "@/lib/permissions";
 import { decryptToken } from "@/lib/crypto";
 import { listAssets } from "@/lib/meta";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
@@ -58,7 +58,9 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const denied = await requireAuth();
+  // listar as Páginas de uma conexão serve para vincular (admin) e para a tela /meta (admin):
+  // o mesmo papel da lista de conexões (AC-07)
+  const denied = await requireAdminFor(ADMIN_ONLY.metaLink);
   if (denied) return denied;
 
   const limited = enforceRateLimit(`meta-assets:${clientIp(req)}`, 20, 60_000);

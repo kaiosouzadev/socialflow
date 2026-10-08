@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { auth } from "@/auth";
-import { checkInternalKey } from "@/lib/internal-auth";
+import { checkInternalKey, noStore } from "@/lib/internal-auth";
 import { runWeeklyReviews } from "@/lib/weekly";
 import { toUserMessage } from "@/lib/user-facing-error";
 
@@ -17,6 +17,11 @@ const FALLBACK = "Não foi possível enviar os links da semana agora. Tente de n
  * - sessão logada (botão manual no painel).
  */
 export async function POST(req: NextRequest) {
+  // nada desta rota fica em cache de proxy/CDN
+  return noStore(await run(req));
+}
+
+async function run(req: NextRequest): Promise<Response> {
   const session = await auth();
   if (!session?.user) {
     const denied = checkInternalKey(req);

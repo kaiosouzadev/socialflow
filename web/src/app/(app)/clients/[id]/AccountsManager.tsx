@@ -46,7 +46,11 @@ const idHelp = (platform: string) => PLATFORMS.find((p) => p.id === platform)?.h
 /** Aviso que a rota /api/linkedin/start devolve na URL quando o LinkedIn não está configurado (S17). */
 const LINKEDIN_NOTICE = "linkedin-indisponivel";
 
-function AccountRow({ account }: { account: Account }) {
+/** Motivo mostrado à staff no lugar dos botões de conta (decisão "Só admin + registro", AC-07). */
+const ADMIN_ONLY_ACCOUNTS =
+  "Só administradoras podem adicionar, trocar ou excluir contas de publicação. Se precisar, peça a uma administradora.";
+
+function AccountRow({ account, canManage }: { account: Account; canManage: boolean }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -147,26 +151,30 @@ function AccountRow({ account }: { account: Account }) {
                 {account.tokenExpiresAt && ` · token até ${formatDate(account.tokenExpiresAt)}`}
               </p>
             </div>
-            <Button iconOnly variant="ghost" aria-label={`Editar conta ${label}`} title="Editar" onClick={() => setEditing(true)}>
-              <Icon.edit />
-            </Button>
-            <Button
-              iconOnly
-              variant="ghost"
-              aria-label={`Excluir conta ${label}`}
-              title="Excluir"
-              onClick={() => {
-                setDeleteError("");
-                setConfirming(true);
-              }}
-            >
-              <Icon.trash />
-            </Button>
+            {canManage && (
+              <>
+                <Button iconOnly variant="ghost" aria-label={`Editar conta ${label}`} title="Editar" onClick={() => setEditing(true)}>
+                  <Icon.edit />
+                </Button>
+                <Button
+                  iconOnly
+                  variant="ghost"
+                  aria-label={`Excluir conta ${label}`}
+                  title="Excluir"
+                  onClick={() => {
+                    setDeleteError("");
+                    setConfirming(true);
+                  }}
+                >
+                  <Icon.trash />
+                </Button>
+              </>
+            )}
           </div>
         )}
       </div>
 
-      {editing && (
+      {editing && canManage && (
         <div className="mt-4 grid gap-4">
           <Field label="ID da conta na rede" help={idHelp(account.platform)} required>
             <Input value={externalId} onChange={(e) => setExternalId(e.target.value)} className="font-mono" />
@@ -261,10 +269,13 @@ export default function AccountsManager({
   clientId,
   accounts,
   metaConnections = [],
+  canManage = false,
 }: {
   clientId: string;
   accounts: Account[];
   metaConnections?: { id: string; name: string }[];
+  /** admin: importar do Meta, conectar LinkedIn, adicionar, editar e excluir contas (AC-07) */
+  canManage?: boolean;
 }) {
   const searchParams = useSearchParams();
   const linkedinUnavailable = searchParams.get("aviso") === LINKEDIN_NOTICE;
@@ -275,20 +286,31 @@ export default function AccountsManager({
         <h2 id="contas-sociais" className="font-display text-lg font-semibold tracking-title text-fg">
           Contas sociais
         </h2>
-        <div className="grid w-full gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
-          <ImportMetaButton clientId={clientId} connections={metaConnections} />
-          <a href={`/api/linkedin/start?clientId=${clientId}`} className={buttonClasses()}>
-            <BrandBadge platform="linkedin" size={18} />
-            Conectar LinkedIn
-          </a>
-          <Link href={`/clients/${clientId}/accounts/new`} className={buttonClasses({ variant: "ghost" })}>
-            <span aria-hidden="true" className="inline-flex size-4.5 [&>svg]:size-full">
-              <Icon.plus />
-            </span>
-            Adicionar manualmente
-          </Link>
-        </div>
+        {canManage && (
+          <div className="grid w-full gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
+            <ImportMetaButton clientId={clientId} connections={metaConnections} />
+            <a href={`/api/linkedin/start?clientId=${clientId}`} className={buttonClasses()}>
+              <BrandBadge platform="linkedin" size={18} />
+              Conectar LinkedIn
+            </a>
+            <Link href={`/clients/${clientId}/accounts/new`} className={buttonClasses({ variant: "ghost" })}>
+              <span aria-hidden="true" className="inline-flex size-4.5 [&>svg]:size-full">
+                <Icon.plus />
+              </span>
+              Adicionar manualmente
+            </Link>
+          </div>
+        )}
       </div>
+
+      {!canManage && (
+        <p className="flex items-start gap-2 border-b border-line px-5 py-3 text-sm text-fg-muted">
+          <span aria-hidden="true" className="mt-0.5 inline-flex size-4 shrink-0 [&>svg]:size-full">
+            <Icon.shield />
+          </span>
+          {ADMIN_ONLY_ACCOUNTS}
+        </p>
+      )}
 
       {linkedinUnavailable && <LinkedinNotice />}
 
@@ -297,12 +319,16 @@ export default function AccountsManager({
           size="inline"
           headingLevel={3}
           title="Nenhuma conta conectada"
-          description="Importe a Página e o Instagram do Meta, conecte o LinkedIn ou adicione uma conta manualmente."
+          description={
+            canManage
+              ? "Importe a Página e o Instagram do Meta, conecte o LinkedIn ou adicione uma conta manualmente."
+              : "Peça a uma administradora para importar a Página do Meta ou conectar o LinkedIn deste cliente."
+          }
         />
       ) : (
         <ul className="divide-y divide-line">
           {accounts.map((acc) => (
-            <AccountRow key={acc.id} account={acc} />
+            <AccountRow key={acc.id} account={acc} canManage={canManage} />
           ))}
         </ul>
       )}

@@ -131,7 +131,7 @@ const fakePrisma = {
 const BLOCKED = (what: string) => `async () => { throw new Error('${what} bloqueado no teste'); }`;
 const FAKE_MODULES: Record<string, string> = {
   "next/server": "export class NextRequest extends Request {} export class NextResponse extends Response {}",
-  "@/auth": "export const auth = async () => ({ user: { role: 'staff' } });",
+  "@/auth": "export const auth = async () => ({ user: { id: '00000000-0000-4000-8000-0000000000a5', role: 'staff' } });",
   "@/lib/prisma": "export const prisma = globalThis.__f8h.prisma;",
   "@/generated/prisma/client": "export const Prisma = {};",
   "@/lib/notify":

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { requireAdmin } from "@/lib/api-auth";
+import { audit } from "@/lib/audit";
 import { sessionUserId } from "@/lib/session-user";
 import { getOpenAiKey } from "@/lib/openai-key";
 import {
@@ -77,6 +78,19 @@ export async function PUT(req: Request) {
     return Response.json({ error: MSG.failed }, { status: 500 });
   }
   console.info(`[settings/ai-model] modelo de texto alterado para ${model ? `${provider}/${model}` : "padrão do sistema"}`);
+  // quem trocou e de → para (só ids de modelo; nada de chave)
+  await audit(
+    {
+      action: "settings.ai_model",
+      targetType: "setting",
+      targetId: "ai.textModel",
+      meta: {
+        from: before.setting?.model ? { provider: before.setting.provider, model: before.setting.model } : null,
+        to: model ? { provider, model } : null,
+      },
+    },
+    { req }
+  );
   const info = await readTextModelInfo();
   return Response.json({ ...info, label: model ? modelLabel(model) : "Padrão do sistema" });
 }

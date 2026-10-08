@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 import PostsFilters from "./PostsFilters";
@@ -62,6 +63,9 @@ export default async function PostsPage({
   }>;
 }) {
   const sp = await searchParams;
+  // excluir post PUBLICADO é só da admin (AC-07): a seleção da staff deixa os publicados de fora
+  const session = await auth();
+  const isAdmin = (session?.user as { role?: string } | undefined)?.role === "admin";
   // Sem `range` na URL: "Próximos" (de hoje em diante, com atrasados/falhas no topo; U-19)
   const params = parseListParams(sp);
   const { clientId, status, q, range, ref, scheduleId, onlyNoted } = params;
@@ -234,6 +238,7 @@ export default async function PostsPage({
         total={total}
         filterQuery={listQueryString(params)}
         canExpandFilter={(page - 1) * PAGE_SIZE + posts.length <= BULK_LIMIT}
+        canDeletePublished={isAdmin}
       >
         {posts.length === 0 ? (
           empty

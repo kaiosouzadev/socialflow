@@ -1,8 +1,11 @@
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuthUser } from "@/lib/api-auth";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { enforceAiQuota } from "@/lib/ai-quota";
+import { readJsonLimited } from "@/lib/read-json";
+import { mediaUrlProblem } from "@/lib/media-url";
 import { generateAiText } from "@/lib/ai-text";
 import { genTemplateCaptions } from "@/lib/basic-plan";
 import { toUserMessage } from "@/lib/user-facing-error";
@@ -47,15 +50,23 @@ function pickDays(year: number, month: number, count: number): number[] {
  * dos clientes completos: títulos variados + legendas padronizadas, todos
  * usando a arte-base do mês. Cria os ArtTemplates prontos para agendar.
  */
+/** Teto do corpo (mês, URL da arte-base, horário, quantidade). */
+const MAX_BODY_BYTES = 16 * 1024;
+
 export async function POST(req: NextRequest) {
-  const denied = await requireAuth();
+  const { user, denied } = await requireAuthUser();
   if (denied) return denied;
 
   const limited = enforceRateLimit(`tpl-gen-month:${clientIp(req)}`, 10, 5 * 60_000);
   if (limited) return limited;
 
-  const body = await req.json().catch(() => null);
-  const parsed = schema.safeParse(body);
+  const read = await readJsonLimited(req, MAX_BODY_BYTES);
+  if (!read.ok) return read.response;
+  // OWASP AUD2-04 (lib/media-url): a arte-base só pode vir do R2 público (a tela sempre sobe o arquivo)
+  const rawBase = (read.value as { baseImageUrl?: unknown } | null)?.baseImageUrl;
+  const baseProblem = typeof rawBase === "string" ? mediaUrlProblem(rawBase, { r2Only: true }) : null;
+  if (baseProblem) return Response.json({ error: baseProblem, field: "baseImageUrl" }, { status: 400 });
+  const parsed = schema.safeParse(read.value);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
@@ -71,6 +82,10 @@ export async function POST(req: NextRequest) {
     );
   }
   const n = Math.min(count, days.length);
+
+  // teto de gerações por IA (CF-12): 1 chamada para os títulos + 1 de legendas por título
+  const quota = enforceAiQuota(user.id, 1 + n, "artes-base-mes");
+  if (quota) return quota;
 
   const monthName = new Intl.DateTimeFormat("pt-BR", {
     month: "long",

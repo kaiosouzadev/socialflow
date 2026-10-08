@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { audit } from "@/lib/audit";
+import { ADMIN_ONLY, requireAdminFor, sessionActor } from "@/lib/permissions";
 import { uuidString } from "@/lib/validators";
 import { decryptToken, encryptToken } from "@/lib/crypto";
 import { getAsset } from "@/lib/meta";
@@ -16,9 +17,13 @@ const schema = z.object({
   connectInstagram: z.boolean().default(true),
 });
 
-/** Conecta uma Página (FB e/ou IG) do Meta a um cliente, criando social_accounts. */
+/**
+ * Conecta uma Página (FB e/ou IG) do Meta a um cliente, criando social_accounts.
+ * Só admin, com registro `client.meta_link` (AC-07): ligar a Página errada faz os posts de um
+ * cliente saírem no perfil de outro.
+ */
 export async function POST(req: NextRequest) {
-  const denied = await requireAuth();
+  const denied = await requireAdminFor(ADMIN_ONLY.metaLink);
   if (denied) return denied;
 
   const body = await req.json().catch(() => null);
@@ -29,7 +34,7 @@ export async function POST(req: NextRequest) {
   const { clientId, connectionId, pageId, connectFacebook, connectInstagram } = parsed.data;
 
   const [client, conn] = await Promise.all([
-    prisma.client.findUnique({ where: { id: clientId }, select: { id: true } }),
+    prisma.client.findUnique({ where: { id: clientId }, select: { id: true, name: true } }),
     prisma.metaConnection.findUnique({ where: { id: connectionId }, select: { accessTokenEnc: true } }),
   ]);
   if (!client) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
@@ -39,8 +44,12 @@ export async function POST(req: NextRequest) {
   try {
     asset = await getAsset(decryptToken(conn.accessTokenEnc), pageId);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Erro ao consultar a Meta";
-    return Response.json({ error: `Meta: ${msg}` }, { status: 502 });
+    // texto da Graph só no log (N-14); a tela recebe uma frase pt-BR
+    console.error("[meta/connect] falha ao consultar a Página na Meta", e instanceof Error ? e.message : e);
+    return Response.json(
+      { error: "Não foi possível consultar a Página na Meta agora. Tente de novo em instantes." },
+      { status: 502 }
+    );
   }
   if (!asset) return Response.json({ error: "Página não encontrada na conexão" }, { status: 404 });
 
@@ -82,5 +91,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const actor = await sessionActor();
+  await audit(
+    {
+      action: "client.meta_link",
+      targetType: "client",
+      targetId: clientId,
+      clientId,
+      // ids e nomes públicos da Página; nunca o token
+      meta: {
+        clientName: client.name,
+        connectionId,
+        pageId: asset.pageId,
+        pageName: asset.pageName,
+        instagramId: connectInstagram ? asset.instagramId : null,
+        connected,
+      },
+    },
+    { req, ...(actor ? { actor: { id: actor.id, email: actor.email } } : {}) }
+  );
   return Response.json({ ok: true, connected, page: asset.pageName });
 }

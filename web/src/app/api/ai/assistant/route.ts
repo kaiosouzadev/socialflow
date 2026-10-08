@@ -1,11 +1,13 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuthUser } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { geminiFetch, logTextGeneration, parseModelJson, GEMINI_BASE } from "@/lib/gemini";
 import { getTextModel } from "@/lib/ai-models";
 import { generateOpenAiText } from "@/lib/ai-text";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { enforceAiQuota } from "@/lib/ai-quota";
+import { readJsonLimited } from "@/lib/read-json";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { briefingForPrompt } from "@/lib/client-briefing-prompt";
 import { clientHashtagBlock, withClientHashtags } from "@/lib/client-hashtags";
@@ -48,8 +50,11 @@ const schema = z.object({
     .max(20),
 });
 
+/** Teto do corpo: o schema aceita até ~130 mil caracteres (20×4000 + 8000 + 20×2000), em UTF-8. */
+const MAX_BODY_BYTES = 512 * 1024;
+
 export async function POST(req: NextRequest) {
-  const denied = await requireAuth();
+  const { user, denied } = await requireAuthUser();
   if (denied) return denied;
 
   const limited = enforceRateLimit(`ai-assistant:${clientIp(req)}`, 30, 60_000);
@@ -65,8 +70,9 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: toUserMessage(cause, FALLBACK) }, { status: 500 });
   }
 
-  const body = await req.json().catch(() => null);
-  const parsed = schema.safeParse(body);
+  const read = await readJsonLimited(req, MAX_BODY_BYTES);
+  if (!read.ok) return read.response;
+  const parsed = schema.safeParse(read.value);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
@@ -78,6 +84,10 @@ export async function POST(req: NextRequest) {
     select: { name: true, toneOfVoice: true, briefing: true },
   });
   if (!client) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
+
+  // teto de gerações por IA da usuária e do sistema (CF-12): 1 pergunta = 1 geração
+  const quota = enforceAiQuota(user.id, 1, "assistente");
+  if (quota) return quota;
 
   // briefing inteiro (texto); as hashtags fixas do cliente vão no fim de toda legenda pelo código
   const briefing = briefingForPrompt(client.briefing);

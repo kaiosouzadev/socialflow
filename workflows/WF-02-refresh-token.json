@@ -13,127 +13,30 @@
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT id, client_id, platform, external_id FROM social_accounts WHERE status='active' AND platform IN ('instagram','facebook') AND (token_expires_at IS NOT NULL AND token_expires_at < now() + interval '7 days')",
-        "options": {}
-      },
-      "id": "cc754245-f673-42b2-ab89-7472aeabb6dc",
-      "name": "Tokens vencendo (<7d)",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.6,
-      "position": [-448, 192],
-      "credentials": { "postgres": { "id": "zIPyAquVv49cM1kf", "name": "Postgres SocialFlow" } }
-    },
-    {
-      "parameters": {},
-      "id": "a9247f4f-78db-4870-b5ee-0c3aaaf5c08f",
-      "name": "Concluido",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [0, 0]
-    },
-    {
-      "parameters": {
-        "url": "=https://flow.grupocoletivo.com.br/api/internal/token/{{ $json.id }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": {}
-      },
-      "id": "4f5ac652-53e4-4716-b763-8336d562f8a1",
-      "name": "Busca token atual",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.4,
-      "position": [0, 192],
-      "credentials": { "httpHeaderAuth": { "id": "Dim9CZ5Acht6xxCl", "name": "SocialFlow Internal Key" } }
-    },
-    {
-      "parameters": {
-        "url": "https://graph.facebook.com/v21.0/oauth/access_token",
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            { "name": "grant_type", "value": "fb_exchange_token" },
-            { "name": "client_id", "value": "={{ $env.META_APP_ID }}" },
-            { "name": "client_secret", "value": "={{ $env.META_APP_SECRET }}" },
-            { "name": "fb_exchange_token", "value": "={{ $json.token }}" }
-          ]
-        },
-        "options": {}
-      },
-      "id": "6a095467-b5c2-4295-88ad-aa0f1db8e6e1",
-      "name": "Troca por token longo (Meta)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.4,
-      "position": [224, 192],
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
-          "conditions": [
-            {
-              "id": "tok1",
-              "leftValue": "={{ $json.access_token }}",
-              "rightValue": "",
-              "operator": { "type": "string", "operation": "exists", "singleValue": true }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "caf8defd-af02-4dae-a4db-c24e7110054d",
-      "name": "Token OK?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.3,
-      "position": [336, 96]
-    },
-    {
-      "parameters": {
-        "method": "PUT",
-        "url": "=https://flow.grupocoletivo.com.br/api/internal/token/{{ $(\"Loop contas\").item.json.id }}",
+        "method": "POST",
+        "url": "https://flow.grupocoletivo.com.br/api/internal/tokens/refresh",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\"token\":\"{{ $json.access_token }}\",\"expiresIn\":{{ $json.expires_in }}}",
-        "options": {}
+        "jsonBody": "{\"days\":7}",
+        "options": { "timeout": 110000 }
       },
-      "id": "e1225217-1e8e-42b3-9e38-44b7c141b937",
-      "name": "Atualiza token no sistema",
+      "id": "3c1f6b2e-8a4d-4f7e-9b51-6d2a0e7c4f10",
+      "name": "Renova tokens no sistema",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
-      "position": [448, 272],
+      "position": [-448, 192],
       "credentials": { "httpHeaderAuth": { "id": "Dim9CZ5Acht6xxCl", "name": "SocialFlow Internal Key" } }
-    },
-    {
-      "parameters": { "options": {} },
-      "id": "be37bc53-e500-440b-86bb-0c22b8f3ed99",
-      "name": "Loop contas",
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 3,
-      "position": [-224, 192]
     }
   ],
   "connections": {
-    "A cada 12h": { "main": [[{ "node": "Tokens vencendo (<7d)", "type": "main", "index": 0 }]] },
-    "Tokens vencendo (<7d)": { "main": [[{ "node": "Loop contas", "type": "main", "index": 0 }]] },
-    "Busca token atual": { "main": [[{ "node": "Troca por token longo (Meta)", "type": "main", "index": 0 }]] },
-    "Troca por token longo (Meta)": { "main": [[{ "node": "Token OK?", "type": "main", "index": 0 }]] },
-    "Token OK?": {
-      "main": [
-        [{ "node": "Atualiza token no sistema", "type": "main", "index": 0 }],
-        [{ "node": "Loop contas", "type": "main", "index": 0 }]
-      ]
-    },
-    "Atualiza token no sistema": { "main": [[{ "node": "Loop contas", "type": "main", "index": 0 }]] },
-    "Loop contas": {
-      "main": [
-        [{ "node": "Concluido", "type": "main", "index": 0 }],
-        [{ "node": "Busca token atual", "type": "main", "index": 0 }]
-      ]
-    }
+    "A cada 12h": { "main": [[{ "node": "Renova tokens no sistema", "type": "main", "index": 0 }]] }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false,
+    "saveManualExecutions": false
+  }
 }

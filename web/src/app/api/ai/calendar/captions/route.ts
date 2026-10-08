@@ -1,8 +1,10 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuthUser } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { enforceAiQuota } from "@/lib/ai-quota";
+import { readJsonLimited } from "@/lib/read-json";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { CAPTION_BATCH_MAX, generateCaptionBatch } from "@/lib/calendar-captions";
 import { z } from "zod";
@@ -49,16 +51,20 @@ function invalidMessage(error: z.ZodError): string {
  * tela preencher os campos. Briefing do cliente no prompt e hashtags fixas no fim
  * (lib/calendar-captions.ts).
  */
+/** Teto do corpo: até 6 postagens (título 200 + explicação 600 + redes). */
+const MAX_BODY_BYTES = 64 * 1024;
+
 export async function POST(req: NextRequest) {
-  const denied = await requireAuth();
+  const { user, denied } = await requireAuthUser();
   if (denied) return denied;
 
   // a revisão de um cronograma de 12 posts faz 3–4 chamadas (+ "Tentar de novo")
   const limited = enforceRateLimit(`ai-calendar-captions:${clientIp(req)}`, 60, 5 * 60_000);
   if (limited) return limited;
 
-  const body = await req.json().catch(() => null);
-  const parsed = schema.safeParse(body);
+  const read = await readJsonLimited(req, MAX_BODY_BYTES);
+  if (!read.ok) return read.response;
+  const parsed = schema.safeParse(read.value);
   if (!parsed.success) {
     return Response.json({ error: invalidMessage(parsed.error) }, { status: 400 });
   }
@@ -72,6 +78,10 @@ export async function POST(req: NextRequest) {
     select: { name: true, toneOfVoice: true, briefing: true },
   });
   if (!client) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
+
+  // teto de gerações por IA (CF-12): cada LOTE (até 6 postagens) conta 1 geração
+  const quota = enforceAiQuota(user.id, 1, "calendario-legendas");
+  if (quota) return quota;
 
   try {
     // o navegador cancelou (salvou/fechou a revisão) → a chamada ao Gemini é cancelada junto

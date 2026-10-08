@@ -149,8 +149,255 @@ export const DEFAULT_TIMES: Readonly<Record<PostFormat, string>> = {
 
 // ------------------------------------------------------------ utilidades
 
+/**
+ * Uma linha por parágrafo. U+2028/U+2029 (separadores "invisíveis" que vêm de
+ * texto colado) viram espaço: no meio da linha eles faziam o `.`/`$` das regex
+ * voltarem atrás a cada posição — tempo quadrático com poucos KB (OWASP AUD2-01).
+ */
 function splitLines(text: string): string[] {
-  return text.split(/\r\n|\r|\n/);
+  return text.replace(/[\u2028\u2029]/g, " ").split(/\r\n|\r|\n/);
+}
+
+// ------------------------------------------------------------ texto sem backtracking (OWASP AUD2-01)
+//
+// As funções abaixo substituem regex que, com uma linha longa de espaços (ou de
+// ":"/pontuação), levavam tempo quadrático ou cúbico e travavam o servidor com
+// 1–3 KB. Cada uma devolve EXATAMENTE o que a regex antiga devolvia (citada no
+// comentário; equivalência provada por comparação aleatória em
+// tests/unit/doc-import-redos.test.ts), em tempo linear.
+
+/** Caractere de `\s` (mesma classe das regex do JS). */
+const WS_CHAR = /\s/;
+const isWs = (c: string | undefined): boolean => c !== undefined && WS_CHAR.test(c);
+/** Fim de linha para o `.` das regex (sem a flag "s"). */
+const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
+
+/** Linha de credencial/telefone maior que isto não passa pelas regex (ver `readInline`, `slotStep`, `splitPhones`). */
+export const MAX_SCAN_LINE = 500;
+
+/** `s.replace(/[<chars>]+$/, "")`: tira a sequência final desses caracteres. */
+export function trimEndChars(s: string, chars: string): string {
+  let end = s.length;
+  while (end > 0 && chars.includes(s[end - 1])) end--;
+  return end === s.length ? s : s.slice(0, end);
+}
+
+const ALNUM_CHAR = /[\p{L}\p{N}]/u;
+
+/** `s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")`: tira símbolos/espaços das pontas (por code point). */
+export function trimNonAlnum(s: string): string {
+  const cps = Array.from(s);
+  let a = 0;
+  let b = cps.length;
+  while (a < b && !ALNUM_CHAR.test(cps[a])) a++;
+  while (b > a && !ALNUM_CHAR.test(cps[b - 1])) b--;
+  return a === 0 && b === cps.length ? s : cps.slice(a, b).join("");
+}
+
+/**
+ * `/\s*\(([^()]*)\)\s*$/.exec(s)`: "(…)" no fim da linha (só espaço depois).
+ * `inner` = o que está entre os parênteses; `index` = onde a regex casava (com
+ * o espaço antes do "(").
+ */
+export function trailingParenGroup(s: string): { inner: string; index: number } | null {
+  let end = s.length;
+  while (end > 0 && isWs(s[end - 1])) end--;
+  if (end === 0 || s[end - 1] !== ")") return null;
+  let open = end - 2;
+  while (open >= 0 && s[open] !== "(" && s[open] !== ")") open--;
+  if (open < 0 || s[open] !== "(") return null;
+  let index = open;
+  while (index > 0 && isWs(s[index - 1])) index--;
+  return { inner: s.slice(open + 1, end - 1), index };
+}
+
+/** `s.replace(/\s+\([^()]*\)$/, "")`: tira a observação final entre parênteses ("SENHA-1 (trocar)" → "SENHA-1"). */
+export function stripTrailingParenNote(s: string): string {
+  const close = s.length - 1;
+  if (close < 0 || s[close] !== ")") return s;
+  let open = close - 1;
+  while (open >= 0 && s[open] !== "(" && s[open] !== ")") open--;
+  if (open < 1 || s[open] !== "(" || !isWs(s[open - 1])) return s;
+  let start = open - 1;
+  while (start > 0 && isWs(s[start - 1])) start--;
+  return s.slice(0, start);
+}
+
+/** `s.split(/\s+[/|]\s+/)` ("@loja / 123", "x | y"). */
+export function splitSpacedSlash(s: string): string[] {
+  const n = s.length;
+  const out: string[] = [];
+  let last = 0;
+  let q = 0;
+  while (q < n) {
+    if (!isWs(s[q])) {
+      q++;
+      continue;
+    }
+    let w = q;
+    while (w < n && isWs(s[w])) w++;
+    if (w < n && (s[w] === "/" || s[w] === "|") && isWs(s[w + 1])) {
+      let e = w + 1;
+      while (e < n && isWs(s[e])) e++;
+      out.push(s.slice(last, q));
+      last = e;
+      q = e;
+      continue;
+    }
+    // nenhuma posição desta sequência de espaços casa (todas chegam ao mesmo w)
+    q = w + 1;
+  }
+  out.push(s.slice(last));
+  return out;
+}
+
+// `s.split(/\s*(?:\/|\||;|,|\s+e\s+|\s+ou\s+)\s*/)` (lista de telefones), em tempo linear.
+export function splitPhoneList(s: string): string[] {
+  const n = s.length;
+  const wsEnd = (i: number) => {
+    while (i < n && isWs(s[i])) i++;
+    return i;
+  };
+  const out: string[] = [];
+  let last = 0;
+  let q = 0;
+  while (q < n) {
+    const w = wsEnd(q);
+    let e = -1;
+    if (w < n && "/|;,".includes(s[w])) e = wsEnd(w + 1);
+    else if (w > q && s[w] === "e" && isWs(s[w + 1])) e = wsEnd(w + 1);
+    else if (w > q && s[w] === "o" && s[w + 1] === "u" && isWs(s[w + 2])) e = wsEnd(w + 2);
+    if (e >= 0) {
+      out.push(s.slice(last, q));
+      last = e;
+      q = e;
+    } else {
+      // dentro da mesma sequência de espaços o resultado é o mesmo: pula para depois dela
+      q = w > q ? w + 1 : q + 1;
+    }
+  }
+  out.push(s.slice(last));
+  return out;
+}
+
+/**
+ * `/^([^:]{2,120}?)\s*:(?:\s+(.*))?$/.exec(t)` ("Rótulo: valor"): rótulo = grupo 1,
+ * valor = grupo 2 (undefined sem valor). Sem o O(120 × espaços) da regex.
+ */
+export function singleColonPair(t: string): { label: string; value: string | undefined } | null {
+  const c = t.indexOf(":");
+  if (c < 2) return null;
+  // o grupo 1 (preguiçoso) termina onde começam os espaços antes do ":" — no mínimo 2 caracteres
+  let g = c;
+  while (g > 0 && isWs(t[g - 1])) g--;
+  if (g < 2) g = 2;
+  if (g > 120) return null;
+  const n = t.length;
+  if (isWs(t[c + 1])) {
+    let y = c + 1;
+    while (y < n && isWs(t[y])) y++;
+    for (let i = y; i < n; i++) if (LINE_TERMINATOR.test(t[i])) return null;
+    return { label: t.slice(0, g), value: t.slice(y) };
+  }
+  return c + 1 === n ? { label: t.slice(0, g), value: undefined } : null;
+}
+
+const CRED_PREFIX_WORD = /login|usu[aá]rio|user|e-?mail/iy;
+const CRED_KEYWORD = /senha|password/iy;
+
+function stickyLength(re: RegExp, s: string, at: number): number {
+  re.lastIndex = at;
+  const m = re.exec(s);
+  return m ? m[0].length : -1;
+}
+
+/**
+ * Mesmo resultado de
+ * `/^(?:(?:login|usu[aá]rio|user|e-?mail)\s*:{0,2}\s*)?(.*?)(?:^|\s*[/|,;]\s*|\s+)(?:senha|password)(?:\s*:{1,2}\s*|\s+)(\S.*)$/i.exec(s)`
+ * (login = grupo 1, senha = grupo 2), sem o backtracking cúbico: as escolhas
+ * da regex são percorridas na mesma ordem, com os fins de espaço e de "linha"
+ * pré-calculados (cada teste vira O(1)).
+ */
+export function matchInlineCredential(s: string): { login: string; password: string } | null {
+  const n = s.length;
+  const wsEnd = new Int32Array(n + 2);
+  wsEnd[n] = n;
+  wsEnd[n + 1] = n + 1;
+  for (let i = n - 1; i >= 0; i--) wsEnd[i] = isWs(s[i]) ? wsEnd[i + 1] : i;
+  let lastLt = -1;
+  for (let i = n - 1; i >= 0 && lastLt === -1; i--) if (LINE_TERMINATOR.test(s[i])) lastLt = i;
+  /** `(\S.*)$` a partir de x */
+  const tailOk = (x: number) => x < n && !isWs(s[x]) && x > lastLt;
+  /** `(?:senha|password)(?:\s*:{1,2}\s*|\s+)(\S.*)$` em k → início do grupo 2, ou -1 */
+  const after = (k: number): number => {
+    const len = stickyLength(CRED_KEYWORD, s, k);
+    if (len < 0) return -1;
+    const a = k + len;
+    const u = wsEnd[a];
+    if (u < n && s[u] === ":") {
+      const c = s[u + 1] === ":" ? 2 : 1;
+      if (tailOk(wsEnd[u + c])) return wsEnd[u + c];
+      if (c === 2 && tailOk(u + 1)) return u + 1;
+    }
+    if (u > a && tailOk(u)) return u;
+    return -1;
+  };
+  /** separador antes da palavra-chave, com o grupo 1 terminando em g: `^` | `\s*[/|,;]\s*` | `\s+` */
+  const at = (g: number, caret: boolean): number => {
+    if (caret && g === 0) {
+      const x = after(0);
+      if (x >= 0) return x;
+    }
+    const w = wsEnd[g];
+    if (w < n && "/|,;".includes(s[w])) {
+      const x = after(wsEnd[w + 1]);
+      if (x >= 0) return x;
+    }
+    if (w > g) {
+      const x = after(w);
+      if (x >= 0) return x;
+    }
+    return -1;
+  };
+  // 1º g ≥ i que casa (sem o "^"), e onde a linha acaba para o `.` do grupo 1
+  const goodG = new Int32Array(n + 2);
+  const goodX = new Int32Array(n + 2);
+  goodG[n + 1] = -1;
+  for (let g = n; g >= 0; g--) {
+    const x = at(g, false);
+    goodG[g] = x >= 0 ? g : goodG[g + 1];
+    goodX[g] = x >= 0 ? x : goodX[g + 1];
+  }
+  const nextLt = new Int32Array(n + 1);
+  nextLt[n] = n;
+  for (let i = n - 1; i >= 0; i--) nextLt[i] = LINE_TERMINATOR.test(s[i]) ? i : nextLt[i + 1];
+  const fromStart = (gs: number): { g: number; x: number } | null => {
+    const g = goodG[gs];
+    return g >= 0 && g <= nextLt[gs] ? { g, x: goodX[gs] } : null;
+  };
+  const result = (gs: number, g: number, x: number) => ({ login: s.slice(gs, g), password: s.slice(x) });
+
+  // com o prefixo "login:"/"usuário"…: os inícios do grupo 1 na ordem em que a regex os tenta
+  const p0 = stickyLength(CRED_PREFIX_WORD, s, 0);
+  if (p0 > 0) {
+    const q1 = wsEnd[p0];
+    const colons = s[q1] === ":" ? (s[q1 + 1] === ":" ? 2 : 1) : 0;
+    const order: number[] = [];
+    if (colons > 0) {
+      for (let gs = wsEnd[q1 + colons]; gs >= q1 + colons; gs--) order.push(gs);
+      if (colons === 2) order.push(q1 + 1);
+    }
+    for (let gs = q1; gs >= p0; gs--) order.push(gs);
+    for (const gs of order) {
+      const r = fromStart(gs);
+      if (r) return result(gs, r.g, r.x);
+    }
+  }
+  // sem o prefixo: o grupo 1 começa em 0 (só aqui vale o "^")
+  const x0 = at(0, true);
+  if (x0 >= 0) return result(0, 0, x0);
+  const g1 = goodG[1];
+  return g1 >= 0 && g1 <= nextLt[0] ? result(0, g1, goodX[1]) : null;
 }
 
 /** MAIÚSCULAS, sem acento, espaços colapsados. */
@@ -252,13 +499,13 @@ function parseHeaderLine(raw: string): ParsedHeader | "unknown" | null {
   }
 
   let dateRaw: string | null = null;
-  const dm = /\s*\(([^()]*)\)\s*$/.exec(rest);
+  const dm = trailingParenGroup(rest);
   if (dm) {
-    dateRaw = dm[1].trim();
+    dateRaw = dm.inner.trim();
     rest = rest.slice(0, dm.index);
   }
-  // "(dd/mm)", "(d/m)", "(/)" ou "()"
-  const dateLike = dateRaw !== null && /^\d{0,2}\s*\/?\s*\d{0,2}$/.test(dateRaw) && !/^\d+$/.test(dateRaw);
+  // "(dd/mm)", "(d/m)", "(/)" ou "()" — mesma linguagem de /^\d{0,2}\s*\/?\s*\d{0,2}$/, sem os dois \s* ambíguos
+  const dateLike = dateRaw !== null && /^\d{0,2}\s*(?:\/\s*)?\d{0,2}$/.test(dateRaw) && !/^\d+$/.test(dateRaw);
 
   let kind: HeaderKind = "post";
   let wrapperLabel = "";
@@ -336,7 +583,7 @@ function resolveDate(dateRaw: string | null, refYear: number, refMonth: number):
 // ------------------------------------------------------------ linhas dentro do bloco
 
 function statusOf(t: string): DocStatus | null {
-  const n = norm(t).replace(/^\*+\s*/, "").replace(/[.:!]+$/, "").trim();
+  const n = trimEndChars(norm(t).replace(/^\*+\s*/, ""), ".:!").trim();
   if (n === "APROVADO" || n === "APROVADA") return "aprovado";
   if (/^AGUARDANDO APROVACAO\b/.test(n)) return "aguardando_aprovacao";
   if (/^AGUARDANDO\b.*\b(FOTOS?|VIDEOS?|MATERIAL|MATERIAIS)\b/.test(n)) return "aguardando_fotos";
@@ -504,11 +751,11 @@ function networksOfLabel(label: string, kind: CredKind): string[] {
  * "@loja / 123", "login: x senha: y", "x | senha y" → partes; {} se não der para separar.
  * "senha" só separa quando é palavra solta seguida de ":" ou espaço ("SENHA-123" é a própria senha).
  */
-function splitLoginPassword(v: string): { login?: string; password?: string } {
-  const inline =
-    /^(?:(?:login|usu[aá]rio|user|e-?mail)\s*:{0,2}\s*)?(.*?)(?:^|\s*[/|,;]\s*|\s+)(?:senha|password)(?:\s*:{1,2}\s*|\s+)(\S.*)$/i.exec(v);
-  if (inline) return { login: inline[1].trim() || undefined, password: inline[2].trim() };
-  const parts = v.split(/\s+[/|]\s+/);
+export function splitLoginPassword(v: string): { login?: string; password?: string } {
+  // antes: uma regex com backtracking cúbico (AUD2-01); `matchInlineCredential` dá o mesmo resultado em tempo linear
+  const inline = matchInlineCredential(v);
+  if (inline) return { login: inline.login.trim() || undefined, password: inline.password.trim() };
+  const parts = splitSpacedSlash(v);
   if (parts.length === 2 && parts[0].trim() && parts[1].trim()) return { login: parts[0].trim(), password: parts[1].trim() };
   return {};
 }
@@ -533,9 +780,7 @@ const PLACEHOLDER_HEAD =
   /^(?:pendente|pendencia|aguardando|aguardar|a definir|a confirmar|a combinar|a enviar|definir|confirmar|combinar|solicitar|pedir|perguntar|consultar|verificar|ver com|sem|nenhum|nenhuma|nao tem|nao possui|nao sei|com a cliente|com o cliente)(?: |$)/;
 
 function isPlaceholder(raw: string): boolean {
-  const n = lowerNorm(raw.replace(/_+/g, " "))
-    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
-    .trim();
+  const n = trimNonAlnum(lowerNorm(raw.replace(/_+/g, " "))).trim();
   if (!n) return true; // só pontuação/símbolos: "-", "—", "***", "?"
   if (PLACEHOLDER.test(n)) return true;
   const words = n.replace(/[-./]+/g, " ").replace(/\s+/g, " ");
@@ -570,7 +815,7 @@ function looksLikeSecret(v: string): boolean {
  * ("Pendente", "N/A", "-"), data, hashtag ou menos de 4 caracteres.
  */
 function passwordOf(raw: string): string | null {
-  const v = raw.trim().replace(/\s+\([^()]*\)$/, "");
+  const v = stripTrailingParenNote(raw.trim());
   return looksLikeSecret(v) && v.length >= 4 && !isPlaceholder(v) && !isDateLike(v) ? v : null;
 }
 
@@ -586,7 +831,7 @@ function passwordOf(raw: string): string | null {
 function passwordBelowOf(raw: string): string | null {
   const v = passwordOf(raw);
   if (!v) return null;
-  const core = v.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  const core = trimNonAlnum(v);
   if (!core || !/\p{N}|[^\p{L}\p{N}]/u.test(core)) return null;
   if (canonicalNetwork(core) !== null) return null;
   if (DEFAULT_WRITER_NAMES.some((n) => norm(n) === norm(core))) return null;
@@ -621,7 +866,7 @@ function isNetworkUrl(v: string, networks: readonly string[]): boolean {
  * "Acesso ao Instagram::", o link do perfil DA PRÓPRIA REDE vale como login.
  */
 function loginOf(raw: string, urlNetworks: readonly string[] = []): string | null {
-  const v = raw.trim().replace(/\s+\([^()]*\)$/, "");
+  const v = stripTrailingParenNote(raw.trim());
   if (!v || isPlaceholder(v) || isDateLike(v)) return null;
   if (/^\+?[\d\s().-]{8,24}$/.test(v) && (v.match(/\d/g) ?? []).length >= 8) return v;
   if (/^https?:\/\//i.test(v)) return isNetworkUrl(v, urlNetworks) ? v : null;
@@ -640,6 +885,9 @@ type CredentialRead = { login?: string; password?: string; rejectedPassword?: bo
 function readInline(kind: CredKind, value: string, pairOnly: boolean): CredentialRead {
   const v = value.trim();
   if (!v) return {};
+  // AUD2-01: valor longo demais não passa pelas regex de credencial. Fica fora do texto e oculto no briefing
+  // (como uma senha recusada), nunca em claro; numa legenda, continua no texto como antes.
+  if (v.length > MAX_SCAN_LINE) return { rejectedPassword: true };
   if (kind === "password") {
     const password = passwordOf(v);
     return password ? { password } : { rejectedPassword: true };
@@ -682,6 +930,8 @@ type CredentialSlot = {
  *   no lugar do login passa a vez para a senha).
  */
 function slotStep(slot: CredentialSlot, t: string): { read?: CredentialRead; withhold?: true; close?: true } {
+  // AUD2-01: linha longa demais debaixo de um rótulo de credencial não passa pelas regex: sai do texto, oculta
+  if (t.length > MAX_SCAN_LINE) return { withhold: true };
   const field = slot.want[0];
   if (field === "login") {
     // "@: perfil" (modelo do formulário) é o login "@perfil"
@@ -798,7 +1048,7 @@ export function extractCredentials(text: string): {
     lines[i] = "";
   };
   const withhold = (i: number, label: string) => {
-    withheld.push({ line: i + 1, label: label.trim().replace(/:+$/, "") });
+    withheld.push({ line: i + 1, label: trimEndChars(label.trim(), ":") });
     drop(i);
   };
   const take = (network: string, line: number): DocCredential => {
@@ -854,7 +1104,7 @@ export function extractCredentials(text: string): {
         return true;
       }
       putAll(networks.map((n) => take(n, i + 1)), read);
-      if (read.rejectedPassword) withheld.push({ line: i + 1, label: label.trim().replace(/:+$/, "") });
+      if (read.rejectedPassword) withheld.push({ line: i + 1, label: trimEndChars(label.trim(), ":") });
       slot = null;
     }
     drop(i);
@@ -1013,13 +1263,14 @@ function isMobileNumber(s: string): boolean {
  * `phone`, celular em `whatsapp`. Rótulo só de telefone → tudo em `phone`;
  * só de WhatsApp → tudo em `whatsapp`.
  */
-function splitPhones(label: string, value: string): { phone?: string; whatsapp?: string } {
+export function splitPhones(label: string, value: string): { phone?: string; whatsapp?: string } {
   const whats = /whats|zap|wpp/.test(label);
   const phone = /telefone|fone|fixo|celular/.test(label);
   if (!whats) return { phone: value };
   if (!phone) return { whatsapp: value };
-  const parts = value
-    .split(/\s*(?:\/|\||;|,|\s+e\s+|\s+ou\s+)\s*/)
+  // AUD2-01: texto longo demais não é lista de telefones (fica como está, em `phone`)
+  if (value.length > MAX_SCAN_LINE) return { phone: value };
+  const parts = splitPhoneList(value)
     .map((s) => s.trim())
     .filter((s) => (s.match(/\d/g) ?? []).length >= 8);
   if (parts.length === 0) return { phone: value };
@@ -1233,12 +1484,13 @@ export function parseMonthlyDoc(text: string, opts: ParseOptions): ParsedMonthly
   const firstHeader = headers.findIndex((h) => h !== null && h !== "unknown");
   const doubleColon = lines.slice(0, firstHeader === -1 ? lines.length : firstHeader).some((l) => /^[^:]+::/.test(l.trim()));
   const pairOf = (t: string): { label: string; value: string; loose: boolean } | null => {
+    // linear porque `splitLines` já trocou U+2028/U+2029 por espaço (sem fim de linha no meio, o `(.*)$` sempre casa)
     const dbl = /^(.+?)::\s*(.*)$/.exec(t);
     if (dbl) return { label: dbl[1], value: dbl[2].replace(/^[:\s]+/, ""), loose: false };
     // ":" seguido de espaço ou fim (não confunde com "https://"); "Rótulo: : valor" também vale
-    const one = /^([^:]{2,120}?)\s*:(?:\s+(.*))?$/.exec(t);
-    if (!one || /^https?$/i.test(one[1].trim())) return null;
-    return { label: one[1], value: (one[2] ?? "").replace(/^[:\s]+/, ""), loose: doubleColon };
+    const one = singleColonPair(t);
+    if (!one || /^https?$/i.test(one.label.trim())) return null;
+    return { label: one.label, value: (one.value ?? "").replace(/^[:\s]+/, ""), loose: doubleColon };
   };
 
   const result: ParsedMonthlyDoc = {

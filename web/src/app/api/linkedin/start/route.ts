@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
-import { requireAuth } from "@/lib/api-auth";
+import { ADMIN_ONLY, requireAdminFor } from "@/lib/permissions";
 import { getAuthorizeUrl, linkedinConfigured } from "@/lib/linkedin";
 import { uuidString } from "@/lib/validators";
 
@@ -10,9 +10,10 @@ export const dynamic = "force-dynamic";
 /**
  * Inicia o OAuth do LinkedIn para um cliente. Guarda {state, clientId} num
  * cookie httpOnly (proteção CSRF) e redireciona para o consentimento.
+ * Conectar conta de publicação é só admin (AC-07); a tela esconde o botão para a staff.
  */
 export async function GET(req: NextRequest) {
-  const denied = await requireAuth();
+  const denied = await requireAdminFor(ADMIN_ONLY.linkedin);
   if (denied) return denied;
 
   const clientId = req.nextUrl.searchParams.get("clientId");

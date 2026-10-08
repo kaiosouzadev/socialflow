@@ -66,9 +66,13 @@ function resultToast(d: unknown): Exclude<ToastState, null> {
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
   const deleted = num(r.deleted);
   const skipped = num(r.skippedPublishing);
+  const keptPublished = num(r.skippedPublished);
   const gone = num(r.notFound);
   const parts = [deleted > 0 ? `${fmt(deleted)} ${deleted === 1 ? "post excluído." : "posts excluídos."}` : "Nenhum post foi excluído."];
   if (skipped > 0) parts.push(`${fmt(skipped)} em publicação não ${skipped === 1 ? "foi excluído" : "foram excluídos"}.`);
+  if (keptPublished > 0) {
+    parts.push(`${fmt(keptPublished)} ${keptPublished === 1 ? "foi publicado e ficou" : "foram publicados e ficaram"} (só administradoras excluem publicados).`);
+  }
   if (gone > 0) parts.push(`${fmt(gone)} já ${gone === 1 ? "tinha sido excluído" : "tinham sido excluídos"}.`);
   return { kind: deleted > 0 ? "success" : "info", text: parts.join(" ") };
 }
@@ -78,6 +82,7 @@ export default function PostsSelection({
   total,
   filterQuery,
   canExpandFilter,
+  canDeletePublished = false,
   children,
 }: {
   /** posts desta página, na ordem da lista */
@@ -88,6 +93,8 @@ export default function PostsSelection({
   filterQuery: string;
   /** a página está entre os primeiros 500 do filtro (senão "todos deste filtro" não a incluiria) */
   canExpandFilter: boolean;
+  /** admin: também exclui posts já publicados (decisão "Só admin + registro", AC-07). Staff: eles ficam. */
+  canDeletePublished?: boolean;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -287,7 +294,10 @@ export default function PostsSelection({
     }
     return c;
   }, [effective, statusById]);
-  const deletable = count - counts.publishing;
+  // staff: publicados não entram no pedido (o servidor recusaria a seleção inteira com 403)
+  const keepsPublished = !canDeletePublished && counts.published > 0;
+  const deletable = count - counts.publishing - (keepsPublished ? counts.published : 0);
+  const idsToDelete = keepsPublished ? effective.filter((id) => statusById.get(id) !== "published") : effective;
 
   const consequences: string[] = [];
   if (deletable > 0) {
@@ -300,7 +310,13 @@ export default function PostsSelection({
         : `${fmt(counts.scheduled)} agendados saem da fila e não são publicados.`
     );
   }
-  if (counts.published > 0) {
+  if (keepsPublished) {
+    consequences.push(
+      counts.published === 1
+        ? "1 já publicado fica no sistema: só administradoras podem excluir posts publicados."
+        : `${fmt(counts.published)} já publicados ficam no sistema: só administradoras podem excluir posts publicados.`
+    );
+  } else if (counts.published > 0) {
     consequences.push(
       counts.published === 1
         ? "1 já publicado some do sistema, mas continua nas redes sociais."
@@ -333,7 +349,7 @@ export default function PostsSelection({
       const res = await fetch("/api/posts/bulk-delete", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: effective }),
+        body: JSON.stringify({ ids: idsToDelete }),
       });
       const d = await res.json().catch(() => null);
       if (!res.ok) {
@@ -418,7 +434,11 @@ export default function PostsSelection({
         description={
           deletable > 0
             ? "Não dá para desfazer."
-            : "Os posts selecionados estão em publicação. Espere terminar e tente de novo."
+            : keepsPublished
+              ? `Só administradoras podem excluir posts já publicados.${
+                  counts.publishing > 0 ? " Os demais selecionados estão em publicação." : ""
+                }`
+              : "Os posts selecionados estão em publicação. Espere terminar e tente de novo."
         }
         consequences={consequences}
         confirmLabel={deletable > 0 ? `Excluir ${fmt(deletable)} ${postsWord(deletable)}` : "Excluir posts"}

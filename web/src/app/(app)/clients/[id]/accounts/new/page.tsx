@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { Callout } from "@/components/Callout";
 import { uuidString } from "@/lib/validators";
 import { PageHeader } from "@/components/ui";
 import { NewAccountForm } from "../../AccountsManager";
@@ -29,6 +31,9 @@ export default async function NewAccountPage({ params }: Props) {
   const { id } = await params;
   const client = await loadClient(id);
   if (!client) notFound();
+  // adicionar conta de publicação (com token) é só da admin (AC-07); a API também recusa
+  const session = await auth();
+  const isAdmin = (session?.user as { role?: string } | undefined)?.role === "admin";
 
   return (
     <div className="page page--narrow animate-fade-up">
@@ -52,7 +57,22 @@ export default async function NewAccountPage({ params }: Props) {
         back={`/clients/${client.id}`}
         backLabel="Voltar para o cliente"
       />
-      <NewAccountForm clientId={client.id} />
+      {isAdmin ? (
+        <NewAccountForm clientId={client.id} />
+      ) : (
+        <Callout
+          tone="info"
+          title="Só administradoras podem adicionar contas"
+          action={
+            <Link href={`/clients/${client.id}#contas`} className="inline-flex min-h-11 items-center font-medium sm:min-h-10">
+              Voltar para o cliente
+            </Link>
+          }
+        >
+          Contas de publicação guardam o token de acesso à rede social. Para adicionar ou trocar uma conta, peça a uma
+          administradora.
+        </Callout>
+      )}
     </div>
   );
 }

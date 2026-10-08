@@ -2,7 +2,8 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { audit } from "@/lib/audit";
+import { ADMIN_ONLY, requireAdminFor, sessionActor } from "@/lib/permissions";
 import { encryptToken } from "@/lib/crypto";
 import { exchangeCode, getMember } from "@/lib/linkedin";
 
@@ -16,9 +17,10 @@ function backToClient(clientId: string, status: string): NextResponse {
 /**
  * Callback do OAuth do LinkedIn. Valida o state (cookie), troca o code por
  * tokens, lê o URN do membro e grava/atualiza a social_account (linkedin).
+ * Só admin, com registro `client.account_change` (AC-07).
  */
 export async function GET(req: NextRequest) {
-  const denied = await requireAuth();
+  const denied = await requireAdminFor(ADMIN_ONLY.linkedin);
   if (denied) return denied;
 
   const url = req.nextUrl;
@@ -65,13 +67,29 @@ export async function GET(req: NextRequest) {
       where: { clientId: saved.clientId, platform: "linkedin", externalId: member.urn },
       select: { id: true },
     });
+    let accountId: string;
     if (existing) {
       await prisma.socialAccount.update({ where: { id: existing.id }, data });
+      accountId = existing.id;
     } else {
-      await prisma.socialAccount.create({
+      const created = await prisma.socialAccount.create({
         data: { clientId: saved.clientId, platform: "linkedin", externalId: member.urn, dailyPostLimit: 25, ...data },
+        select: { id: true },
       });
+      accountId = created.id;
     }
+    const actor = await sessionActor();
+    await audit(
+      {
+        action: "client.account_change",
+        targetType: "social_account",
+        targetId: accountId,
+        clientId: saved.clientId,
+        // nunca o token
+        meta: { op: existing ? "reconnect" : "create", platform: "linkedin", externalId: member.urn, via: "oauth" },
+      },
+      { req, ...(actor ? { actor: { id: actor.id, email: actor.email } } : {}) }
+    );
 
     return backToClient(saved.clientId, "ok");
   } catch {

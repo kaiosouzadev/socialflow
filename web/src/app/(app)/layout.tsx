@@ -1,8 +1,10 @@
 import { auth, signOut } from "@/auth";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { BrandLockup } from "@/components/Logo";
 import { MobileNav, NavLinks } from "@/components/NavLinks";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { FlashToast } from "@/components/FlashToast";
 import { Icon } from "@/components/Icons";
 import { prisma } from "@/lib/prisma";
 import { spDateFromKey, spDateKey } from "@/lib/deadlines";
@@ -63,8 +65,10 @@ export default async function AppLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // auth() já revalida a sessão no banco (lib/session-guard): excluída, rebaixada, senha
+  // trocada ou "Sair" em outra aba → null. Exige identidade, não só um objeto (CF-01).
   const session = await auth();
-  if (!session) redirect("/login");
+  if (!session?.user?.id) redirect("/login");
 
   const isAdmin = (session.user as { role?: string } | undefined)?.role === "admin";
   const name = session.user?.name ?? "";
@@ -96,6 +100,14 @@ export default async function AppLayout({
           </p>
         </div>
       </div>
+      {/* troca da própria senha (pede a senha atual) — vale para toda a equipe */}
+      <Link
+        href="/users/minha-senha"
+        className="flex min-h-11 w-full items-center justify-center gap-2 rounded-control px-4 text-sm font-semibold text-fg-muted transition-colors duration-(--sf-dur-fast) hover:bg-hover hover:text-fg active:bg-press active:text-fg sm:min-h-10"
+      >
+        <Icon.shield className="size-4.5 shrink-0" />
+        Minha senha
+      </Link>
       <form
         action={async () => {
           "use server";
@@ -139,6 +151,8 @@ export default async function AppLayout({
           <main id="conteudo" tabIndex={-1} className="outline-none">
             {children}
           </main>
+          {/* avisos que precisam sobreviver a um refresh (ver FlashToast) */}
+          <FlashToast />
         </div>
       </div>
     </>

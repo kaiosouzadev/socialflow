@@ -1,11 +1,13 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuthUser } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { parseModelJson } from "@/lib/gemini";
 import { generateAiText } from "@/lib/ai-text";
 import { getTextModel } from "@/lib/ai-models";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { enforceAiQuota } from "@/lib/ai-quota";
+import { readJsonLimited } from "@/lib/read-json";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { z } from "zod";
 
@@ -62,16 +64,20 @@ type Idea = {
   explanation?: string;
 };
 
+/** Teto do corpo (cliente, mês, horário, quantidade, redes). */
+const MAX_BODY_BYTES = 16 * 1024;
+
 export async function POST(req: NextRequest) {
-  const denied = await requireAuth();
+  const { user, denied } = await requireAuthUser();
   if (denied) return denied;
 
   // geração de calendário é cara: 10 por 5 min por IP
   const limited = enforceRateLimit(`ai-calendar:${clientIp(req)}`, 10, 5 * 60_000);
   if (limited) return limited;
 
-  const body = await req.json().catch(() => null);
-  const parsed = schema.safeParse(body);
+  const read = await readJsonLimited(req, MAX_BODY_BYTES);
+  if (!read.ok) return read.response;
+  const parsed = schema.safeParse(read.value);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
@@ -132,6 +138,10 @@ export async function POST(req: NextRequest) {
     "e explanation (1-2 frases, em pt-BR, explicando para o CLIENTE o que essa postagem vai abordar e por quê — sem jargão, sem legenda pronta). ",
     `Responda em JSON no formato: {"posts":[{"theme":"...","format":"...","explanation":"..."}]} com ${n} itens.`,
   ].join("");
+
+  // teto de gerações por IA da usuária e do sistema (CF-12)
+  const quota = enforceAiQuota(user.id, 1, "calendario");
+  if (quota) return quota;
 
   const textModel = await getTextModel("calendar");
   const { model } = textModel;

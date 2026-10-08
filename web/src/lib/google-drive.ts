@@ -194,8 +194,126 @@ export async function findMonthFolder(
   return pickMonthFolder(await listFolders(parentId), month);
 }
 
+/**
+ * Formatos de mídia aceitos do Drive (OWASP AUD2 / CF-03): só o que as redes
+ * publicam e o sharp decodifica com segurança. SVG (script embutido), HEIF/AVIF,
+ * GIF, TIFF etc. ficam de fora — o arquivo não é escolhido e o post aparece como
+ * "sem arte" com o caminho esperado. `ext` vem daqui, nunca do nome do arquivo.
+ */
+const DRIVE_MEDIA_TYPES: Readonly<Record<string, { ext: string; kind: "image" | "video" }>> = {
+  "image/jpeg": { ext: "jpg", kind: "image" },
+  "image/jpg": { ext: "jpg", kind: "image" },
+  "image/png": { ext: "png", kind: "image" },
+  "image/webp": { ext: "webp", kind: "image" },
+  "video/mp4": { ext: "mp4", kind: "video" },
+  "video/quicktime": { ext: "mov", kind: "video" },
+  "video/webm": { ext: "webm", kind: "video" },
+};
+
+/** Tipo aceito (content-type normalizado, extensão e se é imagem/vídeo); null = formato recusado. */
+export function driveMediaType(mime: string | null | undefined): { contentType: string; ext: string; kind: "image" | "video" } | null {
+  const ct = String(mime ?? "").split(";")[0].trim().toLowerCase();
+  const t = DRIVE_MEDIA_TYPES[ct];
+  return t ? { contentType: ct === "image/jpg" ? "image/jpeg" : ct, ext: t.ext, kind: t.kind } : null;
+}
+
 function isMedia(f: DriveFile): boolean {
-  return f.mimeType.startsWith("image/") || f.mimeType.startsWith("video/");
+  return driveMediaType(f.mimeType) !== null;
+}
+
+/**
+ * Conteúdo que é marcação (SVG/HTML/XML) apesar do tipo declarado: começa com
+ * "<" depois de espaços/BOM. Nunca vai para o R2 nem é servido.
+ */
+export function looksLikeMarkup(buf: Uint8Array): boolean {
+  let i = 0;
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) i = 3; // BOM UTF-8
+  while (i < buf.length && i < 1024 && (buf[i] === 0x20 || buf[i] === 0x09 || buf[i] === 0x0a || buf[i] === 0x0d)) i++;
+  return buf[i] === 0x3c; // "<"
+}
+
+// ------------------------------------------------------------ pasta dentro da raiz (OWASP AUD2-08)
+
+/** ID de arquivo/pasta do Drive (letras, números, "-" e "_"). Outra coisa nunca vai para a API. */
+const DRIVE_ID = /^[A-Za-z0-9_-]{10,128}$/;
+
+export function isDriveId(id: string): boolean {
+  return DRIVE_ID.test(id);
+}
+
+const ANCESTRY_TTL_MS = 10 * 60_000;
+const ANCESTRY_MAX_DEPTH = 15;
+const ancestryCache = new Map<string, { inside: boolean; at: number }>();
+
+/**
+ * Pais de um arquivo/pasta; null se não existir, estiver na lixeira ou a conta
+ * do sistema não enxergar (404). Outro erro (403, 5xx) lança: na dúvida, a
+ * pasta não é usada.
+ */
+async function parentsOf(id: string): Promise<string[] | null> {
+  const token = await getAccessToken();
+  const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`);
+  url.searchParams.set("fields", "id,parents,trashed");
+  url.searchParams.set("supportsAllDrives", "true");
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Drive list falhou: ${res.status} ${detail.slice(0, 200)}`);
+  }
+  const data = (await res.json()) as { parents?: string[]; trashed?: boolean };
+  if (data.trashed) return null;
+  return data.parents ?? [];
+}
+
+/**
+ * A pasta é a raiz dos clientes (DRIVE_ROOT_FOLDER_ID) ou fica dentro dela?
+ * A conta de serviço tem escopo de Drive inteiro: sem esta checagem, um ID
+ * qualquer (em `?parent=` ou no cadastro do cliente) listaria ou gravaria em
+ * pastas fora da agência ("confused deputy"). Sobe pelos pais via API, com
+ * cache de 10 min por pasta.
+ */
+export async function isInsideRoot(folderId: string): Promise<boolean> {
+  const root = process.env.DRIVE_ROOT_FOLDER_ID;
+  if (!root || !isDriveId(folderId)) return false;
+  if (folderId === root) return true;
+  const now = Date.now();
+  const cached = ancestryCache.get(folderId);
+  if (cached && now - cached.at < ANCESTRY_TTL_MS) return cached.inside;
+
+  let frontier = [folderId];
+  const seen = new Set(frontier);
+  let inside = false;
+  for (let depth = 0; depth < ANCESTRY_MAX_DEPTH && frontier.length > 0 && !inside; depth++) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      const hit = ancestryCache.get(id);
+      if (id !== folderId && hit && now - hit.at < ANCESTRY_TTL_MS) {
+        if (hit.inside) inside = true;
+        continue;
+      }
+      const parents = await parentsOf(id);
+      for (const p of parents ?? []) {
+        if (p === root) inside = true;
+        else if (!seen.has(p)) {
+          seen.add(p);
+          next.push(p);
+        }
+      }
+      if (inside) break;
+    }
+    frontier = next;
+  }
+  ancestryCache.set(folderId, { inside, at: now });
+  return inside;
+}
+
+/** Mensagem (pt-BR) para pasta fora da raiz dos clientes. */
+export const FOLDER_OUTSIDE_ROOT = "Essa pasta não fica dentro da pasta de clientes do Google Drive. Escolha uma pasta dentro dela.";
+
+/** Só para testes: esquece o cache de ancestralidade. */
+export function clearDriveAncestryCache(): void {
+  ancestryCache.clear();
 }
 
 function stemOf(name: string): string {
@@ -336,7 +454,7 @@ export async function downloadFile(
   fileId: string
 ): Promise<{ buffer: Buffer; contentType: string }> {
   const token = await getAccessToken();
-  const url = new URL(`https://www.googleapis.com/drive/v3/files/${fileId}`);
+  const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`);
   url.searchParams.set("alt", "media");
   url.searchParams.set("supportsAllDrives", "true");
 

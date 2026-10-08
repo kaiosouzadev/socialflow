@@ -3,6 +3,10 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { APPROVAL_EMAIL_TAKEN, normalizeEmail, normalizeExtraEmails } from "@/lib/client-emails";
+import { CLIENT_DETAIL_FIELDS, withoutSecrets } from "@/lib/client-select";
+import { normalizeClientUrlFields } from "@/lib/client-urls";
+import { audit } from "@/lib/audit";
+import { ADMIN_ONLY, NO_STORE, requireAdminFor, sessionActor } from "@/lib/permissions";
 import { CLIENT_STATUSES, SEGMENTS } from "@/lib/status-meta";
 import { uuidString } from "@/lib/validators";
 import { z } from "zod";
@@ -46,11 +50,12 @@ const updateSchema = z.object({
   city: z.string().optional(),
   phone: z.string().optional(),
   whatsapp: z.string().optional(),
+  // endereços: só https: (lib/client-urls normaliza "www.x.com"/http e recusa javascript:/data:)
   facebookUrl: z.string().optional(),
   instagramUrl: z.string().optional(),
   briefing: briefingSchema,
   // marca (geração de arte) — "" limpa o campo
-  logoUrl: z.string().url().or(z.literal("")).optional(),
+  logoUrl: z.string().optional(),
   brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, "cor em hex, ex: #7c5cff").or(z.literal("")).optional(),
   tier: z.enum(["basica", "completa"]).optional(),
   // exibir dados de contato na arte gerada?
@@ -103,7 +108,9 @@ export async function GET(
   }
   const client = await prisma.client.findUnique({
     where: { id },
-    include: {
+    // select explícito (AC-02/CR-03): o cofre cifrado só serve para `hasCredentials`
+    select: {
+      ...CLIENT_DETAIL_FIELDS,
       // never expose the encrypted token to the browser
       socialAccounts: {
         orderBy: { createdAt: "asc" },
@@ -129,9 +136,7 @@ export async function GET(
   ]);
 
   // nunca expor o blob cifrado de credenciais ao browser
-  const { credentialsEnc: _c, ...safe } = client;
-  void _c;
-  return Response.json({ ...safe, queuedPostsCount, publishingNow });
+  return Response.json({ ...withoutSecrets(client), queuedPostsCount, publishingNow }, { headers: NO_STORE });
 }
 
 export async function PATCH(
@@ -159,6 +164,8 @@ export async function PATCH(
 
   // "" nos campos texto opcionais = limpar (null)
   const data: Record<string, unknown> = { ...parsed.data };
+  const badUrl = normalizeClientUrlFields(data);
+  if (badUrl) return Response.json({ error: badUrl.error, field: badUrl.field }, { status: 400 });
   for (const k of NULLABLE_TEXT) {
     if (typeof data[k] === "string") {
       data[k] = (data[k] as string).trim() || null;
@@ -193,7 +200,7 @@ export async function PATCH(
     // "publica? → Não": cliente e posts da fila (scheduled/failed → draft) na
     // mesma transação. Idempotente: para quem já era "Não" não sobra nada a reverter.
     const { client, revertedToDraft } = await prisma.$transaction(async (tx) => {
-      const client = await tx.client.update({ where: { id }, data });
+      const client = await tx.client.update({ where: { id }, data, select: CLIENT_DETAIL_FIELDS });
       if (agencyPublishes !== false) return { client, revertedToDraft: 0 };
       const reverted = await tx.post.updateMany({
         where: { clientId: id, status: { in: REVERT_ON_NO_PUBLISH } },
@@ -202,9 +209,7 @@ export async function PATCH(
       return { client, revertedToDraft: reverted.count };
     });
     // não devolve credenciais cifradas
-    const { credentialsEnc: _omit, ...safe } = client;
-    void _omit;
-    return Response.json({ ...safe, revertedToDraft });
+    return Response.json({ ...withoutSecrets(client), revertedToDraft }, { headers: NO_STORE });
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError) {
       if (e.code === "P2025") return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
@@ -222,17 +227,53 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const denied = await requireAuth();
+  // excluir cliente apaga tudo em cascata e não tem volta: só admin, com registro (AC-07)
+  const denied = await requireAdminFor(ADMIN_ONLY.deleteClient);
   if (denied) return denied;
 
   const { id } = await params;
+  if (!uuidString.safeParse(id).success) {
+    return Response.json({ error: "ID inválido" }, { status: 400 });
+  }
+  // contagens para o registro (o que a cascata leva junto)
+  const [client, publishedPosts] = await Promise.all([
+    prisma.client.findUnique({
+      where: { id },
+      select: {
+        name: true,
+        _count: { select: { posts: true, schedules: true, weeklyReviews: true, socialAccounts: true, pendingItems: true } },
+      },
+    }),
+    prisma.post.count({ where: { clientId: id, status: "published" } }),
+  ]);
+  if (!client) return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
+
   try {
     await prisma.client.delete({ where: { id } });
-    return Response.json({ ok: true });
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
       return Response.json({ error: "Cliente não encontrado" }, { status: 404 });
     }
     throw e;
   }
+  const actor = await sessionActor();
+  await audit(
+    {
+      action: "client.delete",
+      targetType: "client",
+      targetId: id,
+      clientId: id,
+      meta: {
+        clientName: client.name,
+        posts: client._count.posts,
+        publishedPosts,
+        schedules: client._count.schedules,
+        weeklyReviews: client._count.weeklyReviews,
+        accounts: client._count.socialAccounts,
+        pendingItems: client._count.pendingItems,
+      },
+    },
+    { req, ...(actor ? { actor: { id: actor.id, email: actor.email } } : {}) },
+  );
+  return Response.json({ ok: true });
 }

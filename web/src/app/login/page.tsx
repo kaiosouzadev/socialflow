@@ -11,7 +11,8 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 
 const NETWORK_ERROR = "Não foi possível entrar agora. Verifique a conexão e tente de novo.";
 const WRONG_CREDENTIALS = "E-mail ou senha incorretos.";
-const TOO_MANY_ATTEMPTS = "Muitas tentativas com este e-mail. Aguarde 5 minutos e tente de novo.";
+// genérica: não diz se o e-mail existe nem quanto falta (o limite é por e-mail+IP e por IP)
+const TOO_MANY_ATTEMPTS = "Muitas tentativas de entrada. Aguarde alguns minutos e tente de novo.";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -76,7 +77,8 @@ export default function LoginPage() {
             <p className="mt-2 text-base text-fg-muted">Painel de automação da agência</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="card grid gap-4 p-6 shadow-raised sm:p-7">
+          {/* method="post": enviado antes do JS carregar, a senha vai no corpo — nunca na URL/histórico/log */}
+          <form method="post" onSubmit={handleSubmit} className="card grid gap-4 p-6 shadow-raised sm:p-7">
             <Field label="E-mail" required>
               <Input name="email" type="email" autoComplete="email" placeholder="voce@agencia.com.br" />
             </Field>

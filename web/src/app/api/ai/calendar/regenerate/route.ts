@@ -1,11 +1,13 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuthUser } from "@/lib/api-auth";
 import { uuidString } from "@/lib/validators";
 import { parseModelJson } from "@/lib/gemini";
 import { generateAiText } from "@/lib/ai-text";
 import { getTextModel } from "@/lib/ai-models";
 import { enforceRateLimit, clientIp } from "@/lib/rate-limit";
+import { enforceAiQuota } from "@/lib/ai-quota";
+import { readJsonLimited } from "@/lib/read-json";
 import { toUserMessage } from "@/lib/user-facing-error";
 import { z } from "zod";
 
@@ -18,7 +20,7 @@ const schema = z.object({
   clientId: uuidString,
   targets: z.array(z.enum(["instagram", "facebook", "linkedin"])).min(1),
   // temas já presentes no calendário, para a IA não repetir
-  avoid: z.array(z.string()).optional(),
+  avoid: z.array(z.string().max(400)).max(200).optional(),
 });
 
 type Idea = {
@@ -27,16 +29,20 @@ type Idea = {
   explanation?: string;
 };
 
+/** Teto do corpo (redes + temas a evitar). */
+const MAX_BODY_BYTES = 128 * 1024;
+
 /** Gera UMA nova ideia de post para substituir um item do calendário em revisão. */
 export async function POST(req: NextRequest) {
-  const denied = await requireAuth();
+  const { user, denied } = await requireAuthUser();
   if (denied) return denied;
 
   const limited = enforceRateLimit(`ai-regen:${clientIp(req)}`, 30, 5 * 60_000);
   if (limited) return limited;
 
-  const body = await req.json().catch(() => null);
-  const parsed = schema.safeParse(body);
+  const read = await readJsonLimited(req, MAX_BODY_BYTES);
+  if (!read.ok) return read.response;
+  const parsed = schema.safeParse(read.value);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
@@ -72,6 +78,10 @@ export async function POST(req: NextRequest) {
     "Tudo em pt-BR, no tom do cliente. ",
     'Responda em JSON no formato: {"theme":"...","format":"...","explanation":"..."}.',
   ].join("");
+
+  // teto de gerações por IA da usuária e do sistema (CF-12)
+  const quota = enforceAiQuota(user.id, 1, "calendario-regenerar");
+  if (quota) return quota;
 
   const textModel = await getTextModel("calendar");
   const { model } = textModel;

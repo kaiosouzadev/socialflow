@@ -4,6 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api-auth";
 import { scheduleAllBasicMonths } from "@/lib/basic-plan";
 import { APPROVAL_EMAIL_TAKEN, normalizeExtraEmails } from "@/lib/client-emails";
+import { CLIENT_DETAIL_FIELDS, CLIENT_LIST_SELECT, withoutSecrets } from "@/lib/client-select";
+import { normalizeClientUrlFields } from "@/lib/client-urls";
+import { NO_STORE } from "@/lib/permissions";
 import { CLIENT_STATUSES, SEGMENTS } from "@/lib/status-meta";
 import { uuidString } from "@/lib/validators";
 import { z } from "zod";
@@ -22,6 +25,7 @@ const createSchema = z.object({
   showContacts: z.boolean().optional(),
   whatsapp: z.string().max(40).optional(),
   phone: z.string().max(40).optional(),
+  // só https: (lib/client-urls normaliza "www.x.com"/http e recusa javascript:/data:)
   website: z.string().max(200).optional(),
   instagramUrl: z.string().max(200).optional(),
   city: z.string().max(120).optional(),
@@ -46,14 +50,13 @@ export async function GET() {
   const denied = await requireAuth();
   if (denied) return denied;
 
+  // select explícito (AC-02/CR-03): nunca o cofre cifrado `credentialsEnc` nem briefing/telefones
   const clients = await prisma.client.findMany({
     orderBy: { createdAt: "desc" },
-    include: {
-      _count: { select: { socialAccounts: true, posts: true } },
-    },
+    select: CLIENT_LIST_SELECT,
   });
 
-  return Response.json(clients);
+  return Response.json(clients.map(withoutSecrets), { headers: NO_STORE });
 }
 
 export async function POST(req: NextRequest) {
@@ -67,6 +70,9 @@ export async function POST(req: NextRequest) {
   }
 
   const { extraEmails, responsibleUserId, designerUserId, ...rest } = parsed.data;
+
+  const badUrl = normalizeClientUrlFields(rest);
+  if (badUrl) return Response.json({ error: badUrl.error, field: badUrl.field }, { status: 400 });
 
   let extras: string[] = [];
   if (extraEmails) {
@@ -94,6 +100,7 @@ export async function POST(req: NextRequest) {
         // nasce com status diferente do padrão: a mudança é registrada agora
         ...(rest.status !== "ativo" ? { statusChangedAt: new Date() } : {}),
       },
+      select: CLIENT_DETAIL_FIELDS,
     });
 
     // cliente básico: agenda na hora o calendário de artes básicas de todos os
@@ -108,7 +115,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return Response.json({ ...client, basicPlan }, { status: 201 });
+    return Response.json({ ...withoutSecrets(client), basicPlan }, { status: 201, headers: NO_STORE });
   } catch (e) {
     // único índice único de clients além do id: uq_clients_email_aprovacao (e-mail repetido entre
     // clientes COM aprovação; sem aprovação pode repetir — migração 2026-10-07)

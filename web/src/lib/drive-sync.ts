@@ -10,8 +10,12 @@ import {
   listFolderMedia,
   downloadFile,
   driveConfigured,
+  driveMediaType,
   ensureFolder,
   ensureYearMonthFolders,
+  FOLDER_OUTSIDE_ROOT,
+  isInsideRoot,
+  looksLikeMarkup,
 } from "@/lib/google-drive";
 import {
   buildMonthFileNames,
@@ -29,21 +33,28 @@ import { toUserMessage } from "@/lib/user-facing-error";
 
 const TZ = "America/Sao_Paulo";
 
+const SAVED_FOLDER_OUTSIDE =
+  "a pasta do Drive escolhida no cadastro do cliente fica fora da pasta de clientes; escolha a pasta de novo";
+
 type DriveFile = { id: string; name: string; mimeType: string };
 type MediaItem = { url: string; driveId: string; type: "image" | "video" };
 
-function mediaType(mime: string): "image" | "video" {
-  return mime.startsWith("video/") ? "video" : "image";
-}
-
-/** Sobe uma mídia do Drive para o R2 e devolve a URL pública + metadados. */
+/**
+ * Sobe uma mídia do Drive para o R2 e devolve a URL pública + metadados.
+ * OWASP (AUD2 / CF-03): só os formatos de `driveMediaType` (JPEG/PNG/WebP,
+ * MP4/MOV/WebM); o content-type e a extensão no R2 vêm dessa lista (nunca do
+ * nome do arquivo nem de um SVG/HTML), e conteúdo que é marcação é recusado.
+ */
 async function hostOnR2(file: DriveFile, clientId: string, postId: string, ord: number): Promise<MediaItem> {
   const { buffer, contentType } = await downloadFile(file.id);
-  const dot = file.name.lastIndexOf(".");
-  const ext = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : "jpg";
-  const key = `${clientId}/${postId}-${ord}.${ext}`;
-  const url = await uploadToR2(key, buffer, contentType || file.mimeType || `image/${ext}`);
-  return { url, driveId: file.id, type: mediaType(file.mimeType) };
+  const type = driveMediaType(file.mimeType);
+  const served = driveMediaType(contentType);
+  if (!type || !served || served.kind !== type.kind || looksLikeMarkup(buffer)) {
+    throw new Error(`O arquivo "${file.name}" do Google Drive não é uma imagem (JPG, PNG, WebP) nem um vídeo (MP4, MOV) válido.`);
+  }
+  const key = `${clientId}/${postId}-${ord}.${type.ext}`;
+  const url = await uploadToR2(key, buffer, type.contentType);
+  return { url, driveId: file.id, type: type.kind };
 }
 
 /** "YYYY-MM" no fuso de São Paulo (o mês da pasta onde fica a arte do post). */
@@ -188,11 +199,23 @@ export async function syncMedia(opts?: {
   }
 
   const clientFolderCache = new Map<string, string | null>();
+  /** cliente → a pasta salva no cadastro fica dentro da raiz? */
+  const savedFolderOk = new Map<string, boolean>();
   // chave com o ano: a mesma pasta de cliente tem um "outubro" por ano
   const monthFolderCache = new Map<string, MonthFolderResolution>();
 
   for (const { client, monthKey, posts } of groups.values()) {
-    // pasta do cliente (override por ID, ou busca pelo nome sem caixa nem acento)
+    // pasta do cliente (override por ID, ou busca pelo nome sem caixa nem acento).
+    // OWASP AUD2-08: o ID salvo só vale se a pasta ficar dentro da raiz dos clientes
+    if (client.driveFolderId) {
+      let ok = savedFolderOk.get(client.id);
+      if (ok === undefined) {
+        ok = await isInsideRoot(client.driveFolderId);
+        savedFolderOk.set(client.id, ok);
+        if (!ok) result.skipped.push({ client: client.name, reason: SAVED_FOLDER_OUTSIDE });
+      }
+      if (!ok) continue;
+    }
     let clientFolderId = client.driveFolderId ?? clientFolderCache.get(client.id) ?? null;
     if (!clientFolderId) {
       clientFolderId = await findFolder(client.name, rootId);
@@ -384,7 +407,11 @@ export async function ensureClientDriveFolder(client: {
   name: string;
   driveFolderId: string | null;
 }): Promise<string> {
-  if (client.driveFolderId) return client.driveFolderId;
+  if (client.driveFolderId) {
+    // OWASP AUD2-08: nunca grava (pastas do mês, artes) numa pasta fora da raiz dos clientes
+    if (!(await isInsideRoot(client.driveFolderId))) throw new Error(FOLDER_OUTSIDE_ROOT);
+    return client.driveFolderId;
+  }
   const clientFolderId = await ensureFolder(client.name, process.env.DRIVE_ROOT_FOLDER_ID!);
   await prisma.client.update({ where: { id: client.id }, data: { driveFolderId: clientFolderId } });
   return clientFolderId;

@@ -6,10 +6,16 @@ import { sendEmailEach, approvalEmailHtml, emailConfigured } from "@/lib/email";
 import { scheduleSendWindow, shortLabel } from "@/lib/deadlines";
 import { clientRecipients } from "@/lib/client-emails";
 import { toUserMessage } from "@/lib/user-facing-error";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { uuidString } from "@/lib/validators";
 
 export const dynamic = "force-dynamic";
 
-/** Envia o cronograma para aprovação do cliente: gera token, e-mail, status. */
+/**
+ * Envia (ou reenvia) o cronograma para aprovação do cliente: token, e-mail, status.
+ * Decisão do usuário (07/10, AC-05/CR-05): TODO envio gera um token NOVO — o link anterior
+ * deixa de valer na hora (404) — e renova `sent_at`, de onde conta o prazo de 60 dias do link.
+ */
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -18,6 +24,12 @@ export async function POST(
   if (denied) return denied;
 
   const { id } = await params;
+  if (!uuidString.safeParse(id).success) {
+    return Response.json({ error: "Cronograma não encontrado" }, { status: 404 });
+  }
+  // cada envio manda e-mail ao cliente: no máximo 5 por cronograma a cada 10 minutos
+  const limited = enforceRateLimit(`schedule-send:${id}`, 5, 10 * 60_000);
+  if (limited) return limited;
   const schedule = await prisma.schedule.findUnique({
     where: { id },
     include: {
@@ -46,7 +58,8 @@ export async function POST(
     );
   }
 
-  const token = schedule.approvalToken ?? newApprovalToken();
+  // sempre um token novo: reenviar invalida o link antigo (que pode ter sido encaminhado)
+  const token = newApprovalToken();
   await prisma.schedule.update({
     where: { id },
     data: { approvalToken: token, status: "enviado_cliente", sentAt: new Date() },
@@ -61,10 +74,10 @@ export async function POST(
   const failed = results.filter((r) => !r.sent);
   const configured = emailConfigured();
   if (configured && failed.length > 0) {
-    // o detalhe técnico fica só no log; o usuário recebe a mensagem amigável
+    // o detalhe técnico fica só no log (sem o token do link); o usuário recebe a mensagem amigável
     console.error(
       `[schedules/send] ${failed.length}/${results.length} e-mail(s) não enviado(s):`,
-      failed.map((r) => r.error)
+      failed.map((r) => String(r.error ?? "").split(token).join("<token>"))
     );
   }
 

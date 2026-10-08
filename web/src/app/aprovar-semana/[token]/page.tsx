@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { PublicHeader } from "@/components/Logo";
 import { TZ } from "@/lib/format-date";
 import { postResponseDeadline } from "@/lib/deadlines";
+import { EXPIRED_PAGE_TITLE, PUBLIC_PAGE_ROBOTS, isTokenShaped, weeklyLinkState } from "@/lib/approval";
 import WeeklyView from "./WeeklyView";
 
 export const dynamic = "force-dynamic";
@@ -13,12 +14,18 @@ export const dynamic = "force-dynamic";
  * Link semanal. Página SEM sessão: o `select` traz só o que o cliente pode ver
  * (nada de nota interna, redatora, status de fila, erro de publicação ou e-mails).
  * `cache` faz a página e o generateMetadata dividirem UMA consulta por request.
+ * Ciclo de vida (lib/approval): 60 dias após o envio o link expira → mesma página amigável do
+ * link inexistente (HTTP 404); semana concluída → só leitura.
  */
-const loadReview = cache((token: string) =>
-  prisma.weeklyReview.findUnique({
+const loadReview = cache(async (token: string) => {
+  // formato impossível: nem consulta o banco
+  if (!isTokenShaped(token)) return null;
+  const review = await prisma.weeklyReview.findUnique({
     where: { token },
     select: {
       weekStart: true,
+      status: true,
+      sentAt: true,
       client: { select: { name: true, logoUrl: true } },
       posts: {
         orderBy: { scheduledAt: "asc" },
@@ -41,8 +48,11 @@ const loadReview = cache((token: string) =>
         },
       },
     },
-  })
-);
+  });
+  if (!review) return null;
+  const state = weeklyLinkState(review);
+  return state === "expirado" ? null : { ...review, state };
+});
 
 const DAY = 86_400_000;
 const MONTH_NAME = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC", month: "long" });
@@ -119,14 +129,18 @@ type Params = { params: Promise<{ token: string }> };
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { token } = await params;
   const review = await loadReview(token);
-  if (!review) return { title: "Link indisponível" };
-  return { title: `Postagens da semana de ${weekRange(review.weekStart)} · ${review.client.name}` };
+  if (!review) return { title: EXPIRED_PAGE_TITLE, robots: PUBLIC_PAGE_ROBOTS };
+  return {
+    title: `Postagens da semana de ${weekRange(review.weekStart)} · ${review.client.name}`,
+    robots: PUBLIC_PAGE_ROBOTS,
+  };
 }
 
 export default async function WeeklyApprovalPage({ params }: Params) {
   const { token } = await params;
   const review = await loadReview(token);
-  // antes de qualquer streaming: a resposta sai com HTTP 404 (not-found.tsx do segmento)
+  // inexistente ou expirado: antes de qualquer streaming a resposta sai com HTTP 404 e a mesma
+  // página amigável (not-found.tsx do segmento)
   if (!review) notFound();
 
   const posts = review.posts.map((p) => {
@@ -163,6 +177,7 @@ export default async function WeeklyApprovalPage({ params }: Params) {
           clientLogoUrl={review.client.logoUrl}
           weekRange={weekRange(review.weekStart)}
           posts={posts}
+          readOnly={review.state === "concluido"}
         />
       </main>
     </>
